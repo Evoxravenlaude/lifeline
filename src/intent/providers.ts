@@ -16,20 +16,58 @@ export interface Completion {
 }
 export interface CompleteOpts { system: string; messages: Msg[]; tools?: Tool[]; maxTokens?: number; grounded?: boolean; json?: boolean }
 
-export function providerName(): "anthropic" | "gemini" | null {
+export type Provider = "anthropic" | "gemini" | "openai";
+
+export function providerName(): Provider | null {
   const p = config.modelProvider;
   if (p === "anthropic" && config.anthropicKey) return "anthropic";
   if (p === "gemini" && config.geminiKey) return "gemini";
+  if (p === "openai" && config.openaiCompatKey) return "openai";
   if (config.anthropicKey) return "anthropic";
   if (config.geminiKey) return "gemini";
+  if (config.openaiCompatKey) return "openai";
   return null;
 }
 
-export async function complete(opts: CompleteOpts, forceProvider?: "anthropic" | "gemini"): Promise<Completion | null> {
+export async function complete(opts: CompleteOpts, forceProvider?: Provider): Promise<Completion | null> {
   const p = forceProvider ?? providerName();
   if (p === "anthropic") return anthropic(opts);
   if (p === "gemini") return gemini(opts);
+  if (p === "openai") return openaiCompat(opts);
   return null;
+}
+
+/**
+ * Any OpenAI-compatible chat endpoint: Groq, OpenRouter, Cerebras, Mistral,
+ * Together, or OpenAI itself. Set OPENAI_COMPAT_BASE_URL + OPENAI_COMPAT_API_KEY
+ * + OPENAI_COMPAT_MODEL. Tool calling needs a model that supports it
+ * (Groq llama-3.3-70b-versatile does; most OpenRouter free models do).
+ */
+async function openaiCompat(o: CompleteOpts): Promise<Completion> {
+  const body: any = {
+    model: config.openaiCompatModel,
+    max_tokens: o.maxTokens ?? 1500,
+    messages: [{ role: "system", content: o.system }, ...o.messages],
+    ...(o.json ? { response_format: { type: "json_object" } } : {}),
+  };
+  if (o.tools?.length) {
+    body.tools = o.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: geminiSchema(z.toJSONSchema(t.schema, { io: "input" })) } }));
+    body.tool_choice = "auto";
+  }
+  const r = await fetch(`${config.openaiCompatBaseUrl}/chat/completions`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiCompatKey}` }, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${config.openaiCompatBaseUrl} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j: any = await r.json();
+  const m = j.choices?.[0]?.message ?? {};
+  const tc = m.tool_calls?.[0]?.function;
+  let args: Record<string, unknown> = {};
+  if (tc?.arguments) { try { args = JSON.parse(tc.arguments); } catch { args = {}; } }
+  return {
+    text: (m.content ?? "").trim(),
+    toolCall: tc ? { name: tc.name, args } : undefined,
+    usage: { input: j.usage?.prompt_tokens ?? 0, output: j.usage?.completion_tokens ?? 0 },
+  };
 }
 
 async function anthropic(o: CompleteOpts): Promise<Completion> {

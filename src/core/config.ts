@@ -22,7 +22,10 @@ export const config = {
   model: process.env.MODEL ?? "claude-haiku-4-5",
   geminiKey: process.env.GEMINI_API_KEY ?? "",
   geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
-  modelProvider: (process.env.MODEL_PROVIDER ?? "") as "" | "anthropic" | "gemini",
+  modelProvider: (process.env.MODEL_PROVIDER ?? "") as "" | "anthropic" | "gemini" | "openai",
+  openaiCompatKey: process.env.OPENAI_COMPAT_API_KEY ?? "",
+  openaiCompatBaseUrl: (process.env.OPENAI_COMPAT_BASE_URL ?? "https://api.groq.com/openai/v1").replace(/\/$/, ""),
+  openaiCompatModel: process.env.OPENAI_COMPAT_MODEL ?? "llama-3.3-70b-versatile",
   // web + messaging channels
   port: Number(process.env.PORT ?? 3000),
   publicUrl: (process.env.PUBLIC_URL ?? "").replace(/\/$/, ""),
