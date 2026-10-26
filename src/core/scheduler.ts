@@ -118,6 +118,6 @@ export async function push(
     if (Number(c?.n ?? 0) >= config.maxPushesPerDay) return false;
   }
   const ok = await deps.send(user, { text, buttons: opts.buttons });
-  if (ok) await deps.db.query(`INSERT INTO pushes (user_id, kind) VALUES ($1,$2)`, [user.id, kind]);
+  if (ok) await deps.db.query(`INSERT INTO pushes (user_id, kind, sent_at) VALUES ($1,$2,$3)`, [user.id, kind, now]);
   return ok;
 }
