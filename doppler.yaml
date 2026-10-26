@@ -1,0 +1,5 @@
+# Doppler project layout. `doppler setup` reads this; Railway gets secrets via the Doppler→Railway integration
+# (Doppler dashboard → Integrations → Railway) so nothing lives in Railway's plain env.
+setup:
+  project: lifeline
+  config: prd

@@ -1,0 +1,12 @@
+-- Optional: run once in the Supabase SQL editor if you want the tables to exist before first boot
+-- (the bot applies the same migrations itself on start). Generated from src/core/migrations.ts.
+-- Supabase connection: use the Session pooler URL (port 5432) or Transaction pooler (6543) — both work;
+-- the bot only uses simple parameterised queries. Add `?sslmode=require` if your client needs it.
+--
+-- Useful queries once it's running:
+--   SELECT action, tier, outcome, source_message, created_at FROM audit_log ORDER BY id DESC LIMIT 50;
+--   SELECT u.name, count(*) FROM messages m JOIN users u ON u.id=m.user_id WHERE m.created_at > now()-interval '1 day' GROUP BY 1;
+--   SELECT user_id, sum(usd) FROM model_usage WHERE created_at > now()-interval '7 days' GROUP BY 1;
+--   SELECT venue, count(*) FROM shadow_trades WHERE seen_at > now()-interval '14 days' GROUP BY 1;
+--   SELECT niche, name, twitter, founders FROM scout_results ORDER BY first_seen DESC LIMIT 20;
+SELECT 'see src/core/migrations.ts — the bot runs these on boot' AS note;

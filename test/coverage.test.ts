@@ -1,0 +1,124 @@
+import { describe, expect, it } from "vitest";
+import "../src/modules/index.js";
+import { allActions } from "../src/policy/registry.js";
+import { parseByRules } from "../src/intent/rules.js";
+import { parseLoose, normalise, splitTime } from "../src/intent/loose.js";
+
+const NOW = new Date("2026-10-26T10:00:00Z");
+const parse = (s: string) => parseByRules(s) ?? parseLoose(s, NOW);
+
+/** One ordinary sentence per action. If an action is added without a sentence here, this test fails. */
+const SENTENCES: Record<string, string[]> = {
+  "reminder.create": ["can you remind me to call Ada tomorrow at 9am", "don't let me forget rent on the 1st", "ping me about the standup in 20 minutes"],
+  "reminder.list": ["what are my reminders", "reminders"],
+  "reminder.delete": ["cancel the reminder about rent", "delete reminder 3"],
+  "calendar.add": ["schedule dentist on friday at 3pm", "I have a meeting with Tolu tomorrow 2pm", "dinner with Ada saturday 7pm"],
+  "calendar.list": ["what do I have today", "am I free tomorrow", "my schedule this week", "what's on this week"],
+  "calendar.delete": ["cancel event #4", "delete the meeting 9"],
+  "calendar.import_ics": [], // file upload only
+  "medication.add": ["I'm taking Vitamin D at 8am and 8pm", "meds: amoxicillin at 7am, 3pm and 11pm"],
+  "medication.list": ["what meds am I on", "my meds"],
+  "medication.delete": ["stop med #2", "I'm off the pills #3"],
+  "class.add": ["I have a class Algorithms on tuesday at 10:00 to 12:00 in Room 4", "class Databases on wed 2pm"],
+  "class.list": ["my timetable", "classes"],
+  "assignment.add": ["I have an assignment Lab 3 due next monday", "there's an exam on networks due dec 2"],
+  "assignment.done": ["I submitted the assignment for Lab 3", "done assignment Lab 3"],
+  "trip.create": ["I'm going to Accra on dec 20 until dec 27 with a budget of 600 usd", "plan a trip to Nairobi"],
+  "trip.add_item": ["add a flight LOS-ACC to the trip on dec 20 7am", "booked the hotel Labadi Beach for my trip"],
+  "trip.tick": ["packed the charger", "packed passport"],
+  "trip.show": ["show my trip", "trip"],
+  "habit.add": ["track habit gym 4x/week", "start tracking reading 5 times a week"],
+  "habit.checkin": ["I went to the gym", "did gym yesterday", "worked out", "ran today"],
+  "habit.list": ["my habits", "streaks"],
+  "spend.log": ["I spent 4500 naira on data", "paid $20 for lunch", "spent 2k on fuel"],
+  "spend.summary": ["how much did I spend this week", "expenses month"],
+  "note.add": ["note: the wifi password is behind the router", "jot down call the landlord"],
+  "note.search": ["find notes about wifi", "search notes landlord"],
+  "memory.remember": ["remember that I'm vegetarian", "keep in mind I hate early meetings"],
+  "memory.forget": ["forget what I said about early meetings", "forget vegetarian"],
+  "memory.list": ["what do you know about me", "show my memory"],
+  "date.add": ["Ada's birthday is march 14", "countdown to visa appointment on dec 3", "our anniversary is june 9"],
+  "date.list": ["upcoming birthdays", "dates"],
+  "weather": ["what's the weather like in Lagos tomorrow", "weather Libreville", "is it going to rain in London today"],
+  "fx": ["100 usd to ngn", "convert 50 pounds to naira", "how much is 2 sol in usd"],
+  "summarize": ["summarize https://example.com/post", "tldr https://x.com/a/status/1"],
+  "hackathon.discover": ["any hackathons for solana", "find me hackathons", "hackathons ai"],
+  "hackathon.set_interests": ["I'm into solana, ai and defi", "interests: devtools, payments"],
+  "hackathon.track": ["I'm entering Colosseum Frontier due nov 30", "track NEAR hackathon deadline nov 14"],
+  "hackathon.update": ["submitted Frontier", "I won the NEAR hackathon", "got paid for Frontier"],
+  "hackathon.ledger": ["my ledger", "what have I entered"],
+  "price.check": ["what's sol right now", "how much is btc", "price eth sol"],
+  "price.alert": ["let me know when sol goes above 250", "alert me if eth drops below 2k", "tell me when btc moves 5% in 6h"],
+  "wallet.add": ["watch my wallet 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU on solana as main", "watch wallet 0x1234567890abcdef1234567890abcdef12345678 on base"],
+  "portfolio": ["my portfolio", "what do I hold"],
+  "jobs.watch": ["watch jobs at lever dorahacks for growth", "follow greenhouse stripe matching solana, bd"],
+  "jobs.list": ["any new jobs", "jobs"],
+  "launch.discover": ["what's launching", "new repos on github", "launches showhn"],
+  "launch.contact": ["contact @gakonst", "how do I reach vbuterin"],
+  "scout.find": ["who's building perps on solana", "find projects in ai agents for partnerships", "scout fintech africa to apply"],
+  "scout.watch": ["keep scouting solana perps for partnerships", "watch scout ai agents"],
+  "scout.draft_outreach": ["draft an outreach to Perpz about integrating their SDK", "outreach Perpz: want to integrate your SDK"],
+  "bill.billers": ["which billers for airtime", "billers data"],
+  "bill.pay": ["pay 2000 naira to BIL099 for 08012345678", "top up 1,500 airtime to BIL099 for 08012345678"],
+  "bill.history": ["my bill history", "what bills have I paid"],
+  "trading.follow_wallet": ["copy wallet 0x38e598961dd0456a7fb2e758bd433d3e59fb8a4a on polymarket max 10/trade 50/day", "follow 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU on pumpfun"],
+  "trading.unfollow": ["stop following 7xKXtg", "unfollow whale"],
+  "trading.shadow_report": ["how's the copy trading going", "shadow report"],
+  "persona.set": ["talk like a tired pirate who loves spreadsheets", "switch your voice to degen", "be more formal", "voice coach"],
+  "settings.update": ["my timezone is Europe/London", "send my digest at 8", "my email is sage@example.com", "timezone Africa/Lagos"],
+  "digest.now": ["what's my day looking like", "brief me", "digest"],
+  "list.add": ["I need to buy milk, eggs and bread", "I have to do taxes and call the bank", "add rice to my shopping list", "todo: ship the deck"],
+  "list.done": ["bought milk", "finished taxes", "crossed off call the bank"],
+  "list.show": ["what's on my shopping list", "my todos", "lists"],
+};
+
+describe("every action is reachable from ordinary sentences", () => {
+  const actions = allActions().filter((a) => a.tier !== 3).map((a) => a.name);
+
+  it("has example sentences for every registered action", () => {
+    const missing = actions.filter((a) => !(a in SENTENCES));
+    expect(missing).toEqual([]);
+    const stale = Object.keys(SENTENCES).filter((a) => !actions.includes(a));
+    expect(stale).toEqual([]);
+  });
+
+  for (const [action, sentences] of Object.entries(SENTENCES)) {
+    for (const s of sentences) {
+      it(`${action} ← "${s}"`, () => {
+        const i = parse(s);
+        expect(i, `no parse for "${s}"`).not.toBeNull();
+        expect(i!.action).toBe(action);
+        const a = allActions().find((x) => x.name === action)!;
+        const ok = a.schema.safeParse(i!.args);
+        expect(ok.success, `bad args for "${s}": ${JSON.stringify(i!.args)} ${ok.success ? "" : ok.error.issues[0]?.message}`).toBe(true);
+      });
+    }
+  }
+});
+
+describe("loose parsing details", () => {
+  it("strips politeness and keeps the ask", () => {
+    expect(normalise("Hey, could you please remind me to stretch, thanks!")).toBe("remind me to stretch");
+  });
+  it("lifts the time out of a sentence", () => {
+    expect(splitTime("call Ada tomorrow at 9am about the deck", NOW)).toEqual({ when: "tomorrow at 9am", rest: "call Ada about the deck" });
+  });
+  it("extracts arguments correctly", () => {
+    expect(parse("can you remind me to call Ada tomorrow at 9am")?.args).toEqual({ text: "call Ada", when: "tomorrow at 9am" });
+    expect(parse("I spent 2k on fuel")?.args).toMatchObject({ amount: 2000, currency: "NGN", category: "fuel" });
+    expect(parse("paid $20 for lunch")?.args).toMatchObject({ amount: 20, currency: "USD" });
+    expect(parse("let me know when sol goes above 250")?.args).toEqual({ coin: "sol", op: "above", target: 250 });
+    expect(parse("alert me if eth drops below 2k")?.args).toEqual({ coin: "eth", op: "below", target: 2000 });
+    expect(parse("I'm going to Accra on dec 20 until dec 27 with a budget of 600 usd")?.args).toEqual({ destination: "Accra", start: "dec 20", end: "dec 27", budget: 600, currency: "USD" });
+    expect(parse("who's building perps on solana")?.args).toEqual({ niche: "perps on solana", objective: undefined });
+    expect(parse("I need to buy milk, eggs and bread")?.args).toEqual({ list: "shopping", items: ["milk", "eggs", "bread"] });
+    expect(parse("talk like a tired pirate who loves spreadsheets")?.args).toEqual({ custom: "tired pirate who loves spreadsheets" });
+    expect(parse("be more formal")?.args).toEqual({ preset: "butler" });
+  });
+  it("does not misfire on chat", () => {
+    for (const s of ["I spent the weekend in Lagos", "what do you think about my plan", "lol that's wild", "thanks", "how are you"]) {
+      const i = parse(s);
+      expect(i, `misfire on "${s}": ${JSON.stringify(i)}`).toBeNull();
+    }
+  });
+});

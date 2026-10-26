@@ -1,0 +1,229 @@
+/**
+ * Web channel + webhooks. Hono on node:http, static files from src/web/public.
+ *  auth:    POST /auth/telegram  POST /auth/link  POST /auth/logout
+ *  app:     GET /api/me /api/public /api/messages /api/state /api/digest /api/hackathons /api/scout /api/money /api/trips /api/settings /api/quip
+ *           POST /api/chat /api/button /api/scout   PATCH /api/settings
+ *  hooks:   POST /webhooks/twilio  POST /webhooks/imessage   GET /health
+ */
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { config } from "../core/config.js";
+import { log } from "../core/log.js";
+import type { Db } from "../core/db.js";
+import { ensureUser, getUserById, handleCallback, handleMessage, redeemLinkCode, identitiesOf } from "../core/handler.js";
+import { registerSender } from "../core/dispatch.js";
+import { handleTextChannel, verifyTwilio } from "../channels/sms.js";
+import { parseInbound } from "../channels/imessage.js";
+import { buildDigest } from "../modules/digest.js";
+import { rankedForUser } from "../modules/hackathons.js";
+import { scout } from "../modules/scout.js";
+import { spentToday } from "../core/budget.js";
+import { inQuietHours } from "../core/time.js";
+import { propose } from "../policy/engine.js";
+import { PERSONAS } from "../intent/persona.js";
+import { providerName } from "../intent/providers.js";
+import { draftReply } from "../intent/model.js";
+import { DateTime } from "luxon";
+import type { User } from "../policy/types.js";
+
+const SESSION_DAYS = 30;
+const PUBLIC_DIR = path.relative(process.cwd(), path.join(path.dirname(fileURLToPath(import.meta.url)), "public")) || ".";
+
+export function createWeb(db: Db, botUsername: string) {
+  const app = new Hono<{ Variables: { user: User } }>();
+
+  registerSender("web", async (externalId, reply) => {
+    const u = await db.one<{ id: number }>(`SELECT user_id AS id FROM identities WHERE channel='web' AND external_id=$1`, [externalId]);
+    if (!u) throw new Error("no web identity");
+    await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'assistant',$2)`, [u.id, reply.text]);
+  });
+
+  const session = async (c: any): Promise<User | null> => {
+    const tok = getCookie(c, "ll_session");
+    if (!tok) return null;
+    const row = await db.one<{ user_id: number }>(`SELECT user_id FROM sessions WHERE token=$1 AND expires_at > now()`, [tok]);
+    return row ? (await getUserById(db, row.user_id)) ?? null : null;
+  };
+  const newSession = async (c: any, user: User) => {
+    const token = randomBytes(32).toString("hex");
+    await db.query(`INSERT INTO sessions (token, user_id, expires_at) VALUES ($1,$2,$3)`, [token, user.id, new Date(Date.now() + SESSION_DAYS * 86_400_000)]);
+    setCookie(c, "ll_session", token, { httpOnly: true, sameSite: "Lax", secure: config.publicUrl.startsWith("https"), path: "/", maxAge: SESSION_DAYS * 86_400 });
+    await db.query(`INSERT INTO identities (user_id, channel, external_id) VALUES ($1,'web',$2) ON CONFLICT DO NOTHING`, [user.id, `web:${user.id}`]);
+  };
+  const ctxOf = (u: User, src: string) => ({ db, user: u, now: new Date(), sourceMessage: `[web] ${src}` });
+
+  app.get("/health", (c) => c.json({ ok: true }));
+  app.get("/api/public", (c) => c.json({ botUsername }));
+  app.use("/styles.css", serveStatic({ root: PUBLIC_DIR, path: "styles.css" }));
+  app.use("/app.js", serveStatic({ root: PUBLIC_DIR, path: "app.js" }));
+  app.use("/mascot.js", serveStatic({ root: PUBLIC_DIR, path: "mascot.js" }));
+  app.get("/", serveStatic({ root: PUBLIC_DIR, path: "index.html" }));
+
+  /* ---- auth ---- */
+  app.post("/auth/telegram", async (c) => {
+    const data = (await c.req.json()) as Record<string, string>;
+    const { hash, ...rest } = data;
+    const check = Object.keys(rest).sort().map((k) => `${k}=${rest[k]}`).join("\n");
+    const expected = createHmac("sha256", createHash("sha256").update(config.telegramToken).digest()).update(check).digest("hex");
+    if (expected !== hash || Date.now() / 1000 - Number(rest.auth_date) > 86_400) return c.json({ error: "bad signature" }, 401);
+    const id = Number(rest.id);
+    if (config.allowedUserIds.length && !config.allowedUserIds.includes(id)) return c.json({ error: "not in the circle" }, 403);
+    const user = await ensureUser(db, "telegram", String(id), [rest.first_name, rest.last_name].filter(Boolean).join(" "));
+    await newSession(c, user);
+    return c.json({ ok: true });
+  });
+  app.post("/auth/link", async (c) => {
+    const { code } = await c.req.json();
+    const user = await redeemLinkCode(db, String(code ?? ""), "web", `web:${randomBytes(8).toString("hex")}`);
+    if (!user) return c.json({ error: "invalid or expired code" }, 401);
+    await newSession(c, user);
+    return c.json({ ok: true });
+  });
+  app.post("/auth/logout", async (c) => {
+    const tok = getCookie(c, "ll_session");
+    if (tok) await db.query(`DELETE FROM sessions WHERE token=$1`, [tok]);
+    deleteCookie(c, "ll_session", { path: "/" });
+    return c.json({ ok: true });
+  });
+
+  app.use("/api/*", async (c, next) => {
+    if (c.req.path === "/api/public") return next();
+    const u = await session(c);
+    if (!u) return c.json({ error: "unauthenticated" }, 401);
+    c.set("user", u);
+    await next();
+  });
+  const user = (c: any): User => c.get("user") as User;
+
+  /* ---- app data ---- */
+  app.get("/api/me", async (c) => {
+    const u = user(c);
+    return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey) });
+  });
+  app.get("/api/messages", async (c) => c.json((await db.query(`SELECT id, role, content, created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 60`, [user(c).id])).reverse()));
+  app.post("/api/chat", async (c) => {
+    const { text } = await c.req.json();
+    if (!text || String(text).length > 4000) return c.json({ error: "empty" }, 400);
+    return c.json(await handleMessage(db, user(c), String(text), { channel: "web" }));
+  });
+  app.post("/api/button", async (c) => c.json(await handleCallback(db, user(c), String((await c.req.json()).data))));
+  app.get("/api/state", async (c) => {
+    const u = user(c);
+    const now = new Date();
+    const wd = DateTime.fromJSDate(now).setZone(u.tz).weekday % 7;
+    const [pending, reminders, events, meds, ledger, lists, memory, dates, classes_today, habits] = await Promise.all([
+      db.query(`SELECT id, echo, expires_at FROM pending_actions WHERE user_id=$1 AND resolved IS NULL AND expires_at > now() ORDER BY id`, [u.id]),
+      db.query(`SELECT id, text, due_at, cron FROM reminders WHERE user_id=$1 AND NOT deleted AND NOT done ORDER BY due_at LIMIT 30`, [u.id]),
+      db.query(`SELECT id, title, starts_at, location FROM events WHERE user_id=$1 AND NOT deleted AND starts_at >= now() - interval '12 hours' ORDER BY starts_at LIMIT 30`, [u.id]),
+      db.query(`SELECT id, name, dose, times, days_left FROM medications WHERE user_id=$1 AND active ORDER BY name`, [u.id]),
+      db.query(`SELECT id, title, status, deadline, prize, url, payout_received FROM hackathon_entries WHERE user_id=$1 ORDER BY (status IN ('won','lost','withdrawn')), deadline NULLS LAST`, [u.id]),
+      db.query(`SELECT id, list, text FROM todos WHERE user_id=$1 AND NOT done ORDER BY list, id`, [u.id]),
+      db.query(`SELECT id, fact, confirmed FROM memories WHERE user_id=$1 ORDER BY id`, [u.id]),
+      db.query(`SELECT id, kind, label, to_char(on_date,'YYYY-MM-DD') AS on_date, yearly FROM dates WHERE user_id=$1 ORDER BY on_date`, [u.id]),
+      db.query(`SELECT name, start_time, location FROM classes WHERE user_id=$1 AND active AND weekday=$2 ORDER BY start_time`, [u.id, wd]),
+      db.query(`SELECT h.name, h.target_per_week, (SELECT count(*) FROM habit_checkins c WHERE c.habit_id=h.id AND c.day >= current_date - 6)::text AS n FROM habits h WHERE h.user_id=$1 AND h.active ORDER BY h.name`, [u.id]),
+    ]);
+    return c.json({ pending, reminders, events, meds, ledger, lists, memory, dates, classes_today, habits, spend: await spentToday(db, u.id), quiet: inQuietHours(now, u.tz, u.quiet_start, u.quiet_end) });
+  });
+  app.get("/api/digest", async (c) => c.json({ text: await buildDigest(db, user(c), new Date()) }));
+  app.get("/api/hackathons", async (c) => {
+    const u = user(c);
+    const feed = await rankedForUser(db, u, new Date(), 12);
+    const ledger = await db.query<any>(`SELECT * FROM hackathon_entries WHERE user_id=$1 ORDER BY (status IN ('won','lost','withdrawn')), deadline NULLS LAST`, [u.id]);
+    const won = ledger.filter((r) => r.status === "won").length, decided = ledger.filter((r) => ["won", "lost"].includes(r.status)).length;
+    return c.json({ feed, ledger, stats: decided ? `${won} won / ${decided} decided (${Math.round((won / decided) * 100)}%)` : "No outcomes yet." });
+  });
+  app.get("/api/scout", async (c) => {
+    const u = user(c);
+    const watches = await db.query(`SELECT niche, objective FROM scout_watches WHERE user_id=$1 AND active`, [u.id]);
+    const results = await db.query(`SELECT * FROM scout_results ORDER BY first_seen DESC LIMIT 30`);
+    return c.json({ results, watches });
+  });
+  app.post("/api/scout", async (c) => {
+    const u = user(c);
+    const { niche, objective } = await c.req.json();
+    if (!niche) return c.json({ error: "niche required" }, 400);
+    await scout(db, String(niche), objective ? String(objective) : undefined, 10).catch((e) => log.warn({ err: e?.message }, "scout"));
+    await db.query(`INSERT INTO audit_log (user_id, action, tier, args, outcome, source_message) VALUES ($1,'scout.find',1,$2,'ran','[web] scout')`, [u.id, JSON.stringify({ niche, objective })]);
+    const results = await db.query(`SELECT * FROM scout_results WHERE niche=$1 ORDER BY first_seen DESC LIMIT 30`, [String(niche).toLowerCase()]);
+    const watches = await db.query(`SELECT niche, objective FROM scout_watches WHERE user_id=$1 AND active`, [u.id]);
+    return c.json({ results, watches });
+  });
+  app.get("/api/money", async (c) => {
+    const u = user(c);
+    const [spend, alerts, wallets, follows, bills] = await Promise.all([
+      db.query(`SELECT currency, category, sum(amount)::text AS total FROM spend WHERE user_id=$1 AND spent_at > now() - interval '7 days' GROUP BY currency, category ORDER BY sum(amount) DESC`, [u.id]),
+      db.query(`SELECT coin, op, target, pct_window, active FROM price_alerts WHERE user_id=$1 ORDER BY id DESC LIMIT 20`, [u.id]),
+      db.query(`SELECT chain, address, label FROM wallets WHERE user_id=$1`, [u.id]),
+      db.query(`SELECT venue, address, label, mode FROM followed_wallets WHERE user_id=$1 AND active`, [u.id]),
+      db.query(`SELECT biller_code, customer, amount, status, created_at FROM bill_payments WHERE user_id=$1 ORDER BY id DESC LIMIT 10`, [u.id]),
+    ]);
+    return c.json({ spend, alerts, wallets, follows, bills });
+  });
+  app.get("/api/trips", async (c) => {
+    const u = user(c);
+    const trips = await db.query<any>(`SELECT id, destination, to_char(starts_on,'YYYY-MM-DD') AS starts_on, to_char(ends_on,'YYYY-MM-DD') AS ends_on, budget, currency FROM trips WHERE user_id=$1 AND status<>'cancelled' ORDER BY starts_on NULLS LAST`, [u.id]);
+    for (const t of trips) t.items = await db.query(`SELECT kind, title, at, cost, done FROM trip_items WHERE trip_id=$1 ORDER BY at NULLS LAST, id`, [t.id]);
+    return c.json(trips);
+  });
+  app.get("/api/settings", async (c) => {
+    const u = user(c);
+    return c.json({
+      tz: u.tz, digest_hour: u.digest_hour, quiet_start: u.quiet_start, quiet_end: u.quiet_end, name: u.name, email: u.email ?? null,
+      country: u.prefs.country ?? "", tags: u.prefs.tags ?? [], persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", personaCustom: u.prefs.personaCustom ?? "",
+      personas: PERSONAS, identities: await identitiesOf(db, u.id), provider: providerName(), spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd,
+    });
+  });
+  app.patch("/api/settings", async (c) => {
+    const u = user(c);
+    const body = await c.req.json();
+    if (body.theme) {
+      await db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [u.id, JSON.stringify({ theme: body.theme })]);
+      return c.json({ ok: true, text: "Theme saved" });
+    }
+    const d = await propose(ctxOf(u, "settings"), "settings.update", body);
+    return c.json({ ok: d.kind === "ran", text: d.kind === "pending" ? d.echo : d.reply });
+  });
+  /** A line from Pip in the user's voice. Falls back to the client's local quips when no model. */
+  app.get("/api/quip", async (c) => {
+    const u = user(c);
+    const state = c.req.query("state") ?? "idle";
+    const line = await draftReply(db, u, `State: ${state}. Time: ${DateTime.now().setZone(u.tz).toFormat("HH:mm cccc")}.`, "You are Pip, a small tortoise mascot with spectacles who keeps the user's day. Say one short line (max 14 words) in the user's chosen voice. No emoji. Output the line only.");
+    return c.json({ text: line });
+  });
+
+  /* ---- inbound webhooks ---- */
+  app.post("/webhooks/twilio", async (c) => {
+    const form = Object.fromEntries((await c.req.formData()).entries()) as Record<string, string>;
+    if (!verifyTwilio(`${config.publicUrl}/webhooks/twilio`, form, c.req.header("x-twilio-signature") ?? "")) return c.text("forbidden", 403);
+    const reply = await handleTextChannel(db, "sms", form.From, form.Body ?? "");
+    return c.body(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`, 200, { "content-type": "text/xml" });
+  });
+  app.post("/webhooks/imessage", async (c) => {
+    const secret = c.req.query("secret") ?? c.req.header("x-webhook-secret") ?? "";
+    if (!config.webhookSecret || secret !== config.webhookSecret) return c.text("forbidden", 403);
+    const inbound = parseInbound(await c.req.json().catch(() => null));
+    if (!inbound) return c.json({ ignored: true });
+    const reply = await handleTextChannel(db, "imessage", inbound.from, inbound.text);
+    const { sendIMessage } = await import("../channels/imessage.js");
+    await sendIMessage(inbound.from, reply).catch((e) => log.warn({ err: e?.message }, "imessage reply failed"));
+    return c.json({ ok: true });
+  });
+
+  return app;
+}
+
+export function startWeb(db: Db, botUsername: string) {
+  const app = createWeb(db, botUsername);
+  serve({ fetch: app.fetch, port: config.port }, (info) => log.info({ port: info.port }, "web listening"));
+  return app;
+}
+
+function escapeXml(s: string) {
+  return s.replace(/[<>&'"]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[ch]!));
+}
