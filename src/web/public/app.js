@@ -86,7 +86,7 @@ window.App = (function () {
   }
 
   /* ---------- chat ---------- */
-  const SUGGEST = ["what's my day looking like", "remind me to call Ada tomorrow 9am", "who's building perps on solana", "any hackathons for ai", "I spent 4500 naira on data", "weather in Lagos tomorrow", "100 usd to ngn", "I need to buy milk and eggs"];
+  const SUGGEST = ["what's my day looking like", "remind me to call Ada tomorrow 9am", "who's building payments on base", "any hackathons for ethereum this month", "I spent 4500 naira on data", "weather in Lagos tomorrow", "100 usd to ngn", "I need to buy milk and eggs"];
   async function renderChat(V) {
     V.innerHTML = `<div class="chat"><div class="log" id="log"></div><div class="chips" id="chips">${SUGGEST.map((s) => `<button class="chip" onclick="App.fill('${s.replace(/'/g, "\\'")}')">${esc(s)}</button>`).join("")}</div>
       <div class="composer"><textarea id="t" placeholder="Say it plainly. Pip understands ordinary sentences."></textarea><button class="btn primary" onclick="App.send()">Send</button></div></div>`;
@@ -148,7 +148,7 @@ window.App = (function () {
   async function renderHackathons(V) {
     V.innerHTML = '<div class="empty">Ranking…</div>';
     const h = await api("/api/hackathons");
-    $("#headActions").innerHTML = `<button class="btn sm" onclick="App.prompt('Track a hackathon', 'track ', 'Colosseum Frontier due nov 30')">+ Track</button> <button class="btn sm" onclick="App.prompt('Interests (comma separated)', 'interests: ', 'solana, ai, defi')">Interests</button>`;
+    $("#headActions").innerHTML = `<button class="btn sm" onclick="App.prompt('Track a hackathon', 'track ', 'NEAR hackathon due nov 14')">+ Track</button> <button class="btn sm" onclick="App.prompt('Interests (comma separated)', 'interests: ', 'ai, payments, base, ethereum')">Interests</button>`;
     V.innerHTML = `<h3 class="serif" style="font-size:22px;margin:0 0 10px">Ranked for you</h3>
       <div class="grid">${h.feed.length ? h.feed.map((x) => `<div class="card-h"><div class="row" style="justify-content:space-between"><span class="score">${x.score}</span><span class="row">${(x.tags || []).slice(0, 3).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</span></div><div class="title">${esc(x.title)}</div><div class="meta">${x.prize_usd ? `<span>$${Number(x.prize_usd).toLocaleString()}</span>` : ""}${x.registrations ? `<span>${x.registrations} reg</span>` : ""}${x.deadline ? `<span>due ${fmt(x.deadline)}</span>` : ""}<span>${x.online === false ? "in person" : "online"}</span><span class="faint">${x.source}</span></div><div class="row"><a class="btn sm" href="${x.url}" target="_blank" rel="noopener">Open</a><button class="btn sm" onclick="App.say('track ${esc(x.title).replace(/'/g, "")}${x.deadline ? "" : ""}')">Track</button></div></div>`).join("") : '<div class="empty">Feed is empty — pollers run every 6h, or set HACKATHONRADAR_API_KEY.</div>'}</div>
       <h3 class="serif" style="font-size:22px;margin:24px 0 10px">Your ledger</h3>
@@ -158,7 +158,7 @@ window.App = (function () {
 
   /* ---------- scout ---------- */
   async function renderScout(V) {
-    V.innerHTML = `<div class="panel" style="margin-bottom:14px"><div class="row"><input id="niche" placeholder="niche — solana perps, ai agents, fintech africa, devtools…" style="flex:2;min-width:200px"><input id="obj" placeholder="objective — partner, hire, invest, apply, learn" style="flex:1;min-width:160px"><button class="btn primary" onclick="App.scout()">Scout</button><button class="btn" onclick="App.scoutWatch()">Keep watching</button></div><div class="muted small" style="margin-top:8px">Official site, X, Telegram, Discord, GitHub, and founders' public handles. Outreach is drafted; you send it.</div></div><div id="scoutOut"></div>`;
+    V.innerHTML = `<div class="panel" style="margin-bottom:14px"><div class="row"><input id="niche" placeholder="niche — ai agents, payments on base, perps on hyperliquid, fintech africa, devtools…" style="flex:2;min-width:200px"><input id="obj" placeholder="objective — partner, hire, invest, apply, learn" style="flex:1;min-width:160px"><button class="btn primary" onclick="App.scout()">Scout</button><button class="btn" onclick="App.scoutWatch()">Keep watching</button></div><div class="muted small" style="margin-top:8px">Official site, X, Telegram, Discord, GitHub, and founders' public handles. Outreach is drafted; you send it.</div></div><div id="scoutOut"></div>`;
     const r = await api("/api/scout");
     $("#scoutOut").innerHTML = scoutCards(r.results, r.watches);
   }

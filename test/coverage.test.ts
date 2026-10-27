@@ -122,3 +122,49 @@ describe("loose parsing details", () => {
     }
   });
 });
+
+describe("tool selection keeps model calls small", () => {
+  it("picks relevant tools, caps the count, never includes tier 3", async () => {
+    const { selectTools } = await import("../src/intent/select.js");
+    const rem = selectTools("can you remind me to call Ada tomorrow at 9am").map((a) => a.name);
+    expect(rem[0]).toBe("reminder.create");
+    expect(rem.length).toBeLessThanOrEqual(12);
+    const hack = selectTools("any good hackathons for solana this month?").map((a) => a.name);
+    expect(hack).toContain("hackathon.discover");
+    expect(hack).not.toContain("bill.pay");
+    const chat = selectTools("can we talk about this later").map((a) => a.name);
+    expect(chat.length).toBeLessThanOrEqual(12);
+    expect(chat).toContain("reminder.create"); // "later" is a reminder cue; chat still carries the small default set
+    expect(selectTools("lol ok").every((a) => a.tier !== 3)).toBe(true);
+    const scout = selectTools("who's building perps on solana?").map((a) => a.name);
+    expect(scout).toContain("scout.find");
+  });
+  it("chat fallback talks like a person, not a menu", async () => {
+    const { chatFallback } = await import("../src/intent/index.js");
+    expect(chatFallback("can we talk about this later", true)).toMatch(/whenever you're ready|No rush/);
+    expect(chatFallback("hey", false)).not.toContain("•");
+    expect(chatFallback("what do you think about solana?", false)).toContain("/help");
+    expect(chatFallback("what do you think about solana?", true)).toContain("model call");
+  });
+});
+
+describe("tool selection and smalltalk", () => {
+  it("sends a small, relevant tool set instead of all of them", async () => {
+    const { selectTools } = await import("../src/intent/model.js");
+    const names = (s: string) => selectTools(s).map((a) => a.name);
+    expect(names("can you remind me about rent on friday")).toContain("reminder.create");
+    expect(names("can you remind me about rent on friday").length).toBeLessThanOrEqual(16);
+    expect(names("who's building payments on base")).toContain("scout.find");
+    expect(names("let me know when btc goes above 100k")).toContain("price.alert");
+    expect(names("lol that's wild").length).toBeLessThanOrEqual(6); // generic fallback set only
+    expect(names("lol that's wild")).toContain("note.add");
+  });
+  it("answers small talk without a model and never shows the command wall for it", async () => {
+    const { smalltalk } = await import("../src/intent/smalltalk.js");
+    expect(smalltalk("can we talk about this later")).toMatch(/ready|rush|say the word/i);
+    expect(smalltalk("thanks!")).toBeTruthy();
+    expect(smalltalk("how far", { persona: "pidgin" })).toBeNull(); // not a greeting rule we claim; model handles
+    expect(smalltalk("hey", { persona: "pidgin" })).toMatch(/How far/);
+    expect(smalltalk("remind me to call Ada")).toBeNull();
+  });
+});

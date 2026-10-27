@@ -70,7 +70,7 @@ export async function upsertLaunches(db: Db, rows: Launch[]) {
 }
 
 onJob("poll_launches", async (_job, deps) => {
-  const topics = (process.env.GITHUB_TOPICS ?? "solana,ai-agents,defi,mcp").split(",");
+  const topics = (process.env.GITHUB_TOPICS ?? "ai-agents,defi,devtools,fintech,ethereum,solana").split(",");
   for (const [name, fn] of [["showhn", pollShowHN], ["github", () => pollGitHub(topics)], ["dexboost", pollDexBoosts]] as const) {
     try { log.info({ source: name, fresh: await upsertLaunches(deps.db, await fn()) }, "launch poll"); }
     catch (e: any) { log.warn({ source: name, err: e?.message }, "launch poll failed"); }

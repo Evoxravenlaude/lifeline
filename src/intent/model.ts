@@ -4,7 +4,8 @@
  * typed action; the policy engine decides whether it runs. The conversation
  * itself is free: any topic, any length, the user's chosen voice.
  */
-import { allActions } from "../policy/registry.js";
+import { selectTools } from "./select.js";
+export { selectTools };
 import { config } from "../core/config.js";
 import { log } from "../core/log.js";
 import { DateTime } from "luxon";
@@ -38,7 +39,7 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
   if (await overBudget(ctx.db, ctx.user.id)) {
     return { kind: "reply", text: `You've hit today's model budget ($${config.dailyModelBudgetUsd}). The command-style phrases in /help still work; the budget resets in 24h.` };
   }
-  const tools = allActions().filter((a) => a.tier !== 3).map((a) => ({ name: a.name.replace(/\./g, "__"), description: a.description, schema: a.schema }));
+  const tools = selectTools(text).map((a) => ({ name: a.name.replace(/\./g, "__"), description: a.description, schema: a.schema }));
   try {
     const res = await complete({ system: systemFor(ctx.user, ctx.now, memories), messages: [...history.slice(-12), { role: "user", content: text }], tools });
     if (!res) return null;

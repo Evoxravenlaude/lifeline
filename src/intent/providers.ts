@@ -18,6 +18,9 @@ export interface CompleteOpts { system: string; messages: Msg[]; tools?: Tool[];
 
 export type Provider = "anthropic" | "gemini" | "openai";
 
+/** Last model outcome, for /doctor and the fallback message. */
+export const diagnostics: { lastError: string | null; lastOkAt: number | null; lastErrorAt: number | null } = { lastError: null, lastOkAt: null, lastErrorAt: null };
+
 export function providerName(): Provider | null {
   const p = config.modelProvider;
   if (p === "anthropic" && config.anthropicKey) return "anthropic";
@@ -31,10 +34,28 @@ export function providerName(): Provider | null {
 
 export async function complete(opts: CompleteOpts, forceProvider?: Provider): Promise<Completion | null> {
   const p = forceProvider ?? providerName();
-  if (p === "anthropic") return anthropic(opts);
-  if (p === "gemini") return gemini(opts);
-  if (p === "openai") return openaiCompat(opts);
-  return null;
+  if (!p) return null;
+  const run = () => (p === "anthropic" ? anthropic(opts) : p === "gemini" ? gemini(opts) : openaiCompat(opts));
+  try {
+    const r = await run();
+    diagnostics.lastOkAt = Date.now();
+    return r;
+  } catch (e: any) {
+    diagnostics.lastError = `${p}: ${e?.message ?? e}`.slice(0, 300);
+    diagnostics.lastErrorAt = Date.now();
+    // Many endpoints choke on a large tool list; the conversation must survive that.
+    if (opts.tools?.length) {
+      try {
+        const r = await (p === "anthropic" ? anthropic({ ...opts, tools: undefined }) : p === "gemini" ? gemini({ ...opts, tools: undefined }) : openaiCompat({ ...opts, tools: undefined }));
+        diagnostics.lastOkAt = Date.now();
+        return r;
+      } catch (e2: any) {
+        diagnostics.lastError = `${p}: ${e2?.message ?? e2}`.slice(0, 300);
+        throw e2;
+      }
+    }
+    throw e;
+  }
 }
 
 /**

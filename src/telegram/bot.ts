@@ -10,7 +10,8 @@ import type { Db } from "../core/db.js";
 import { ensureUser, handleCallback, handleMessage, renderDecision, type Reply } from "../core/handler.js";
 import { registerSender } from "../core/dispatch.js";
 import { propose } from "../policy/engine.js";
-import { HELP } from "../intent/index.js";
+import { HELP, FULL_HELP } from "../intent/index.js";
+import { diagnostics, providerName } from "../intent/providers.js";
 import { transcribe } from "../core/stt.js";
 import { PERSONAS } from "../intent/persona.js";
 import { spentToday } from "../core/budget.js";
@@ -83,7 +84,12 @@ export function createBot(db: Db): Bot {
     const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise mascot with spectacles who keeps the user's day. One short line (max 14 words) in the user's chosen voice. Output the line only.");
     await c.reply(`🐢 ${line ?? PIP_QUIPS[Math.floor(Math.random() * PIP_QUIPS.length)]}`);
   });
-  bot.command("help", (c) => c.reply(HELP));
+  bot.command("help", (c) => c.reply(FULL_HELP));
+  bot.command("doctor", async (c) => {
+    const p = providerName();
+    const age = (t: number | null) => (t ? `${Math.round((Date.now() - t) / 1000)}s ago` : "never");
+    await c.reply([`provider: ${p ?? "none (rules + loose NL only)"}`, `last model success: ${age(diagnostics.lastOkAt)}`, `last model error: ${age(diagnostics.lastErrorAt)}${diagnostics.lastError ? `\n  ${diagnostics.lastError}` : ""}`, `gemini key for scout: ${config.geminiKey ? "yes" : "no"}`, `stt: ${config.openaiKey ? "yes" : "no"} · email: ${config.smtpUrl ? "yes" : "no"} · public url: ${config.publicUrl || "unset"}`].join("\n"));
+  });
   bot.command("persona", async (c) => {
     const u = await userOf(c);
     const k = new InlineKeyboard();
@@ -126,7 +132,7 @@ export function createBot(db: Db): Bot {
       const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise mascot with spectacles who keeps the user's day. One short line (max 14 words) in the user's chosen voice. Output the line only.");
       return c.reply(`🐢 ${line ?? PIP_QUIPS[Math.floor(Math.random() * PIP_QUIPS.length)]}`);
     }
-    if (raw === "◎ Scout") return c.reply("Which niche, and what for? e.g. <i>scout solana perps for partnerships</i>", { parse_mode: "HTML", reply_markup: { force_reply: true, input_field_placeholder: "scout <niche> for <objective>" } });
+    if (raw === "◎ Scout") return c.reply("Which niche, and what for? e.g. <i>scout payments on base for partnerships</i> or <i>find ai agent startups to apply to</i>", { parse_mode: "HTML", reply_markup: { force_reply: true, input_field_placeholder: "scout <niche> for <objective>" } });
     const text = QUICK_MAP[raw] ?? raw;
     const forwarded = Boolean((c.message as any).forward_origin || (c.message as any).forward_date);
     await c.replyWithChatAction("typing").catch(() => {});
@@ -149,7 +155,7 @@ export function createBot(db: Db): Bot {
       if (step === "persona") {
         await propose({ db, user: u, now: new Date(), sourceMessage: "[onboarding persona]" }, "persona.set", { preset: value });
         await db.query(`UPDATE users SET prefs = prefs || '{"onboarded":true}'::jsonb WHERE id=$1`, [u.id]);
-        return c.reply(`${PERSONAS[value]?.label ?? value} it is. Last one: what are you into? Type it like <i>interests: solana, ai, payments</i> — I use it to rank hackathons and launches. Then talk to me plainly: "remind me to call Ada tomorrow 9am", "who's building perps on solana", "I spent 4500 naira on data".`, { parse_mode: "HTML", reply_markup: QUICK });
+        return c.reply(`${PERSONAS[value]?.label ?? value} it is. That's all the setup. If you ever want hackathons and launches ranked to your taste, tell me what you're into (<i>interests: ai, payments, base, ethereum</i> — any chains, any themes) — no rush. Otherwise, just talk to me.`, { parse_mode: "HTML", reply_markup: QUICK });
       }
       return;
     }

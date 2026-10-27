@@ -86,7 +86,7 @@ const discover = defineAction({
 const setTags = defineAction({
   name: "hackathon.set_interests",
   tier: 1,
-  description: "Set the tags used to rank hackathons for this user (e.g. ['solana','ai','defi']) and whether remote-only.",
+  description: "Set the tags used to rank hackathons for this user (e.g. ['ai','payments','base','ethereum'] — any chains or themes) and whether remote-only.",
   schema: z.object({ tags: z.array(z.string()).max(12), remote_only: z.boolean().optional() }),
   async run(args, ctx) {
     const prefs = { ...ctx.user.prefs, tags: args.tags, remoteOnly: args.remote_only ?? true };
