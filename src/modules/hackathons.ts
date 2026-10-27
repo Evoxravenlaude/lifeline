@@ -44,12 +44,13 @@ export function scoreHack(h: Hack, prefs: { tags?: string[]; remoteOnly?: boolea
   return Math.round(s);
 }
 
-export async function rankedForUser(db: any, user: any, now: Date, limit = 8): Promise<(Hack & { score: number })[]> {
+/** Ranked open hackathons. The brief passes unseenOnly so it only mentions new ones; the web page shows everything open. */
+export async function rankedForUser(db: any, user: any, now: Date, limit = 8, opts: { unseenOnly?: boolean } = { unseenOnly: true }): Promise<(Hack & { score: number })[]> {
   const prefs = { tags: (user.prefs?.tags as string[]) ?? [], remoteOnly: user.prefs?.remoteOnly !== false };
   const rows = await db.query(
     `SELECT h.* FROM hackathons h
      WHERE (h.deadline IS NULL OR h.deadline > $2)
-       AND NOT EXISTS (SELECT 1 FROM hackathon_seen s WHERE s.user_id=$1 AND s.hackathon_id=h.id)
+       ${opts.unseenOnly ? "AND NOT EXISTS (SELECT 1 FROM hackathon_seen s WHERE s.user_id=$1 AND s.hackathon_id=h.id)" : "AND $1::int IS NOT NULL"}
      ORDER BY h.first_seen DESC LIMIT 300`,
     [user.id, now],
   );

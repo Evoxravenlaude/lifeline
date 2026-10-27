@@ -11,6 +11,7 @@
       { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
       { "key": "X-Frame-Options", "value": "DENY" }
     ] },
-    { "source": "/(styles.css|app.js|mascot.js)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }] }
+    { "source": "/(styles.css|app.js|mascot.js|path.js)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }] },
+    { "source": "/fonts/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] }
   ]
 }

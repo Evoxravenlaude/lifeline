@@ -1,5 +1,11 @@
 /** Habits, spend log, quick notes, memory with provenance. */
 import { z } from "zod";
+
+/** "I'm vegetarian" said back is "you're vegetarian". */
+export function yours(fact: string): string {
+  const swaps: [RegExp, string][] = [[/\bI am\b/g, "you are"], [/\bI'm\b/gi, "you're"], [/\bI've\b/gi, "you've"], [/\bI'll\b/gi, "you'll"], [/\bI'd\b/gi, "you'd"], [/\bmyself\b/gi, "yourself"], [/\bmy\b/gi, "your"], [/\bmine\b/gi, "yours"], [/\bme\b/gi, "you"], [/\bI\b/g, "you"]];
+  return swaps.reduce((s, [re, to]) => s.replace(re, to), fact);
+}
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
 import { localDay } from "../core/time.js";
@@ -143,7 +149,7 @@ const remember = defineAction({
   async run(args, ctx) {
     const risk = /\b(from now on|always|never|send|pay|transfer|wallet|password|key)\b/i.test(args.fact) ? 2 : 0;
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO memories (user_id, fact, source, confirmed, risk) VALUES ($1,$2,'user',$3,$4) RETURNING id`, [ctx.user.id, args.fact, risk === 0, risk]);
-    return { reply: risk ? `Kept, but held back. That one touches money or standing instructions, so I'll ask you to confirm it on Sunday before it changes anything.` : `Got it, ${args.fact}. I'll keep that in mind.`, undo: { payload: { id: r!.id } } };
+    return { reply: risk ? `Kept, but held back. That one touches money or standing instructions, so I'll ask you to confirm it on Sunday before it changes anything.` : `Got it: ${yours(args.fact)}. I'll keep that in mind.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM memories WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);

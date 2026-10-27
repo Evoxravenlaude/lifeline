@@ -10,7 +10,7 @@ export interface Intent {
 
 const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   // reminders
-  [/^remind me (?:to )?(.+?)\s+(?:at|on|in|tomorrow|tonight|next)\s+(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1], when: m[0].slice(m[0].indexOf(m[1]) + m[1].length).trim() } })],
+  [/^remind me (?:to )?(.+?)\s+(?:at|on|in|today|tomorrow|tonight|next|this)\s+(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1], when: m[0].slice(m[0].indexOf(m[1]) + m[1].length).trim() } })],
   [/^remind me (?:to )?(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1] } })],
   [/^(?:list|show|my) reminders$/i, () => ({ action: "reminder.list", args: {} })],
   [/^(?:delete|remove|cancel) reminder (?:#?(\d+)|(.+))$/i, (m) => ({ action: "reminder.delete", args: m[1] ? { id: Number(m[1]) } : { match: m[2] } })],

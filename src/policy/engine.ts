@@ -68,7 +68,9 @@ async function runNow(ctx: Ctx, actionName: string, tier: Tier, args: unknown): 
     result = await action.run(args, ctx);
   } catch (e: any) {
     await audit(ctx, actionName, tier, args, `error: ${e?.message ?? e}`);
-    return { kind: "error", reply: e?.message ? String(e.message) : "That didn't work, and I'm not sure why. Try once more?" };
+    const msg = String(e?.message ?? "");
+    if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|socket hang up|network|aborted|timeout/i.test(msg)) return { kind: "error", reply: "I couldn't reach the source for that just now. Try again in a minute." };
+    return { kind: "error", reply: msg || "That didn't work, and I'm not sure why. Try once more?" };
   }
   await audit(ctx, actionName, tier, args, "ran");
   let undoId: number | undefined;

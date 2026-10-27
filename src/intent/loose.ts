@@ -150,6 +150,9 @@ const RULES: Rule[] = [
   // lowest priority: generic 'something with a time' → calendar event
   { test: /^(?:schedule|book|set up|put|block|i have|i'?ve got|there'?s)\s+(?:an? |my |the )?(.+)|^(?:meeting|call|dinner|lunch|appointment|interview|date|flight|exam)\b.*/i,
     build: (t, m, now) => { const { when, rest } = splitTime(m[1] ?? t, now); if (!when) return null; const title = strip(rest, /^(?:an? |my |the )/i, /\s*(?:with|at|in)\s*$/i); return title ? { action: "calendar.add", args: { title, when } } : null; } },
+  // last of all: a few words and a clock time ("standup today at 12:15", "gym 6pm") is an event
+  { test: /^(?![^]*\?$)(?!(?:what|when|where|who|why|how|is|are|can|could|do|does|should)\b)(.{2,48}?)\s+(?:today|tonight|tomorrow|on \w+|at|by)?\s*(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?$/i,
+    build: (t, _m, now) => { const { when, rest } = splitTime(t, now); if (!when || !/\d/.test(when)) return null; const title = strip(rest, /^(?:an? |my |the )/i, /\s+(?:today|tonight|tomorrow|at|on|by)$/i); return title && title.split(/\s+/).length <= 6 ? { action: "calendar.add", args: { title, when } } : null; } },
 ];
 
 function norm(s?: string) {

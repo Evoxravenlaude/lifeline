@@ -52,7 +52,7 @@ export async function buildDigest(db: Db, user: User, now: Date): Promise<string
   if (meds.length) side.push(`Meds: ${meds.map((m: any) => `${m.name} at ${m.times.join(" and ")}`).join(", ")}.`);
   if (assignments.length) side.push(`Due soon: ${assignments.map((a: any) => `${a.title} in ${humanDelta(now, a.due_at)}`).join(", ")}.`);
   if (hacks.length) side.push(`Hackathon deadlines: ${hacks.map((h: any) => `${h.title} in ${humanDelta(now, h.deadline)}`).join(", ")}.`);
-  if (tripDays !== null && !lead.includes(trips[0].destination)) side.push(`${trips[0].destination} in ${tripDays} day${tripDays === 1 ? "" : "s"}.`);
+  if (tripDays !== null && !lead.includes(trips[0].destination)) side.push(`${trips[0].destination.replace(/\b[a-z]/g, (c: string) => c.toUpperCase())} in ${tripDays} day${tripDays === 1 ? "" : "s"}.`);
   if (side.length) lines.push("", ...side);
 
   const { matchesFor } = await import("./jobs.js");

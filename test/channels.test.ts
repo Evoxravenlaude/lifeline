@@ -196,22 +196,31 @@ describe("load", () => {
 describe("web static + telegram html", () => {
   it("serves the app shell, styles, scripts and new endpoints", async () => {
     const a = createWeb(db, "lifeline_bot");
-    for (const p of ["/", "/styles.css", "/app.js", "/mascot.js"]) expect((await a.request(p)).status, p).toBe(200);
+    for (const p of ["/", "/styles.css", "/app.js", "/mascot.js", "/path.js", "/icon.svg", "/manifest.webmanifest", "/fonts/fraunces-latin-full-normal.woff2"]) expect((await a.request(p)).status, p).toBe(200);
     const html = await (await a.request("/")).text();
-    expect(html).toContain('data-theme="manor"');
+    expect(html).toContain('data-palette="manor"');
     expect(html).toContain("mascot.js");
     const css = await (await a.request("/styles.css")).text();
-    for (const t of ["manor", "library", "riviera", "tobacco"]) expect(css).toContain(`[data-theme="${t}"]`);
+    for (const t of ["manor", "claret", "riviera", "tobacco", "ivory"]) for (const m of ["day", "night"]) expect(css).toContain(`[data-palette="${t}"][data-mode="${m}"]`);
     expect((await (await a.request("/api/public")).json()).botUsername).toBe("lifeline_bot");
     const u = await ensureUser(db, "telegram", "1010", "Web2");
     const code = await createLinkCode(db, u.id);
     const r = await a.request("/auth/link", { method: "POST", body: JSON.stringify({ code }), headers: { "content-type": "application/json" } });
     const cookie = r.headers.get("set-cookie")!.split(";")[0];
     for (const p of ["/api/state", "/api/hackathons", "/api/scout", "/api/money", "/api/trips", "/api/settings", "/api/digest"]) expect((await a.request(p, { headers: { cookie } })).status, p).toBe(200);
-    const st = await (await a.request("/api/settings", { method: "PATCH", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ theme: "library" }) })).json();
+    const st = await (await a.request("/api/settings", { method: "PATCH", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ palette: "claret", mode: "night" }) })).json();
     expect(st.ok).toBe(true);
     const me = await (await a.request("/api/me", { headers: { cookie } })).json();
-    expect(me.theme).toBe("library");
+    expect([me.palette, me.mode, me.quiet_start]).toEqual(["claret", "night", 22]);
+    expect((await (await a.request("/api/settings", { method: "PATCH", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ palette: "neon" }) })).json()).ok).not.toBe(true);
+    // structured actions go through the same gate
+    const add = await (await a.request("/api/do", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "list.add", args: { list: "books", items: ["Piranesi"] } }) })).json();
+    expect(add.text).toMatch(/Piranesi/);
+    expect(add.buttons[0].label).toBe("Undo");
+    const bad = await a.request("/api/do", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ action: "drop table", args: {} }) });
+    expect(bad.status).toBe(400);
+    const caps = await (await a.request("/api/capabilities", { headers: { cookie } })).json();
+    expect(caps.capabilities.length).toBeGreaterThan(15);
     const tz = await (await a.request("/api/settings", { method: "PATCH", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ tz: "Europe/London", digest_hour: 8 }) })).json();
     expect(tz.ok).toBe(true);
     const s2 = await (await a.request("/api/settings", { headers: { cookie } })).json();

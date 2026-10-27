@@ -1,77 +1,172 @@
 <!doctype html>
-<html lang="en" data-theme="manor">
+<html lang="en" data-palette="manor" data-mode="day">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<script>
+  // The saved palette and setting, before anything is drawn, so the page never flashes another look.
+  (function () {
+    var r = document.documentElement, P = ["manor", "claret", "riviera", "tobacco", "ivory"];
+    try {
+      var p = localStorage.getItem("ll_palette"), m = localStorage.getItem("ll_mode");
+      if (P.indexOf(p) < 0) p = "manor";
+      if (m !== "day" && m !== "night") m = matchMedia("(prefers-color-scheme: dark)").matches ? "night" : "day";
+      r.dataset.palette = p; r.dataset.mode = m;
+    } catch (e) {}
+    var d = new Date(); r.style.setProperty("--now-deg", ((d.getHours() % 12) * 30 + d.getMinutes() / 2) + "deg");
+  })();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>lifeline</title>
-<meta name="description" content="Your day, kept. A private assistant for a small circle: reminders, calendar, medication, trips, hackathons, scouting, prices. Nothing moves without your yes.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%232E4A3B'/%3E%3Cpath d='M8 22 C 7 13, 12 8, 16 8 C 21 8, 25 13, 24 22 Z' fill='%23D2B76F'/%3E%3C/svg%3E">
+<meta name="description" content="Your day, kept. A private assistant for a small circle: reminders, calendar, medication, trips, hackathons, scouting and prices, with nothing moving until you say yes.">
+<meta name="theme-color" content="#EDE6D6">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="lifeline">
+<meta property="og:title" content="lifeline">
+<meta property="og:description" content="Your day, kept.">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="preload" as="font" type="font/woff2" href="/fonts/fraunces-latin-full-normal.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="/fonts/hanken-grotesk-latin-wght-normal.woff2" crossorigin>
 <link rel="stylesheet" href="/styles.css">
-<script>try{document.documentElement.dataset.theme=localStorage.getItem('ll_theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'library':'manor')}catch(e){}</script>
+<style>
+  /* Boot paint before the stylesheet arrives. */
+  html[data-mode="night"] #boot { background: #12140F; color: #ECE5D3; }
+  #boot { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: #EDE6D6; color: #1F1B16; }
+</style>
+<noscript><style>#boot { display: none; }</style></noscript>
 </head>
 <body>
-
-<!-- LANDING -->
-<div id="login" class="landing" hidden>
-  <div class="left">
-    <div class="wordmark">lifeline<i>.</i></div>
-    <div>
-      <h1>Your day,<br>kept.</h1>
-      <p class="lede" style="margin-top:18px">One assistant for a small circle. It remembers what you tell it, rings when it should, ranks the hackathons worth your weekend, finds the people behind new projects, and never moves money or reaches anyone without your yes.</p>
-    </div>
-    <div class="sample" id="sample">
-      <div class="turn user"><span class="who">you</span><span>remind me to call Ada tomorrow at 9</span></div>
-      <div class="turn bot"><span class="who">lifeline</span><span>Call Ada, tomorrow at 09:00. I'll ping you here.</span></div>
-      <div class="turn user"><span class="who">you</span><span>I'm going to Accra on the 20th</span></div>
-      <div class="turn bot"><span class="who">lifeline</span><span>Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.</span></div>
-      <div class="turn user"><span class="who">you</span><span>can you track my meds?</span></div>
-      <div class="turn bot"><span class="who">lifeline</span><span>Yes. Tell me what you take and when, like "I take vitamin D at 8 and 8pm". I'll ring you at each dose with Taken and Skip and keep the log.</span></div>
-    </div>
-    <ul class="tenets">
-      <li>Same memory on Telegram, here, SMS and iMessage.</li>
-      <li>Anything that moves money, deletes, or reaches someone waits for a yes. Undo for five minutes on the rest.</li>
-      <li>Copy-trading is a mirror on paper, never a hand on the wheel.</li>
-    </ul>
-  </div>
-  <div class="right">
-    <div class="medallion"><div class="engrave"></div><div id="loginMascot"></div></div>
-    <div class="signin">
-      <h2>Come in</h2>
-      <p class="muted">This is Pip. He keeps the door.</p>
-      <div id="tgw"></div>
-      <div class="or">or, from the bot, say <b>link</b> and paste the code</div>
-      <input id="code" placeholder="six-character code" maxlength="6" autocapitalize="characters" autocomplete="off">
-      <button class="btn primary" onclick="App.link()">Link this browser</button>
-      <div id="lerr" class="err small"></div>
-    </div>
+<!-- The watch draws itself and its hand sweeps to the real time. Once per visit; after that only if loading is slow. -->
+<div id="boot" aria-hidden="true">
+  <div class="b-in">
+    <svg viewBox="0 0 120 128">
+      <circle class="crown" cx="60" cy="10" r="5" fill="none" stroke="currentColor" stroke-width="3"/>
+      <path class="crown" d="M60 15 v6" stroke="currentColor" stroke-width="3"/>
+      <circle class="rim" cx="60" cy="68" r="44" fill="none" stroke="var(--metal, #A8843F)" stroke-width="5" pathLength="260"/>
+      <g class="ticks" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+        <path d="M60 32v6M60 98v6M24 68h6M90 68h6"/>
+      </g>
+      <g class="hand"><path d="M60 68 L60 40" stroke="currentColor" stroke-width="4" stroke-linecap="round" transform="translate(0 0)"/></g>
+      <circle cx="60" cy="68" r="4.5" fill="currentColor" class="ticks"/>
+    </svg>
+    <div class="word">lifeline</div>
   </div>
 </div>
+<script>
+  (function () {
+    var boot = document.getElementById("boot"), start = Date.now(), first = true;
+    try { first = !sessionStorage.getItem("ll_booted"); sessionStorage.setItem("ll_booted", "1"); } catch (e) {}
+    if (!first) boot.className = "quick";
+    var done = false;
+    window.__bootDone = function () {
+      if (done) return; done = true;
+      setTimeout(function () { boot.className += " done"; setTimeout(function () { boot.remove(); }, 520); }, Math.max(0, start + (first ? 1700 : 0) - Date.now()));
+    };
+    setTimeout(window.__bootDone, 8000);
+  })();
+</script>
 
-<!-- APP -->
-<div id="app" class="app" hidden>
-  <nav class="rail">
-    <div class="wordmark">lifeline<i>.</i></div>
-    <div class="nav" id="nav"></div>
-    <div class="foot">
-      <div id="who"></div>
-      <div id="usage"></div>
-      <button class="btn sm quiet" style="justify-self:start;padding-left:0" onclick="App.logout()">Sign out</button>
-    </div>
-  </nav>
-  <section class="main">
-    <div class="head"><h2 id="viewTitle">Chat</h2><span class="sub" id="viewSub"></span><span class="sp"></span><span id="headActions"></span><button class="btn sm shellbtn" onclick="App.toggleShell()">The shell</button></div>
-    <div class="view" id="view"></div>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- icons: one sprite, drawn on a 24px grid -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-today" viewBox="0 0 24 24"><path d="M3 18h18M6.5 18a5.5 5.5 0 0 1 11 0"/><path d="M12 6.5V4M5.6 9.6 4 8M18.4 9.6 20 8"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H11l-4.5 3.5v-3.5h-2a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5.5 21V4M5.5 4.5h11l-2.5 4 2.5 4h-11"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9.5 6.5h10M9.5 12h10M9.5 17.5h10"/><path d="m4 6.5 1.2 1.2L7.5 5.3M4 12l1.2 1.2L7.5 10.8"/><circle cx="5.5" cy="17.5" r="1.2"/></symbol>
+  <symbol id="i-coin" viewBox="0 0 24 24"><ellipse cx="12" cy="7" rx="7" ry="3"/><path d="M5 7v5c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5"/></symbol>
+  <symbol id="i-case" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="17" height="12" rx="2"/><path d="M9 7.5V5.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3.5 12.5h17"/></symbol>
+  <symbol id="i-shell" viewBox="0 0 24 24"><path d="M3.5 16C3.5 10 7.3 6 12 6s8.5 4 8.5 10Z"/><path d="M8 16l2-5h4l2 5M10 11l1-3M14 11l-1-3"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10Z"/></symbol>
+  <symbol id="i-say" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 3.3 6.5L4 19.5l1-3.2A8 8 0 0 1 4 12Z"/><path d="M8.5 12h7"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5 11 13M17 14v5.5H4.5V7H10"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-pill" viewBox="0 0 24 24"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-35 12 12)"/><path d="m9.2 8 5.6 8"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-hourglass" viewBox="0 0 24 24"><path d="M7 3.5h10M7 20.5h10M8 3.5c0 4 8 4.5 8 8.5s-8 4.5-8 8.5M16 3.5c0 4-8 4.5-8 8.5s8 4.5 8 8.5"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4.5H6a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h8M10.5 12H20M16.5 8l4 4-4 4"/></symbol>
+</svg>
+
+<!-- ========== LANDING (signed out) ========== -->
+<div id="landing" class="landing" hidden>
+  <header class="bar"><div class="wrap">
+    <a class="wordmark" href="#"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#mark"/></svg>lifeline</a>
+    <span class="sp"></span>
+    <button class="icon-btn" id="modeBtnL" aria-label="Switch between day and night"><svg class="ico"><use href="#i-moon"/></svg></button>
+    <a class="btn sm" href="#come-in">Come in</a>
+  </div></header>
+  <section class="hero path-wrap" id="landPath">
+    <div class="path-overlay"><div class="wrap">
+      <h1>Your day, kept.</h1>
+      <p class="lede">A private assistant for a small circle. It remembers what you tell it, rings when it should, ranks the hackathons worth your weekend, finds the people behind new projects, and never moves money or reaches anyone without your yes.</p>
+    </div></div>
   </section>
-  <aside class="shell" id="side">
-    <div class="pip-dock" id="mascot"></div>
-    <div id="pending"></div>
-    <div><h3>Up next</h3><ul id="upnext"></ul></div>
-    <div><h3>Medication</h3><ul id="meds"></ul></div>
-    <div><h3>Deadlines</h3><ul id="deadlines"></ul></div>
-    <div><h3>What I know about you</h3><ul id="mem"></ul></div>
-  </aside>
+  <div class="wrap">
+    <div class="land-grid">
+      <div>
+        <div class="section-title"><h3>It talks like a person</h3></div>
+        <div class="letters" id="letters"></div>
+      </div>
+      <div id="come-in">
+        <div class="card signin k-metal">
+          <div class="card-head"><svg class="ico"><use href="#i-shell"/></svg>Come in</div>
+          <div class="card-body">
+            <div class="pip-card" style="padding:0"><div id="loginMascot"></div><p class="pip-line">I'm Pip. I keep the door, and everything you tell me after it.</p></div>
+            <div id="tgw" style="min-height:40px"></div>
+            <p class="small muted">Or say <b>link</b> to the bot on Telegram and paste the six characters it sends you.</p>
+            <form class="row" id="linkForm" style="flex-wrap:nowrap"><input id="code" placeholder="six characters" maxlength="6" autocapitalize="characters" autocomplete="one-time-code" aria-label="Link code"><button class="btn primary" type="submit">Link</button></form>
+            <div id="lerr" class="err" role="alert"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="promises">
+      <div class="card k-dose"><div class="card-body"><h4>One memory, four doors</h4><p class="muted">Telegram, this page, SMS and iMessage are the same assistant. Start something in one and finish it in another.</p></div></div>
+      <div class="card k-hack"><div class="card-body"><h4>Nothing moves without you</h4><p class="muted">Money, deletions and anything that reaches another person wait for a yes. Most other things undo for five minutes.</p></div></div>
+      <div class="card k-trip"><div class="card-body"><h4>A mirror, never a hand</h4><p class="muted">Copy-trading is on paper. It shows what following someone would have done, and places nothing.</p></div></div>
+    </div>
+  </div>
 </div>
-<div id="toast" class="toast" role="status"></div>
+
+<!-- ========== APP (signed in) ========== -->
+<div id="app" hidden>
+  <header class="bar"><div class="wrap">
+    <a class="wordmark" href="#today"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#mark"/></svg>lifeline</a>
+    <nav class="tabs" id="tabs" aria-label="Main"></nav>
+    <span class="sp"></span>
+    <button class="say-btn" id="sayBtn" aria-label="Say anything"><svg class="ico sm"><use href="#i-say"/></svg><span>Say anything</span><kbd>⌘K</kbd></button>
+    <button class="icon-btn" id="modeBtn" aria-label="Switch between day and night"><svg class="ico"><use href="#i-moon"/></svg></button>
+  </div></header>
+  <main id="main"></main>
+  <footer class="foot" aria-label="About">
+    <div class="hills" aria-hidden="true"><svg viewBox="0 0 1600 46" preserveAspectRatio="none"><path fill="currentColor" d="M0 46 L0 30 C 120 18, 220 14, 340 24 S 560 40, 700 28 S 920 8, 1060 20 S 1300 38, 1420 26 S 1560 16, 1600 22 L1600 46 Z"/></svg></div>
+    <div class="in"><div class="wrap"><span id="who"></span><span id="usage"></span><span class="sp"></span><a href="#what">What I do</a><a href="#settings">Settings</a><button class="btn ghost sm" id="logoutBtn"><svg class="ico sm"><use href="#i-logout"/></svg>Sign out</button></div></div>
+  </footer>
+  <nav class="tabbar" id="tabbar" aria-label="Main"></nav>
+</div>
+
+<!-- the mark: a shell over a watch face -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 32 32">
+    <path d="M3 21.5C3 12.5 9 6.5 16 6.5S29 12.5 29 21.5Z" fill="var(--metal)" stroke="var(--ink)" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M9.5 21.5l3-7.5h7l3 7.5M12.5 14l1.8-4.5M19.5 14l-1.8-4.5" fill="none" stroke="var(--ink)" stroke-opacity=".55" stroke-width="1.3" stroke-linejoin="round"/>
+    <path d="M2.5 22.5Q16 26 29.5 22.5" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+</svg>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="tip" class="lamp-tip" hidden></div>
 <script src="/mascot.js"></script>
+<script src="/path.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

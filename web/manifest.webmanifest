@@ -1,0 +1,10 @@
+{
+  "name": "lifeline",
+  "short_name": "lifeline",
+  "description": "Your day, kept.",
+  "start_url": "/#today",
+  "display": "standalone",
+  "background_color": "#EDE6D6",
+  "theme_color": "#EDE6D6",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

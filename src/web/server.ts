@@ -68,9 +68,8 @@ export function createWeb(db: Db, botUsername: string) {
 
   app.get("/health", (c) => c.json({ ok: true }));
   app.get("/api/public", (c) => c.json({ botUsername }));
-  app.use("/styles.css", serveStatic({ root: PUBLIC_DIR, path: "styles.css" }));
-  app.use("/app.js", serveStatic({ root: PUBLIC_DIR, path: "app.js" }));
-  app.use("/mascot.js", serveStatic({ root: PUBLIC_DIR, path: "mascot.js" }));
+  for (const f of ["styles.css", "app.js", "mascot.js", "path.js", "icon.svg", "manifest.webmanifest"]) app.use(`/${f}`, serveStatic({ root: PUBLIC_DIR, path: f }));
+  app.use("/fonts/*", serveStatic({ root: PUBLIC_DIR }));
   app.get("/", serveStatic({ root: PUBLIC_DIR, path: "index.html" }));
 
   /* ---- auth ---- */
@@ -112,7 +111,7 @@ export function createWeb(db: Db, botUsername: string) {
   /* ---- app data ---- */
   app.get("/api/me", async (c) => {
     const u = user(c);
-    return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey), pip: pipLine("return", u) });
+    return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey), pip: pipLine("return", u), quiet_start: u.quiet_start, quiet_end: u.quiet_end, palette: u.prefs.palette ?? null, mode: u.prefs.mode ?? null });
   });
   app.get("/api/capabilities", (c) => c.json({ capabilities: CAPABILITIES, pip: PIP_BIO }));
   app.get("/api/messages", async (c) => c.json((await db.query(`SELECT id, role, content, created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 60`, [user(c).id])).reverse()));
@@ -120,6 +119,15 @@ export function createWeb(db: Db, botUsername: string) {
     const { text } = await c.req.json();
     if (!text || String(text).length > 4000) return c.json({ error: "empty" }, 400);
     return c.json(await handleMessage(db, user(c), String(text), { channel: "web" }));
+  });
+  /** A structured action from a web control (tick, add to a list). Same gate, same audit, same voice as a sentence. */
+  app.post("/api/do", async (c) => {
+    const u = user(c);
+    const { action, args } = await c.req.json();
+    if (typeof action !== "string" || !/^[a-z]+\.[a-z_]+$/.test(action)) return c.json({ error: "bad action" }, 400);
+    const d = await propose(ctxOf(u, `${action} ${JSON.stringify(args ?? {}).slice(0, 200)}`), action, args ?? {});
+    const r = d.kind === "pending" ? { text: `${d.echo}\n\nGo ahead? This waits ten minutes for a yes.`, buttons: [{ label: "Yes, go ahead", data: `confirm:${d.pendingId}` }, { label: "No", data: `cancel:${d.pendingId}` }] } : d.kind === "ran" && d.undoId ? { text: d.reply, buttons: [{ label: "Undo", data: `undo:${d.undoId}` }] } : { text: "reply" in d ? d.reply : "" };
+    return c.json({ ...r, text: polish(r.text, { persona: personaOf(u.prefs) }) });
   });
   app.post("/api/button", async (c) => c.json(await handleCallback(db, user(c), String((await c.req.json()).data))));
   app.get("/api/state", async (c) => {
@@ -143,7 +151,7 @@ export function createWeb(db: Db, botUsername: string) {
   app.get("/api/digest", async (c) => c.json({ text: await buildDigest(db, user(c), new Date()) }));
   app.get("/api/hackathons", async (c) => {
     const u = user(c);
-    const feed = await rankedForUser(db, u, new Date(), 12);
+    const feed = await rankedForUser(db, u, new Date(), 12, { unseenOnly: false });
     const ledger = await db.query<any>(`SELECT * FROM hackathon_entries WHERE user_id=$1 ORDER BY (status IN ('won','lost','withdrawn')), deadline NULLS LAST`, [u.id]);
     const won = ledger.filter((r) => r.status === "won").length, decided = ledger.filter((r) => ["won", "lost"].includes(r.status)).length;
     return c.json({ feed, ledger, stats: decided ? `${won} won / ${decided} decided (${Math.round((won / decided) * 100)}%)` : "No outcomes yet." });
@@ -192,10 +200,14 @@ export function createWeb(db: Db, botUsername: string) {
   app.patch("/api/settings", async (c) => {
     const u = user(c);
     const body = await c.req.json();
-    if (body.theme) {
-      await db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [u.id, JSON.stringify({ theme: body.theme })]);
-      return c.json({ ok: true, text: "Theme saved" });
+    const look: Record<string, string> = {};
+    if (typeof body.palette === "string" && /^(manor|claret|riviera|tobacco|ivory)$/.test(body.palette)) look.palette = body.palette;
+    if (body.mode === "day" || body.mode === "night") look.mode = body.mode;
+    if (Object.keys(look).length) {
+      await db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [u.id, JSON.stringify(look)]);
+      return c.json({ ok: true, text: "Saved." });
     }
+    if ("palette" in body || "mode" in body) return c.json({ ok: false, text: "I don't have that look." }, 400);
     const d = await propose(ctxOf(u, "settings"), "settings.update", body);
     return c.json({ ok: d.kind === "ran", text: d.kind === "pending" ? d.echo : d.reply });
   });

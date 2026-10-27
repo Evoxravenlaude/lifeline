@@ -17,7 +17,7 @@ const listAdd = defineAction({
     const ids: number[] = [];
     for (const t of args.items) ids.push((await ctx.db.one<{ id: number }>(`INSERT INTO todos (user_id, list, text) VALUES ($1,$2,$3) RETURNING id`, [ctx.user.id, list, t]))!.id);
     const what = args.items.length === 1 ? args.items[0] : `${args.items.slice(0, -1).join(", ")} and ${args.items[args.items.length - 1]}`;
-    return { reply: `${what}, on the ${list} list. Say "done ${args.items[0]}" when it's off.`, undo: { payload: { ids } } };
+    return { reply: `${what}, on the ${list} list.${args.items.length === 1 ? ` Say "done with ${args.items[0]}" when it's off.` : ""}`, undo: { payload: { ids } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM todos WHERE id = ANY($1) AND user_id=$2`, [p.ids, ctx.user.id]);
