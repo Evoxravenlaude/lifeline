@@ -19,7 +19,7 @@ test/         192 tests on a real Postgres engine: gate, modules, channels, web,
 ## Running it on Railway (with Doppler + Supabase)
 
 1. **Supabase** → New project → Project Settings → Database → copy the **Session pooler** URI (port 5432). That's `DATABASE_URL`. Tables are created on first boot (`npm run schema` prints the SQL if you'd rather run it in the SQL editor first; it's also in `supabase/migrations.sql`).
-2. **Telegram** → @BotFather `/newbot` → `TELEGRAM_BOT_TOKEN`. Friends message @userinfobot once → `ALLOWED_USER_IDS`. In BotFather `/setdomain` → the web app's domain (your Vercel domain, or the Railway one), so the web app's Telegram login works.
+2. **Telegram** → @BotFather `/newbot` → `TELEGRAM_BOT_TOKEN`. Anyone with the bot's link or the website joins until the circle is full (`MAX_USERS`, default 15); put your own Telegram id in `ALLOWED_USER_IDS` to be the owner, who always gets in and can send `/circle`. In BotFather `/setdomain` → the web app's domain (your Vercel domain, or the Railway one), so the web app's Telegram login works.
 3. **Doppler** → `doppler setup` (project `lifeline`, config `prd`) → paste every secret from `.env.example` → Doppler dashboard → Integrations → Railway → sync to your service. Railway's env then stays empty of secrets.
 4. **Railway** → New project → Deploy from repo (this folder; `railway.json` picks the Dockerfile) → Settings → Networking → Generate domain → put it in `PUBLIC_URL`. Health check is `/health`. Railway sets `PORT`.
 5. **Model** → `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY`. Gemini also powers the grounded scout. `DAILY_MODEL_BUDGET_USD` caps each friend.

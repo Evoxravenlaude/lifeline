@@ -379,6 +379,16 @@ main { min-height: 60vh; }
 .letter .ll { max-width: 48ch; padding: 14px 16px; }
 .signin .card-body { display: grid; gap: 14px; }
 .signin .err { color: var(--warn); min-height: 1.3em; font-size: var(--t-13); }
+.everything { padding: 10px 0 40px; }
+.ev-lede { max-width: 52ch; margin: -4px 0 20px; }
+.ev-grid { columns: 3 290px; column-gap: 22px; }
+.ev-grid > * { min-width: 0; break-inside: avoid; margin-bottom: 22px; }
+.ev-grid h4 { margin-bottom: 4px; }
+.ev-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
+.ev-list li { display: grid; gap: 1px; border-top: 1px solid var(--line); padding-top: 9px; }
+.ev-list li span { font-style: italic; color: var(--ink-2); overflow-wrap: anywhere; }
+.ev-list li span::before { content: "\201C"; } .ev-list li span::after { content: "\201D"; }
+#letterTabs { margin-bottom: 18px; }
 .promises { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; padding: 10px 0 70px; }
 .promises .card-body h4 { margin-bottom: 6px; }
 

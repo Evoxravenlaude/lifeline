@@ -27,12 +27,13 @@ import { inQuietHours } from "../core/time.js";
 import { propose } from "../policy/engine.js";
 import { PERSONAS } from "../intent/persona.js";
 import { startWebLogin, pollWebLogin } from "../core/weblogin.js";
+import { admit, FULL_MESSAGE } from "../core/circle.js";
 import { providerName } from "../intent/providers.js";
 import { draftReply } from "../intent/model.js";
 import { DateTime } from "luxon";
 import { cors } from "hono/cors";
 import type { User } from "../policy/types.js";
-import { CAPABILITIES } from "../intent/capabilities.js";
+import { CAPABILITIES, HELP_GROUPS } from "../intent/capabilities.js";
 import { pipLine, PIP_BIO, type PipState } from "../core/pip.js";
 import { polish, personaOf } from "../core/voice.js";
 
@@ -68,7 +69,12 @@ export function createWeb(db: Db, botUsername: string) {
   if (config.webOrigins.length) app.use("/api/*", cors({ origin: config.webOrigins, credentials: true })) && app.use("/auth/*", cors({ origin: config.webOrigins, credentials: true }));
 
   app.get("/health", (c) => c.json({ ok: true }));
-  app.get("/api/public", (c) => c.json({ botUsername }));
+  app.get("/api/public", async (c) => {
+    const n = await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM users`);
+    return c.json({ botUsername, places: { taken: Number(n?.n ?? 0), max: config.maxUsers } });
+  });
+  /** The catalogue is public: the landing page shows everything before anyone signs in. */
+  app.get("/api/capabilities", (c) => c.json({ capabilities: CAPABILITIES, groups: HELP_GROUPS, pip: PIP_BIO }));
   for (const f of ["styles.css", "app.js", "mascot.js", "path.js", "icon.svg", "manifest.webmanifest"]) app.use(`/${f}`, serveStatic({ root: PUBLIC_DIR, path: f }));
   app.use("/fonts/*", serveStatic({ root: PUBLIC_DIR }));
   app.get("/", serveStatic({ root: PUBLIC_DIR, path: "index.html" }));
@@ -81,7 +87,7 @@ export function createWeb(db: Db, botUsername: string) {
     const expected = createHmac("sha256", createHash("sha256").update(config.telegramToken).digest()).update(check).digest("hex");
     if (expected !== hash || Date.now() / 1000 - Number(rest.auth_date) > 86_400) return c.json({ error: "bad signature" }, 401);
     const id = Number(rest.id);
-    if (config.allowedUserIds.length && !config.allowedUserIds.includes(id)) return c.json({ error: "not in the circle" }, 403);
+    if ((await admit(db, id)) === "full") return c.json({ error: "full", text: FULL_MESSAGE() }, 403);
     const user = await ensureUser(db, "telegram", String(id), [rest.first_name, rest.last_name].filter(Boolean).join(" "));
     await newSession(c, user);
     return c.json({ ok: true });
@@ -111,7 +117,7 @@ export function createWeb(db: Db, botUsername: string) {
   });
 
   app.use("/api/*", async (c, next) => {
-    if (c.req.path === "/api/public") return next();
+    if (c.req.path === "/api/public" || c.req.path === "/api/capabilities") return next();
     const u = await session(c);
     if (!u) return c.json({ error: "unauthenticated" }, 401);
     c.set("user", u);
@@ -124,7 +130,6 @@ export function createWeb(db: Db, botUsername: string) {
     const u = user(c);
     return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey), pip: pipLine("return", u), quiet_start: u.quiet_start, quiet_end: u.quiet_end, palette: u.prefs.palette ?? null, mode: u.prefs.mode ?? null, work: typeof u.prefs.work === "boolean" ? u.prefs.work : null, tags: Array.isArray(u.prefs.tags) ? u.prefs.tags : [] });
   });
-  app.get("/api/capabilities", (c) => c.json({ capabilities: CAPABILITIES, pip: PIP_BIO }));
   app.get("/api/messages", async (c) => c.json((await db.query(`SELECT id, role, content, created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 60`, [user(c).id])).reverse()));
   app.post("/api/chat", async (c) => {
     const { text } = await c.req.json();

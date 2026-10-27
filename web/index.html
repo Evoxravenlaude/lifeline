@@ -17,13 +17,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>lifeline</title>
-<meta name="description" content="Your day, kept. An assistant for everyday life: reminders, your calendar, lists, medication, your cycle, sleep and anything you track, trips, spending and birthdays. On Telegram, on the web or by text.">
+<meta name="description" content="A personal assistant you talk to like a person. Your calendar and reminders, medication, periods and cycle, sleep and anything you track, spending and bills, trips, birthdays and lists, and, if you want it, jobs, companies and hackathons. On Telegram, on the web or by text.">
 <meta name="theme-color" content="#EDE6D6">
 <meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="lifeline">
 <meta property="og:title" content="lifeline">
-<meta property="og:description" content="Your day, kept.">
+<meta property="og:description" content="Your day, your body, your money and your work, kept by one assistant you talk to like a person.">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
@@ -109,14 +109,15 @@
   <section class="hero path-wrap" id="landPath">
     <div class="path-overlay"><div class="wrap">
       <h1>Your day, kept.</h1>
-      <p class="lede">An assistant for everyday life. Tell it what you'd otherwise have to remember: the appointment on Thursday, your medication, when your period is due, mum's birthday, the shopping, the trip next month. It brings each thing back at the right moment, on Telegram, here, or by text.</p>
+      <p class="lede">A personal assistant you talk to like a person. It keeps your calendar, your medication and your cycle, what you spend and what you track, your trips, birthdays and lists. If you want it to, it also finds jobs, companies and hackathons worth your time. Telegram, this page or a text message, all the same assistant.</p>
     </div></div>
   </section>
   <div class="wrap">
     <div class="land-grid">
       <div>
-        <div class="section-title"><h3>It talks like a person</h3></div>
-        <div class="letters" id="letters"></div>
+        <div class="section-title"><h3>Say it the way you'd say it</h3></div>
+        <div class="chips" id="letterTabs" role="tablist" aria-label="Examples"></div>
+        <div class="letters" id="letters" role="tabpanel" aria-live="polite"></div>
       </div>
       <div id="come-in">
         <div class="card signin k-metal">
@@ -125,6 +126,7 @@
             <div class="pip-card" style="padding:0"><div id="loginMascot"></div><p class="pip-line">I'm Pip. I keep the door, and everything you tell me after it.</p></div>
             <button class="btn primary" id="tgStart" type="button" style="justify-self:start"><svg class="ico sm"><use href="#i-chat"/></svg>Sign in with Telegram</button>
             <p class="small muted" id="tgStatus">Opens lifeline in Telegram. Tap "Yes, sign me in" there and this page opens by itself.</p>
+            <p class="small faint" id="places" hidden></p>
             <details class="small"><summary class="muted" style="cursor:pointer">Other ways in</summary>
               <div style="display:grid;gap:12px;margin-top:12px">
                 <div id="tgw" style="min-height:40px"></div>
@@ -136,6 +138,11 @@
         </div>
       </div>
     </div>
+    <section class="everything" id="everything" aria-labelledby="evTitle" hidden>
+      <div class="section-title"><h3 id="evTitle">Everything it keeps</h3></div>
+      <p class="muted ev-lede">Not only reminders. One conversation holds all of this, and you never have to learn a command.</p>
+      <div class="ev-grid" id="evGrid"></div>
+    </section>
     <div class="promises">
       <div class="card k-dose"><div class="card-body"><h4>One memory, four doors</h4><p class="muted">Telegram, this page, SMS and iMessage are the same assistant. Start something in one and finish it in another.</p></div></div>
       <div class="card k-hack"><div class="card-body"><h4>Nothing moves without you</h4><p class="muted">Money, deletions and anything that reaches another person wait for a yes. Most other things undo for five minutes.</p></div></div>

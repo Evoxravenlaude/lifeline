@@ -19,6 +19,7 @@ import { spentToday } from "../core/budget.js";
 import { draftReply } from "../intent/model.js";
 import { polish, personaOf } from "../core/voice.js";
 import { pipLine } from "../core/pip.js";
+import { admit, circleSummary, FULL_MESSAGE, isOwner } from "../core/circle.js";
 import { answerWebLogin, webLoginExists } from "../core/weblogin.js";
 
 /** Telegram HTML: escape; bold the head line of a multi-line message so lists read at a glance; keep links clickable. */
@@ -37,6 +38,9 @@ export function toHtml(text: string): string {
  * The old tiles still work if someone taps one before it disappears.
  */
 const OLD_TILES: Record<string, string> = { Today: "today", Hackathons: "any hackathons for me", Lists: "my lists", Money: "how much did I spend this week", Scout: "Scout", Pip: "Pip", "☼ Today": "today", "⚑ Hackathons": "any hackathons for me", "☐ Lists": "my lists", "¤ Money": "how much did I spend this week", "◎ Scout": "Scout", "🐢 Pip": "Pip" };
+export const ABOUT_LONG = "A personal assistant you talk to like a person. I keep your calendar, reminders and lists; your medication, period and cycle, sleep and anything you track; what you spend and the bills you pay; your trips and birthdays. If you want it, I also find jobs, companies and hackathons for you. No commands to learn. Anything that spends money or reaches someone else waits for your yes. Tap Start.";
+export const ABOUT_SHORT = "Your day, your body, your money and your work, kept by one assistant you just talk to.";
+
 /** Four ways in, under the welcome only. They scroll away with it. */
 const WAYS_IN = () => new InlineKeyboard().text("What's on today", "say:today").text("What can you do?", "say:what can you do").row().text("My lists", "say:my lists").text("Things I can track", "say:what can you track");
 const COMMANDS = [
@@ -70,8 +74,9 @@ export function createBot(db: Db): Bot {
   bot.use(async (ctx, next) => {
     const id = ctx.from?.id;
     if (!id) return;
-    if (config.allowedUserIds.length && !config.allowedUserIds.includes(id)) {
-      if (ctx.message) await ctx.reply("This one's a private bot for a small circle. If you were meant to be in it, ask whoever runs it to add your Telegram id.");
+    if ((await admit(db, id)) === "full") {
+      if (ctx.message) await ctx.reply(FULL_MESSAGE());
+      else if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: "The circle is full right now." }).catch(() => {});
       return;
     }
     await next();
@@ -112,7 +117,7 @@ export function createBot(db: Db): Bot {
       const k = new InlineKeyboard();
       TZ_CHOICES.forEach(([l, z], i) => { k.text(l, `ob:tz:${z}`); if (i % 3 === 2) k.row(); });
       await say(c, [
-        `${first ? `${first}, hello` : "Hello"}. I'm lifeline, an assistant for everyday life. I remember what you tell me and bring it back at the right time: reminders, your calendar, lists, medication, your period and cycle, sleep and anything else you track, trips, spending, birthdays.`,
+        `${first ? `${first}, hello` : "Hello"}. I'm lifeline, a personal assistant for everyday life. I keep your calendar, reminders and lists, your medication, your period and cycle, your sleep and anything else you track, what you spend, your trips and birthdays. If you work on things, I also find jobs, companies and hackathons worth your time.`,
         `You talk to me the way you'd text a friend. No commands to learn. Anything that moves money, deletes, or reaches someone else waits for your yes.`,
         `One thing first: where are you? That sets your clock, so "tomorrow at 9" means your 9.`,
       ].join("\n\n"), { reply_markup: k });
@@ -122,8 +127,17 @@ export function createBot(db: Db): Bot {
     await say(c, `Welcome back${first ? `, ${first}` : ""}. ${pipLine("return", u)} Just talk to me, or start here:`, { reply_markup: WAYS_IN() });
   });
   bot.api.setMyCommands(COMMANDS.map(([command, description]) => ({ command, description }))).catch((e) => log.warn({ err: e?.message }, "setMyCommands failed"));
+  /* What a stranger sees on the empty chat and when the link is shared. Telegram caps these at 512 and 120 characters. */
+  bot.api.setMyDescription(ABOUT_LONG).catch((e) => log.warn({ err: e?.message }, "setMyDescription failed"));
+  bot.api.setMyShortDescription(ABOUT_SHORT).catch((e) => log.warn({ err: e?.message }, "setMyShortDescription failed"));
   bot.command("scout", async (c) => say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } }));
   bot.command("help", async (c) => say(c, FULL_HELP));
+  bot.command("circle", async (c) => {
+    const u = await userOf(c);
+    const first = await db.one<{ id: number }>(`SELECT min(id) AS id FROM users`);
+    if (!isOwner(c.from!.id, u.id, first?.id)) return say(c, `This is a circle of up to ${config.maxUsers} people. Only the person who runs it can see who's in.`);
+    await say(c, await circleSummary(db));
+  });
   bot.command("what", async (c) => { const u = await userOf(c); await say(c, overview(u.name)); });
   bot.command("pip", async (c) => {
     const u = await userOf(c);

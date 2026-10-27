@@ -17,6 +17,8 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean)
     .map(Number),
+  /** How many people the circle holds. Anyone with the link joins until it's full. */
+  maxUsers: Number(process.env.MAX_USERS || 15),
   databaseUrl: process.env.DATABASE_URL ?? "",
   anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
   model: process.env.MODEL ?? "claude-haiku-4-5",

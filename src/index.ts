@@ -35,17 +35,6 @@ async function main() {
   let bot: ReturnType<typeof createBot> | null = null;
   if (config.telegramToken) {
     bot = createBot(db);
-    await bot.api.setMyCommands([
-      { command: "start", description: "What I can do" },
-      { command: "help", description: "Examples" },
-      { command: "persona", description: "Pick how I talk" },
-      { command: "link", description: "Code to connect web / SMS / iMessage" },
-      { command: "pending", description: "Actions waiting for your confirm" },
-      { command: "undo", description: "Undo the last change" },
-      { command: "memory", description: "What I remember about you" },
-      { command: "audit", description: "Recent actions log" },
-      { command: "usage", description: "Model spend today" },
-    ]);
     botUsername = (await bot.api.getMe()).username;
   } else {
     log.warn("TELEGRAM_BOT_TOKEN not set; running web/SMS/iMessage only");
@@ -58,7 +47,7 @@ async function main() {
   startPumpfunWatcher(db);
 
   log.info({
-    allowed: config.allowedUserIds.length, model: providerName() ?? "rules-only", stt: Boolean(config.openaiKey),
+    circle: `${(await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM users`))?.n ?? 0} of ${config.maxUsers}`, owners: config.allowedUserIds.length, model: providerName() ?? "rules-only", stt: Boolean(config.openaiKey),
     sms: smsProvider() ?? false, imessage: config.imessageProvider || false, email: Boolean(config.smtpUrl), web: config.port,
   }, "lifeline starting");
   // During a redeploy the old container still polls for a few seconds and Telegram answers 409. Wait it out instead of crashing.

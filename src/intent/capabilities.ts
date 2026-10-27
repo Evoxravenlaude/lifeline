@@ -242,7 +242,7 @@ export function explain(c: Capability): string {
 
 /** The short answer to "who are you". */
 export function intro(): string {
-  return `I'm lifeline, and the tortoise is Pip. I'm an assistant for everyday life: I remember what you tell me and bring it back at the right time. Reminders, your calendar, lists, medication, your cycle, trips, spending, birthdays, and anything else you'd rather not carry in your head. Ask "what can you do" for the long version, or just tell me something to keep.`;
+  return `I'm lifeline, and the tortoise is Pip. I'm a personal assistant for everyday life. I keep your day (calendar, reminders, lists, birthdays, trips), your body (medication, your period and cycle, sleep, weight, mood, habits), your money (what you spend, bills when you say yes), and, if you want it, your work: jobs, companies and the people behind them, hackathons. Ask "what can you do" for the long version, or just tell me something.`;
 }
 
 export function overview(name?: string | null): string {
@@ -275,14 +275,17 @@ export function answerCapability(text: string, name?: string | null): string | n
 }
 
 /** Full index for /help: short, grouped, nothing that looks like a manual. */
+/** How the catalogue is grouped wherever it's shown whole: /help, the web's What I do, the landing page. */
+export const HELP_GROUPS: [string, string[]][] = [
+  ["Your day", ["reminders", "calendar", "lists", "dates", "trips", "classes", "notes", "brief"]],
+  ["Body and health", ["medications", "cycle", "measures", "habits"]],
+  ["Money", ["money", "bills"]],
+  ["Work and growth", ["jobs", "scout", "hackathons", "markets", "trading"]],
+  ["Me", ["tools", "voice", "channels", "safety"]],
+];
+
 export function helpIndex(): string {
-  const groups: [string, string[]][] = [
-    ["Your day", ["reminders", "calendar", "lists", "dates", "trips", "classes", "notes", "brief"]],
-    ["Body and health", ["medications", "cycle", "measures", "habits"]],
-    ["Money", ["money", "bills"]],
-    ["Work and growth", ["jobs", "scout", "hackathons", "markets", "trading"]],
-    ["Me", ["tools", "voice", "channels", "safety"]],
-  ];
+  const groups = HELP_GROUPS;
   const by = Object.fromEntries(CAPABILITIES.map((c) => [c.key, c]));
   const out: string[] = ["Ask me about any of these in plain words, or ask \"can you do X\" and I'll show you how.", ""];
   for (const [title, keys] of groups) {

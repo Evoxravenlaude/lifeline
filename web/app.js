@@ -544,12 +544,43 @@ window.App = (function () {
     $("#logout2").addEventListener("click", async () => { await api("/auth/logout", {}); location.hash = ""; location.reload(); });
   }
 
+  /* ---------- Landing: the whole catalogue, grouped ---------- */
+  const GROUP_KIND = { "Your day": "event", "Body and health": "dose", "Money": "money", "Work and growth": "scout", "Me": "list" };
+  const GROUP_LINE = {
+    "Your day": "Plans, lists and the dates that matter, brought back at the right moment.",
+    "Body and health": "Doses, your period and cycle, sleep, weight, mood and habits, kept privately.",
+    "Money": "What you spend in any currency, and bills paid only after your yes.",
+    "Work and growth": "If you want it: jobs, companies and people in any field, hackathons, and crypto if you hold it.",
+    "Me": "Small tools, the voice it talks in, where it reaches you, and what it never does.",
+  };
+  async function everything() {
+    const r = await api("/api/capabilities");
+    if (!r.groups || !r.capabilities) return;
+    const by = Object.fromEntries(r.capabilities.map((c) => [c.key, c]));
+    $("#evGrid").innerHTML = r.groups.map(([title, keys]) => `<div class="card k-${GROUP_KIND[title] || "list"}"><div class="card-body"><h4>${esc(title)}</h4><p class="muted small">${esc(GROUP_LINE[title] || "")}</p><ul class="ev-list">${keys.filter((k) => by[k]).map((k) => `<li><b>${esc(by[k].name)}</b><span>${esc(by[k].say[k === "bills" ? 1 : 0])}</span></li>`).join("")}</ul></div></div>`).join("");
+    $("#everything").hidden = false;
+  }
+
   /* ---------- Landing (signed out) ---------- */
   function landing(offline) {
     $("#landing").hidden = false;
     if (offline) { $("#linkForm button").disabled = true; }
-    const sample = [["remind me to call mum on sunday at 5", "Call mum, Sunday at 17:00. I'll ping you here.", "rem"], ["my period started today", "Got it, day one. Your next one is likely around the 24th; I'll give you a quiet heads-up two days before.", "dose"], ["I'm going to Accra on the 20th", "Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"], ["slept 6 hours", "Sleep 6 hours, logged. That's an hour under your week's average.", "event"]];
-    $("#letters").innerHTML = sample.map(([u, b, k]) => `<div class="letter"><span class="you">${esc(u)}</span><div class="card ll k-${k}">${esc(b)}</div></div>`).join("");
+    const sets = [
+      ["A bit of everything", [["remind me to call mum on sunday at 5", "Call mum, Sunday at 17:00. I'll ping you here.", "rem"], ["my period started today", "Got it, day one. Your next one is likely around the 24th; I'll give you a quiet heads-up two days before.", "dose"], ["spent 4500 naira on data", "₦4,500 on data, logged. That's ₦12,300 this week, most of it on data.", "money"], ["watch jobs at stripe for product design", "Watching Stripe for product design roles. New ones go in your morning note, not as pings.", "scout"]]],
+      ["Your day", [["dentist on friday at 3", "Dentist, Friday at 15:00. It's on your calendar.", "event"], ["I need to buy milk, eggs and bread", "Milk, eggs and bread, on your shopping list.", "list"], ["assignment Lab 3 due next monday", "Lab 3, due Monday. I'll warn you the day before.", "class"], ["what's on today", "Gym at 07:30, lunch with Ada at 13:00, and the landlord to call by 17:00.", "event"]]],
+      ["Body and health", [["I take vitamin D at 8 and 8pm", "Vitamin D at 08:00 and 20:00. I'll ring you at each; tell me when it's taken.", "dose"], ["cramps and bloating today", "Noted for today, day two. I'll keep it with this cycle so you can see the pattern.", "dose"], ["slept 6 hours", "Sleep 6 hours, logged. That's an hour under your week's average.", "event"], ["did gym", "Gym, done. That's four days in a row.", "rem"]]],
+      ["Money", [["paid 20 dollars for lunch", "$20 on lunch, logged.", "money"], ["how much did I spend this week", "₦38,400 this week. Food is the biggest share, then transport.", "money"], ["pay 2000 airtime to 0801 234 5678", "₦2,000 airtime to 0801 234 5678. That spends money, so it waits for you: yes to send, no to drop it.", "money"]]],
+      ["Work", [["who's building fintech in Lagos", "Six young fintech companies in Lagos, with who runs each one and where to find them. Want a first message drafted to any of them?", "scout"], ["any hackathons for ai this month", "Three open this month that fit AI, the nearest closing on the 14th. Want them in your brief?", "hack"], ["what's eth right now", "ETH is at $3,412, up 2% today.", "hack"]]],
+      ["Trips and dates", [["I'm going to Accra on the 20th", "Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"], ["Ada's birthday is march 14", "Ada, 14 March. I'll remind you the day before.", "rem"], ["packed charger", "Charger, packed. Four things left on the Accra list.", "trip"]]],
+    ];
+    const showSet = (n) => {
+      $$("#letterTabs .chip").forEach((b, i) => { b.classList.toggle("on", i === n); b.setAttribute("aria-selected", String(i === n)); });
+      $("#letters").innerHTML = sets[n][1].map(([u, b, k]) => `<div class="letter"><span class="you">${esc(u)}</span><div class="card ll k-${k}">${esc(b)}</div></div>`).join("");
+    };
+    $("#letterTabs").innerHTML = sets.map(([t], i) => `<button class="chip" type="button" role="tab" data-set="${i}">${esc(t)}</button>`).join("");
+    $("#letterTabs").addEventListener("click", (e) => { const b = e.target.closest("[data-set]"); if (b) showSet(Number(b.dataset.set)); });
+    showSet(0);
+    everything();
     const now = new Date(), m = now.getHours() * 60 + now.getMinutes();
     const demo = [[7 * 60 + 30, "Run", "rem"], [8 * 60, "Vitamin D", "dose"], [10 * 60, "Algorithms", "class"], [13 * 60, "Lunch with Ada", "event"], [15 * 60 + 30, "Dentist", "event"], [17 * 60, "Call the landlord", "rem"], [20 * 60, "Vitamin D", "dose"], [21 * 60 + 30, "Submit the deck", "rem"]].map(([min, label, kind]) => ({ min, label, kind, time: `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}` }));
     const tip = $("#tip");
@@ -558,6 +589,11 @@ window.App = (function () {
     Mascot.mount($("#loginMascot"), { greeting: "" });
     const lm = $("#loginMascot .pip-line"); if (lm) lm.hidden = true;
     api("/api/public").then((p) => {
+      if (p.places && p.places.max) {
+        const left = Math.max(0, p.places.max - p.places.taken), el = $("#places");
+        el.textContent = left ? `${left} of ${p.places.max} places left. Anyone with the link can come in until it's full.` : `Every one of the ${p.places.max} places is taken right now. Ask whoever sent you the link to make room.`;
+        el.hidden = false;
+      }
       if (!p.botUsername) return;
       const s = document.createElement("script"); s.src = "https://telegram.org/js/telegram-widget.js?22";
       s.setAttribute("data-telegram-login", p.botUsername); s.setAttribute("data-size", "large"); s.setAttribute("data-radius", "7"); s.setAttribute("data-onauth", "App.onTg(user)"); s.setAttribute("data-request-access", "write");
