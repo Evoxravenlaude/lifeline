@@ -121,9 +121,14 @@
           <div class="card-head"><svg class="ico"><use href="#i-shell"/></svg>Come in</div>
           <div class="card-body">
             <div class="pip-card" style="padding:0"><div id="loginMascot"></div><p class="pip-line">I'm Pip. I keep the door, and everything you tell me after it.</p></div>
-            <div id="tgw" style="min-height:40px"></div>
-            <p class="small muted">Or say <b>link</b> to the bot on Telegram and paste the six characters it sends you.</p>
+            <button class="btn primary" id="tgStart" type="button" style="justify-self:start"><svg class="ico sm"><use href="#i-chat"/></svg>Sign in with Telegram</button>
+            <p class="small muted" id="tgStatus">Opens lifeline in Telegram. Tap "Yes, sign me in" there and this page opens by itself.</p>
+            <details class="small"><summary class="muted" style="cursor:pointer">Other ways in</summary>
+              <div style="display:grid;gap:12px;margin-top:12px">
+                <div id="tgw" style="min-height:40px"></div>
+                <p class="muted">Or say <b>link</b> to the bot and paste the six characters it sends you.</p>
             <form class="row" id="linkForm" style="flex-wrap:nowrap"><input id="code" placeholder="six characters" maxlength="6" autocapitalize="characters" autocomplete="one-time-code" aria-label="Link code"><button class="btn primary" type="submit">Link</button></form>
+              </div></details>
             <div id="lerr" class="err" role="alert"></div>
           </div>
         </div>

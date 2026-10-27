@@ -503,6 +503,8 @@ window.App = (function () {
       s.setAttribute("data-telegram-login", p.botUsername); s.setAttribute("data-size", "large"); s.setAttribute("data-radius", "7"); s.setAttribute("data-onauth", "App.onTg(user)"); s.setAttribute("data-request-access", "write");
       $("#tgw").appendChild(s);
     });
+    $("#tgStart").addEventListener("click", signInWithBot);
+    if (!offline) prepareLogin();
     $("#linkForm").addEventListener("submit", async (e) => {
       e.preventDefault(); const code = $("#code").value.trim();
       if (code.length < 6) return ($("#lerr").textContent = "Six characters, from the bot.");
@@ -510,6 +512,30 @@ window.App = (function () {
       if (r.ok) location.reload(); else $("#lerr").textContent = "That code didn't work. Codes last fifteen minutes; say link to the bot for a fresh one.";
     });
     window.__bootDone && window.__bootDone();
+  }
+  /**
+   * Sign in through the bot: open Telegram, wait for "Yes, sign me in", then this page signs itself in.
+   * The request is fetched ahead of the click so Telegram opens straight from the press (no popup blocking).
+   */
+  let loginReq = null;
+  async function prepareLogin() { const r = await api("/auth/telegram/start", {}); loginReq = r.error || !r.url ? null : { ...r, at: Date.now() }; }
+  function signInWithBot() {
+    const btn = $("#tgStart"), status = $("#tgStatus");
+    if (!loginReq || Date.now() - loginReq.at > 4 * 60_000) { status.textContent = "One moment, then press it again."; prepareLogin(); return; }
+    const req = loginReq; loginReq = null;
+    window.open(req.url, "_blank", "noopener");
+    btn.disabled = true; status.textContent = "Waiting for you in Telegram. Tap \"Yes, sign me in\" there.";
+    const until = Date.now() + 5 * 60_000;
+    const again = (msg) => { btn.disabled = false; status.textContent = msg; prepareLogin(); };
+    const tick = async () => {
+      if (Date.now() > until) return again("That request ran out. Press the button again.");
+      const p = await api("/auth/telegram/poll?id=" + encodeURIComponent(req.id));
+      if (p.state === "approved") { status.textContent = "Signed in. Opening your day."; location.hash = "today"; location.reload(); return; }
+      if (p.state === "declined") return again("You said no in Telegram, so nobody was signed in.");
+      if (p.state === "expired") return again("That request ran out. Press the button again.");
+      setTimeout(tick, 2000);
+    };
+    setTimeout(tick, 2500);
   }
   async function onTg(u) { const r = await api("/auth/telegram", u); if (r.ok) location.reload(); else $("#lerr").textContent = r.error === "not in the circle" ? "That Telegram account isn't in this circle." : "That sign-in didn't check out. Try again."; }
 
