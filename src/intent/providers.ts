@@ -59,7 +59,7 @@ export async function complete(opts: CompleteOpts, forceProvider?: Provider): Pr
         last = e;
         const msg = `${p}: ${e?.name === "TimeoutError" || e?.name === "AbortError" ? `no answer within ${CALL_TIMEOUT_MS / 1000}s` : e?.message ?? e}`.slice(0, 300);
         diagnostics.lastError = msg; diagnostics.lastErrorAt = Date.now(); diagnostics.errors[p] = msg;
-        if (/\b(401|403)\b/.test(String(e?.message))) break; // bad key: no point retrying this provider
+        if (/\b(401|403|404)\b/.test(String(e?.message))) break; // bad key or no such model: go straight to the next provider
       }
     }
   }
@@ -73,10 +73,45 @@ function call(p: Provider, o: CompleteOpts): Promise<Completion> {
 const isGroq = () => /groq\.com/.test(config.openaiCompatBaseUrl);
 
 /**
+ * Providers retire models every few months (Groq dropped Llama 3.x in August 2026,
+ * Google dropped Gemini 2.5 Flash in October). When a provider says a model doesn't
+ * exist, ask it which models it has, pick the best current one, and remember it.
+ */
+const resolved: { openai?: string; gemini?: string } = {};
+export const modelsInUse = () => ({ openai: resolved.openai ?? config.openaiCompatModel, gemini: resolved.gemini ?? config.geminiModel });
+
+/** Pick from a provider's own list: the first preference that matches, skipping speech, image, embedding and guard models. */
+export function pickModel(ids: string[], prefer: RegExp[]): string | null {
+  const usable = ids.filter((id) => !/whisper|tts|audio|image|vision-only|embed|guard|safeguard|moderation|live|transcribe|aqa|imagen|veo|learnlm|robotics|computer-use/i.test(id));
+  for (const re of prefer) {
+    const hits = usable.filter((id) => re.test(id));
+    if (hits.length) return hits.sort((a, b) => versionOf(b) - versionOf(a) || Number(/preview|exp/i.test(a)) - Number(/preview|exp/i.test(b)))[0];
+  }
+  return usable[0] ?? null;
+}
+const versionOf = (id: string) => { const m = /(\d+(?:\.\d+)?)/.exec(id.replace(/^.*?(?:gemini|qwen|llama|gpt-oss)[-/]?/i, "")); return m ? Number(m[1]) : 0; };
+
+async function discoverOpenai(): Promise<string | null> {
+  const r = await fetch(`${config.openaiCompatBaseUrl}/models`, { headers: { authorization: `Bearer ${config.openaiCompatKey}` }, signal: AbortSignal.timeout(8000) }).catch(() => null);
+  if (!r?.ok) return null;
+  const j: any = await r.json().catch(() => ({}));
+  const ids: string[] = (j.data ?? []).filter((m: any) => m.active !== false).map((m: any) => m.id);
+  return pickModel(ids, [/gpt-oss-120b/i, /gpt-oss-20b/i, /qwen.*\d{2,}b/i, /llama.*70b/i, /llama/i, /mixtral|mistral/i]);
+}
+
+async function discoverGemini(): Promise<string | null> {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${config.geminiKey}`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+  if (!r?.ok) return null;
+  const j: any = await r.json().catch(() => ({}));
+  const ids: string[] = (j.models ?? []).filter((m: any) => (m.supportedGenerationMethods ?? []).includes("generateContent")).map((m: any) => String(m.name).replace(/^models\//, ""));
+  return pickModel(ids, [/^gemini-flash-latest$/, /^gemini-[\d.]+-flash$/, /^gemini-[\d.]+-flash(?!-lite)/, /^gemini-[\d.]+-pro$/, /^gemini/]);
+}
+
+/**
  * Any OpenAI-compatible chat endpoint: Groq, OpenRouter, Cerebras, Mistral,
  * Together, or OpenAI itself. Set OPENAI_COMPAT_BASE_URL + OPENAI_COMPAT_API_KEY
  * + OPENAI_COMPAT_MODEL. Tool calling needs a model that supports it
- * (Groq llama-3.3-70b-versatile does; most OpenRouter free models do).
+ * (Groq openai/gpt-oss-120b does; most OpenRouter free models do).
  */
 async function openaiCompat(o: CompleteOpts): Promise<Completion> {
   const body: any = {
@@ -84,6 +119,8 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
     max_tokens: o.maxTokens ?? 1500,
     messages: [{ role: "system", content: o.system }, ...o.messages],
     ...(o.json ? { response_format: { type: "json_object" } } : {}),
+    // gpt-oss thinks before it answers; for a chat assistant, short thinking keeps replies quick.
+    ...(/gpt-oss/.test(resolved.openai ?? config.openaiCompatModel) && isGroq() ? { reasoning_effort: "low" } : {}),
   };
   if (o.tools?.length) {
     body.tools = o.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: geminiSchema(z.toJSONSchema(t.schema, { io: "input" })) } }));
@@ -92,9 +129,14 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
   const post = (model: string) => fetch(`${config.openaiCompatBaseUrl}/chat/completions`, {
     method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiCompatKey}` }, body: JSON.stringify({ ...body, model }), signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
   });
-  let r = await post(config.openaiCompatModel);
-  // Groq's free tier limits tokens per minute per model; the small model has far more room.
-  if ((r.status === 429 || r.status === 413) && isGroq() && config.openaiCompatFallbackModel && config.openaiCompatFallbackModel !== config.openaiCompatModel) r = await post(config.openaiCompatFallbackModel);
+  const main = resolved.openai ?? config.openaiCompatModel;
+  let r = await post(main);
+  // Rate-limited, too large, or the model was retired: try the second model before giving up on this provider.
+  if ((r.status === 429 || r.status === 413 || r.status === 404) && config.openaiCompatFallbackModel && config.openaiCompatFallbackModel !== main) r = await post(config.openaiCompatFallbackModel);
+  if (r.status === 404 || r.status === 400 && /model/i.test(await r.clone().text())) {
+    const found = await discoverOpenai();
+    if (found && found !== main) { r = await post(found); if (r.ok) resolved.openai = found; }
+  }
   if (!r.ok) throw new Error(`${config.openaiCompatBaseUrl.replace(/^https?:\/\//, "")} ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j: any = await r.json();
   const m = j.choices?.[0]?.message ?? {};
@@ -149,9 +191,15 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
   if (o.tools?.length) tools.push({ functionDeclarations: o.tools.map((t) => ({ name: t.name, description: t.description, parameters: geminiSchema(z.toJSONSchema(t.schema, { io: "input" })) })) });
   if (o.grounded) tools.push({ google_search: {} });
   if (tools.length) body.tools = tools;
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiKey}`, {
+  const post = (model: string) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.geminiKey}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(o.grounded ? CALL_TIMEOUT_MS * 3 : CALL_TIMEOUT_MS),
   });
+  const main = resolved.gemini ?? config.geminiModel;
+  let r = await post(main);
+  if (r.status === 404) {
+    const found = await discoverGemini();
+    if (found && found !== main) { r = await post(found); if (r.ok) resolved.gemini = found; }
+  }
   if (!r.ok) throw new Error(`gemini ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j: any = await r.json();
   const parts: any[] = j.candidates?.[0]?.content?.parts ?? [];

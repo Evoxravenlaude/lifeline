@@ -13,6 +13,8 @@ const RULES: [RegExp, (name: string | null, m: RegExpMatchArray) => string][] = 
   [/^(?:hi|hey|hello|yo|hiya|good (?:morning|afternoon|evening)|gm|morning|how far)\b[^?]*$/i, (n) => pick([`Hey${n ? ` ${n}` : ""}. What's on your mind?`, "Hi. I'm here.", `Hello${n ? ` ${n}` : ""}. What do you need kept?`])],
   [/^(?:thanks|thank you|thx|ty|cheers|appreciate it|appreciated)\b/i, () => pick(["Anytime.", "Of course.", "That's what I'm for."])],
   [/\b(?:later|not now|another time|skip this|maybe later|hold (?:that|this)|leave it|not yet|in a bit)\b/i, () => pick(["Sure. Whenever you're ready.", "No rush. I'll be here.", "Fine by me. Say the word when you want to pick it up."])],
+  [/^(?:what'?s good|wagwan|how far|what'?s happening|what'?s new|what'?s popping)\b[?!. ]*$/i, () => pick(["All quiet on my side. What's on yours?", "Not much, I'm keeping your day. What do you need?", "Same as ever. What are we sorting out?"])],
+  [/^(?:i(?:'m| am) (?:good|fine|great|okay|ok|well|alright)|(?:all )?good|fine|not bad)[,.! ]+(?:and |how about |what about )?(?:you|u|yourself)\b[?!. ]*$/i, () => pick(["Good to hear. Steady here, thanks for asking. Anything you want kept today?", "Glad. I'm well, keeping your list warm. What's next?"])],
   [/^(?:how are you|how'?s it going|you good|wyd|what'?s up|sup|how are things)\b/i, () => pick(["Steady. Keeping your day warm. You?", "All good here. What's next?", "Quiet on my end. Nothing's on fire."])],
   [/^(?:ok|okay|k|cool|nice|great|alright|sounds good|fine|got it|noted|perfect|sweet)\b[.!]?$/i, () => pick(["Good.", "Right.", "Okay."])],
   [/^(?:bye|goodbye|good night|gn|night|see you|talk later|ttyl|off to bed)\b/i, () => pick(["Rest well. Reminders still ring.", "Later. I've got the list.", "Night."])],

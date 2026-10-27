@@ -21,13 +21,15 @@ export const config = {
   anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
   model: process.env.MODEL ?? "claude-haiku-4-5",
   geminiKey: process.env.GEMINI_API_KEY ?? "",
-  geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
+  // Google's rolling alias for its current Flash model; if it ever 404s, the provider layer asks Google what exists.
+  geminiModel: process.env.GEMINI_MODEL || "gemini-flash-latest",
   modelProvider: (process.env.MODEL_PROVIDER ?? "") as "" | "anthropic" | "gemini" | "openai",
   openaiCompatKey: process.env.OPENAI_COMPAT_API_KEY ?? "",
   openaiCompatBaseUrl: (process.env.OPENAI_COMPAT_BASE_URL ?? "https://api.groq.com/openai/v1").replace(/\/$/, ""),
-  openaiCompatModel: process.env.OPENAI_COMPAT_MODEL ?? "llama-3.3-70b-versatile",
+  // Groq retired the Llama 3.x models on 16 Aug 2026; gpt-oss is their recommended replacement and supports tool calls.
+  openaiCompatModel: process.env.OPENAI_COMPAT_MODEL || "openai/gpt-oss-120b",
   /** Used when the main model is rate-limited (Groq only). Empty string turns it off. */
-  openaiCompatFallbackModel: process.env.OPENAI_COMPAT_FALLBACK_MODEL ?? "llama-3.1-8b-instant",
+  openaiCompatFallbackModel: process.env.OPENAI_COMPAT_FALLBACK_MODEL ?? "openai/gpt-oss-20b",
   // web + messaging channels
   port: Number(process.env.PORT ?? 3000),
   publicUrl: (process.env.PUBLIC_URL ?? "").replace(/\/$/, ""),

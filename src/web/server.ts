@@ -26,6 +26,7 @@ import { spentToday } from "../core/budget.js";
 import { inQuietHours } from "../core/time.js";
 import { propose } from "../policy/engine.js";
 import { PERSONAS } from "../intent/persona.js";
+import { startWebLogin, pollWebLogin } from "../core/weblogin.js";
 import { providerName } from "../intent/providers.js";
 import { draftReply } from "../intent/model.js";
 import { DateTime } from "luxon";
@@ -84,6 +85,16 @@ export function createWeb(db: Db, botUsername: string) {
     const user = await ensureUser(db, "telegram", String(id), [rest.first_name, rest.last_name].filter(Boolean).join(" "));
     await newSession(c, user);
     return c.json({ ok: true });
+  });
+  /* sign in through the bot: the page opens t.me/<bot>?start=web_<id> and polls */
+  app.post("/auth/telegram/start", (c) => { const id = startWebLogin(); return c.json({ id, url: `https://t.me/${botUsername}?start=web_${id}` }); });
+  app.get("/auth/telegram/poll", async (c) => {
+    const r = pollWebLogin(String(c.req.query("id") ?? ""));
+    if (r.state !== "approved") return c.json({ state: r.state });
+    const user = await getUserById(db, r.userId);
+    if (!user) return c.json({ state: "expired" });
+    await newSession(c, user);
+    return c.json({ state: "approved", ok: true });
   });
   app.post("/auth/link", async (c) => {
     const { code } = await c.req.json();
