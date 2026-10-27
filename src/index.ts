@@ -61,7 +61,17 @@ async function main() {
     allowed: config.allowedUserIds.length, model: providerName() ?? "rules-only", stt: Boolean(config.openaiKey),
     sms: Boolean(config.twilioSid), imessage: config.imessageProvider || false, email: Boolean(config.smtpUrl), web: config.port,
   }, "lifeline starting");
-  if (bot) await bot.start({ allowed_updates: ["message", "callback_query", "business_connection", "business_message"] as any, onStart: (me) => log.info({ username: me.username }, "telegram polling") });
+  // During a redeploy the old container still polls for a few seconds and Telegram answers 409. Wait it out instead of crashing.
+  for (let attempt = 1; bot; attempt++) {
+    try {
+      await bot.start({ allowed_updates: ["message", "callback_query", "business_connection", "business_message"] as any, onStart: (me) => log.info({ username: me.username }, "telegram polling") });
+      break;
+    } catch (e: any) {
+      if (e?.error_code !== 409 || attempt > 12) throw e;
+      log.warn({ attempt }, "another instance is still polling Telegram; retrying in 5s");
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
 }
 
 main().catch((e) => {

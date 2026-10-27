@@ -99,6 +99,27 @@ describe("web app", () => {
     expect((await a.request("/api/messages", { headers: { cookie } })).status).toBe(200);
   });
 
+  it("signing in through the bot: yes signs in one browser once; no signs in nobody", async () => {
+    const { answerWebLogin } = await import("../src/core/weblogin.js");
+    const a = app();
+    const u = await ensureUser(db, "telegram", "1077", "Bo");
+    const start = await (await a.request("/auth/telegram/start", { method: "POST" })).json();
+    expect(start.url).toBe(`https://t.me/lifeline_bot?start=web_${start.id}`);
+    expect((await (await a.request(`/auth/telegram/poll?id=${start.id}`)).json()).state).toBe("waiting");
+    expect(answerWebLogin(start.id, u.id, true)).toBe("ok");
+    const ok = await a.request(`/auth/telegram/poll?id=${start.id}`);
+    expect((await ok.json()).state).toBe("approved");
+    const cookie = ok.headers.get("set-cookie")!.split(";")[0];
+    expect((await (await a.request("/api/me", { headers: { cookie } })).json()).name).toBe("Bo");
+    expect((await (await a.request(`/auth/telegram/poll?id=${start.id}`)).json()).state).toBe("expired"); // once only
+    expect(answerWebLogin(start.id, u.id, true)).toBe("expired");
+    const s2 = await (await a.request("/auth/telegram/start", { method: "POST" })).json();
+    answerWebLogin(s2.id, u.id, false);
+    const no = await a.request(`/auth/telegram/poll?id=${s2.id}`);
+    expect((await no.json()).state).toBe("declined");
+    expect(no.headers.get("set-cookie")).toBeNull();
+  });
+
   it("link-code login and logout", async () => {
     const a = app();
     const u = await ensureUser(db, "telegram", "1004", "Lin");

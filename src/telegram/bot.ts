@@ -12,13 +12,14 @@ import { registerSender } from "../core/dispatch.js";
 import { propose } from "../policy/engine.js";
 import { FULL_HELP } from "../intent/index.js";
 import { overview } from "../intent/capabilities.js";
-import { diagnostics, providerChain } from "../intent/providers.js";
+import { diagnostics, modelsInUse, providerChain } from "../intent/providers.js";
 import { transcribe } from "../core/stt.js";
 import { PERSONAS } from "../intent/persona.js";
 import { spentToday } from "../core/budget.js";
 import { draftReply } from "../intent/model.js";
 import { polish, personaOf } from "../core/voice.js";
 import { pipLine } from "../core/pip.js";
+import { answerWebLogin, webLoginExists } from "../core/weblogin.js";
 
 /** Telegram HTML: escape; bold the head line of a multi-line message so lists read at a glance; keep links clickable. */
 export function toHtml(text: string): string {
@@ -100,6 +101,12 @@ export function createBot(db: Db): Bot {
 
   bot.command("start", async (c) => {
     const u = await userOf(c);
+    const payload = (c.match ?? "").trim();
+    if (payload.startsWith("web_")) {
+      const id = payload.slice(4);
+      if (!webLoginExists(id)) return say(c, "That sign-in link has expired. Go back to the page and press the button again; it lasts five minutes.");
+      return say(c, "Sign in to lifeline on the web? Only say yes if you just pressed the button yourself, on your own device.", { reply_markup: new InlineKeyboard().text("Yes, sign me in", `weblogin:yes:${id}`).text("No", `weblogin:no:${id}`) });
+    }
     const first = u.name ? u.name.split(" ")[0] : null;
     if (!u.prefs.onboarded) {
       const k = new InlineKeyboard();
@@ -127,7 +134,7 @@ export function createBot(db: Db): Bot {
     const chain = providerChain();
     const age = (t: number | null) => (t ? (Date.now() - t < 90_000 ? `${Math.round((Date.now() - t) / 1000)}s ago` : `${Math.round((Date.now() - t) / 60_000)} min ago`) : "never");
     const lines = [
-      `Models, in the order I try them: ${chain.length ? chain.join(", then ") : "none set, so I only understand plain shapes"}.`,
+      `Models, in the order I try them: ${chain.length ? chain.map((p) => (p === "openai" ? `openai (${modelsInUse().openai})` : p === "gemini" ? `gemini (${modelsInUse().gemini})` : p)).join(", then ") : "none set, so I only understand plain shapes"}.`,
       `Last good answer: ${age(diagnostics.lastOkAt)}${diagnostics.lastProvider ? ` (${diagnostics.lastProvider})` : ""}. Last failure: ${age(diagnostics.lastErrorAt)}.`,
       ...Object.values(diagnostics.errors).map((e) => `  ${e}`),
       `Scout web search: ${config.geminiKey ? "on" : "off (needs GEMINI_API_KEY)"}. Voice notes: ${config.openaiKey ? "on" : "off"}. Email: ${config.smtpUrl ? "on" : "off"}.`,
@@ -207,6 +214,13 @@ export function createBot(db: Db): Bot {
         ].join("\n\n"), { reply_markup: WAYS_IN() });
       }
       return;
+    }
+    if (data.startsWith("weblogin:")) {
+      const [, answer, id] = data.split(":");
+      const r = answerWebLogin(id, u.id, answer === "yes");
+      await c.answerCallbackQuery();
+      await c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+      return say(c, r === "expired" ? "That request has expired. Press the button on the page again." : answer === "yes" ? "Done. You're signed in on the web; the page will open by itself in a moment." : "Okay, nobody was signed in.");
     }
     if (data.startsWith("say:")) {
       await c.answerCallbackQuery();
