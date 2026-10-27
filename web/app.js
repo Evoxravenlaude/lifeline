@@ -59,9 +59,11 @@ window.App = (function () {
 
   /* ---------- state ---------- */
   let me = null, state = null, view = "today", pip = null, scenes = [], lastMsgId = 0;
-  const VIEWS = [["today", "Today", "today"], ["chat", "Chat", "chat"], ["lists", "Lists", "list"], ["trips", "Trips", "case"], ["hackathons", "Hackathons", "flag"], ["scout", "Scout", "compass"], ["money", "Money", "coin"], ["what", "What I do", "shell"], ["settings", "Settings", "sliders"], ["more", "More", "more"]];
-  const TABS = ["today", "chat", "lists", "trips", "hackathons", "scout", "money"];
-  const PHONE = ["today", "chat", "lists", "trips", "more"];
+  const VIEWS = [["today", "Today", "today"], ["chat", "Chat", "chat"], ["lists", "Lists", "list"], ["health", "Health", "heart"], ["trips", "Trips", "case"], ["money", "Money", "coin"], ["hackathons", "Hackathons", "flag"], ["scout", "Scout", "compass"], ["what", "What I do", "shell"], ["settings", "Settings", "sliders"], ["more", "More", "more"]];
+  const PHONE = ["today", "chat", "lists", "health", "more"];
+  /** Work tools (hackathons, scout) sit in the bar only for people who use them; everyone else finds them under More. */
+  const workOn = () => me && (me.work === true || (me.work == null && ((state && state.ledger && state.ledger.length) || (me.tags && me.tags.length))));
+  const tabs = () => ["today", "chat", "lists", "health", "trips", "money", ...(workOn() ? ["hackathons", "scout"] : [])];
 
   function repaintScenes() { scenes.forEach((s) => s.update({ accent: getComputedStyle(root).getPropertyValue("--accent").trim() })); }
 
@@ -77,7 +79,7 @@ window.App = (function () {
     if (me.palette && !localStorage.getItem("ll_palette")) setPalette(me.palette, null, false);
     if (me.mode && !localStorage.getItem("ll_mode")) setMode(me.mode, null, false);
     $("#who").textContent = me.name ? `Signed in as ${me.name}` : "";
-    $("#tabs").innerHTML = TABS.map((k) => { const v = VIEWS.find((x) => x[0] === k); return `<a href="#${k}" data-v="${k}">${ico(v[2])}<span>${v[1]}</span></a>`; }).join("");
+    drawTabs();
     $("#tabbar").innerHTML = PHONE.map((k) => { const v = VIEWS.find((x) => x[0] === k); return `<a href="#${k}" data-v="${k}">${ico(v[2])}${v[1]}</a>`; }).join("");
     $("#modeBtn").addEventListener("click", toggleMode);
     $("#sayBtn").addEventListener("click", openSay);
@@ -90,11 +92,17 @@ window.App = (function () {
     window.addEventListener("hashchange", route);
     state = await api("/api/state");
     if (state.error || !Array.isArray(state.pending)) state = { pending: [], reminders: [], events: [], meds: [], ledger: [], lists: [], memory: [], dates: [], classes_today: [], habits: [], quiet: false };
+    drawTabs();
     route();
     window.__bootDone && window.__bootDone();
     setInterval(refresh, 30000);
   }
   async function refresh() { const s = await api("/api/state"); if (s.error || !Array.isArray(s.pending)) return; state = s; if (view === "today") renderToday(true); updatePip(); }
+
+  function drawTabs() {
+    $("#tabs").innerHTML = tabs().map((k) => { const v = VIEWS.find((x) => x[0] === k); return `<a href="#${k}" data-v="${k}">${ico(v[2])}<span>${v[1]}</span></a>`; }).join("");
+    $$("#tabs a").forEach((a) => a.classList.toggle("on", a.dataset.v === view));
+  }
 
   function route() {
     const h = location.hash.replace("#", "") || "today";
@@ -104,7 +112,7 @@ window.App = (function () {
     scenes.forEach((s) => s.destroy()); scenes = []; pip = null;
     const main = $("#main"); main.innerHTML = "";
     window.scrollTo(0, 0);
-    ({ today: renderToday, chat: renderChat, lists: renderLists, trips: renderTrips, hackathons: renderHackathons, scout: renderScout, money: renderMoney, what: renderWhat, settings: renderSettings, more: renderMore }[view])();
+    ({ today: renderToday, chat: renderChat, lists: renderLists, health: renderHealth, trips: renderTrips, hackathons: renderHackathons, scout: renderScout, money: renderMoney, what: renderWhat, settings: renderSettings, more: renderMore }[view])();
     document.title = view === "today" ? "lifeline" : `${VIEWS.find((v) => v[0] === view)[1]} · lifeline`;
   }
 
@@ -210,7 +218,7 @@ window.App = (function () {
           <div class="card k-event"><div class="card-head">${ico("clock")}<span>On the clock today</span></div>
             ${items.length ? `<ul class="lines" id="clock">${items.map((i) => `<li data-min="${i.min}" class="${i.min < nowMin ? "done" : ""}"><span class="t">${i.time}</span><span class="dot k-${i.kind}"></span><span class="w">${esc(i.label)}<small>${KIND_WORD[i.kind]}${i.sub && i.kind !== "dose" ? `, ${esc(i.sub)}` : i.kind === "dose" && i.sub !== "dose" ? `, ${esc(i.sub)}` : ""}</small></span><span class="a">${(i.actions || []).map(([l, d]) => `<button class="btn sm" data-btn="${d}">${l}</button>`).join("")}</span></li>`).join("")}</ul>` : `<div id="clock">${empty(`Nothing on the clock. Tell me what's on: ${tryLink("dentist at 3pm")}, ${tryLink("class Algorithms tuesday 10 to 12")}.`)}</div>`}
           </div>
-          <div class="card k-list"><div class="card-head">${ico("today")}<span>The morning note</span><span class="sp"></span><button class="btn ghost sm" id="briefBtn">Rebuild from now</button></div><div class="card-body"><p id="brief" class="serif" style="white-space:pre-wrap;font-size:1.125rem;line-height:1.55;font-variation-settings:'opsz' 24">Writing it.</p></div></div>
+          <div class="card k-list"><div class="card-head">${ico("today")}<span>The morning note</span><span class="sp"></span><button class="btn ghost sm" id="briefBtn">Rebuild from now</button></div><div class="card-body"><p id="brief" class="serif" style="white-space:pre-wrap;font-size:1.1875rem;line-height:1.55">Writing it.</p></div></div>
         </div>
         <div class="stack">
           <div class="card k-trip"><div class="pip-card"><div id="pipHome"></div><p class="pip-line" id="pipLine"></p></div></div>
@@ -251,7 +259,7 @@ window.App = (function () {
     t.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
     t.addEventListener("input", () => { t.style.height = "auto"; t.style.height = Math.min(180, t.scrollHeight) + "px"; });
     $("#chatForm").addEventListener("submit", (e) => { e.preventDefault(); send(); });
-    $("#chips").innerHTML = ["what's on today", "can you track my meds?", "who's building payments on base", "I'm going to Accra on the 20th"].map((s) => `<button class="chip" data-fill="${esc(s)}">${esc(s)}</button>`).join("");
+    $("#chips").innerHTML = ["what's on today", "remind me to call mum on sunday at 5", "my period started today", "slept 7 hours"].map((s) => `<button class="chip" data-fill="${esc(s)}">${esc(s)}</button>`).join("");
     $$("[data-fill]").forEach((b) => b.addEventListener("click", () => { t.value = b.dataset.fill; t.focus(); t.dispatchEvent(new Event("input")); }));
     wireButtons(main);
     capsCache = capsCache || (await api("/api/capabilities"));
@@ -298,7 +306,7 @@ window.App = (function () {
   function openSay(prefill) {
     if ($(".say")) return $(".say input").focus();
     const o = document.createElement("div"); o.className = "say"; o.setAttribute("role", "dialog"); o.setAttribute("aria-label", "Say anything");
-    o.innerHTML = `<div class="card"><form>${ico("say", "lg")}<input placeholder="Say anything" aria-label="Say anything" autocomplete="off"><button class="btn sm primary" type="submit">Send</button></form><div class="out" hidden></div><div class="hints">${["what's on today", "remind me to stretch at 6pm", "I spent 20 dollars on lunch", "any hackathons for ai this month", "my lists"].map((s) => `<button class="chip" type="button">${esc(s)}</button>`).join("")}</div></div>`;
+    o.innerHTML = `<div class="card"><form>${ico("say", "lg")}<input placeholder="Say anything" aria-label="Say anything" autocomplete="off"><button class="btn sm primary" type="submit">Send</button></form><div class="out" hidden></div><div class="hints">${["what's on today", "remind me to drink water at 3pm", "I spent 2000 naira on lunch", "when is my next period", "my lists"].map((s) => `<button class="chip" type="button">${esc(s)}</button>`).join("")}</div></div>`;
     document.body.appendChild(o);
     const input = $("input", o), out = $(".out", o);
     if (typeof prefill === "string") input.value = prefill;
@@ -340,6 +348,56 @@ window.App = (function () {
     const f = $("form", card);
     f.addEventListener("submit", async (e) => { e.preventDefault(); const v = $("input", f).value.trim(); if (!v) return; await act("list.add", { list: name, items: v.split(/\s*,\s*/) }, "list"); route(); });
     $("input", f).focus(); $("#newList input").value = "";
+  }
+
+  /* ---------- Health: cycle, doses, anything measured ---------- */
+  async function renderHealth() {
+    const main = $("#main");
+    main.innerHTML = `<div class="wrap page"><div class="page-head"><h2>Health</h2><p>Your cycle, your doses, and anything you keep a record of. It stays in your account; say "forget" about any of it and it's gone.</p></div><div id="hl">${empty("Gathering it.")}</div></div>`;
+    const h = await api("/api/health");
+    const c = (h && h.cycle) || { tracking: false };
+    const measures = (h && Array.isArray(h.measures)) ? h.measures : [];
+    $("#hl").innerHTML = `<div class="home-grid"><div class="stack">${cycleCard(c)}${measuresCard(measures)}</div><div class="stack">
+      <div class="card k-dose">${cardHead("pill", "Doses")}${state.meds.length ? `<ul class="lines">${state.meds.map((m) => `<li><span class="w">${esc(cap(m.name))}<small>${m.times.join(" and ")}${m.days_left != null ? `, about ${m.days_left} days left` : ""}</small></span></li>`).join("")}</ul>` : empty(`None kept. Say ${tryLink("I take vitamin D at 8am and 8pm")}.`)}</div>
+      <div class="card k-money">${cardHead("check", "Habits this week")}${state.habits.length ? `<div class="card-body chips" style="margin:0">${state.habits.map((x) => `<button class="chip" data-habit="${esc(x.name)}">${esc(cap(x.name))}, ${x.n} of ${x.target_per_week}</button>`).join("")}</div>` : empty(`Nothing counted yet. Say ${tryLink("did gym")} or ${tryLink("track reading every day")}.`)}</div>
+      <div class="card k-event"><div class="card-body" style="display:grid;gap:10px"><h4>Log anything</h4><form class="row" id="logAny" style="flex-wrap:nowrap"><input placeholder="slept 7 hours, weight 72kg, mood 4/5" aria-label="Log something"><button class="btn sm primary" type="submit">Log</button></form><p class="faint small">Sleep, water, weight, mood, steps, blood pressure, lifts, skincare, symptoms. Anything with a number or a yes.</p></div></div>
+    </div></div>`;
+    wireTries(main); wireButtons(main);
+    $$("[data-habit]", main).forEach((b) => b.addEventListener("click", () => act("habit.checkin", { name: b.dataset.habit }, "money").then(renderHealth)));
+    $$("[data-say]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: b.dataset.say }); toast(r.text || "Done.", "hack"); renderHealth(); }));
+    $$("[data-ask]", main).forEach((b) => b.addEventListener("click", () => openSay(b.dataset.ask)));
+    $("#logAny").addEventListener("submit", async (e) => { e.preventDefault(); const v = $("#logAny input").value.trim(); if (!v) return; const r = await api("/api/chat", { text: v }); toast(r.text || "Logged.", "event"); renderHealth(); });
+  }
+  const dayName = (iso) => iso ? new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "";
+  const daysFrom = (iso) => iso ? Math.round((new Date(iso + "T12:00:00") - new Date(new Date().toDateString() + " 12:00")) / 864e5) : null;
+  function cycleCard(c) {
+    if (!c.tracking) return `<div class="card k-hack">${cardHead("heart", "Periods and cycle")}<div class="card-body" style="display:grid;gap:14px">
+      <p>Tell me when your period starts and I'll keep the dates, predict the next one from your own history, and give you a quiet heads-up two days before. Log cramps, flow, mood or anything else as it happens.</p>
+      <div class="row"><button class="btn primary" data-say="my period started today">My period started today</button><button class="btn" data-ask="my period started on ">It started on another day</button></div>
+      <p class="faint small">Estimates from your own history, not birth control. Only you can see this.</p></div></div>`;
+    const len = Math.max(21, Math.min(45, c.length || 28)), pl = c.periodLength || 5, day = c.day || 1;
+    const fs = c.fertileStart && c.lastStart ? Math.round((new Date(c.fertileStart) - new Date(c.lastStart)) / 864e5) + 1 : null;
+    const fe = c.fertileEnd && c.lastStart ? Math.round((new Date(c.fertileEnd) - new Date(c.lastStart)) / 864e5) + 1 : null;
+    const cells = Array.from({ length: len }, (_, i) => { const d = i + 1; const k = d <= pl ? "period" : fs && d >= fs && d <= fe ? "fertile" : ""; return `<i class="cy ${k} ${d === day ? "now" : ""}" title="Day ${d}"></i>`; }).join("");
+    const next = daysFrom(c.nextStart);
+    const lead = c.inPeriod ? `Day ${day}, on your period.` : c.lateBy > 0 ? `Your period is ${c.lateBy} day${c.lateBy > 1 ? "s" : ""} later than I'd expect.` : `Day ${day} of about ${len}.`;
+    return `<div class="card k-hack">${cardHead("heart", "Periods and cycle")}<div class="card-body" style="display:grid;gap:14px">
+      <div><h3 style="font-size:var(--t-31)">${lead}</h3>${c.nextStart && !c.lateBy ? `<p class="muted" style="margin-top:4px">Next period likely ${esc(dayName(c.nextStart))}${next != null ? `, ${next <= 0 ? "about now" : `in ${next} day${next > 1 ? "s" : ""}`}` : ""}.${c.fertileStart ? ` Fertile window probably ${esc(dayName(c.fertileStart))} to ${esc(dayName(c.fertileEnd))}.` : ""}</p>` : ""}</div>
+      <div class="cycle" role="img" aria-label="Your cycle, day ${day} of ${len}">${cells}</div>
+      <div class="row small muted"><span class="row" style="gap:6px"><i class="cy period"></i>period</span><span class="row" style="gap:6px"><i class="cy fertile"></i>likely fertile</span><span class="row" style="gap:6px"><i class="cy now"></i>today</span></div>
+      <div class="row">${c.inPeriod ? `<button class="btn sm primary" data-say="my period ended today">It ended today</button>` : `<button class="btn sm primary" data-say="my period started today">Period started today</button>`}<button class="btn sm" data-ask="today I have ">Log how I feel</button></div>
+      ${(c.logs || []).length ? `<ul class="lines" style="margin:0 -20px">${c.logs.slice(0, 6).map((l) => `<li><span class="t" style="min-width:5.5em">${esc(dayName(l.day))}</span><span class="w">${esc(cap(l.value || l.kind))}<small>${esc(l.kind)}</small></span></li>`).join("")}</ul>` : ""}
+      <p class="faint small">${c.irregular ? "Your cycles vary a fair bit, so these dates are rougher than usual. A doctor or nurse can look properly if that worries you. " : ""}Estimates from your own history, not birth control. <button class="btn ghost sm" data-ask="forget my cycle data" style="padding:0 4px;min-height:0">Forget my cycle data</button></p>
+    </div></div>`;
+  }
+  function spark(points) {
+    const v = points.map((p) => Number(p.value)).filter((x) => !isNaN(x)); if (v.length < 2) return "";
+    const lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1, w = 140, h = 36;
+    const d = v.map((x, i) => `${i ? "L" : "M"}${(i / (v.length - 1) * w).toFixed(1)} ${(h - 3 - ((x - lo) / span) * (h - 6)).toFixed(1)}`).join(" ");
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true" style="overflow:visible"><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  }
+  function measuresCard(ms) {
+    return `<div class="card k-event">${cardHead("chart", "What you track")}${ms.length ? `<ul class="lines">${ms.map((m) => `<li><span class="w"><b style="font-weight:600">${esc(cap(m.name))}</b><small>${m.last ? `${m.last.note || `${Number(m.last.value).toLocaleString()}${m.unit ? " " + esc(m.unit) : ""}`}, ${esc(when(m.last.at))}` : ""}${m.avg7 != null ? `. Week's average ${Number(m.avg7).toLocaleString(undefined, { maximumFractionDigits: 1 })}${m.unit ? " " + esc(m.unit) : ""}` : ""}</small></span><span class="spark">${spark(m.points || [])}</span><button class="btn sm ghost a" data-ask="how's my ${esc(m.name)} this month">More</button></li>`).join("")}</ul>` : empty(`Nothing tracked yet. Try ${tryLink("slept 7 hours")}, ${tryLink("weight 72kg")} or ${tryLink("drank 2 litres of water")}.`)}</div>`;
   }
 
   /* ---------- Trips ---------- */
@@ -389,9 +447,9 @@ window.App = (function () {
   async function renderScout() {
     const main = $("#main");
     main.innerHTML = `<div class="wrap page"><div class="page-head"><h2>Scout</h2><p>New and upcoming projects in a niche, the people behind them, and their public handles. I draft the first message; you send it.</p></div>
-      <div class="card k-scout"><form class="card-body" id="scoutForm" style="display:grid;grid-template-columns:2fr 1fr auto auto;gap:12px;align-items:end">
-        <label class="field">The niche<input id="niche" placeholder="payments on base, ai agents, perps on hyperliquid"></label>
-        <label class="field">And what for<input id="obj" placeholder="partner, hire, invest, apply"></label>
+      <div class="card k-scout"><form class="card-body scoutform" id="scoutForm">
+        <label class="field">The niche<input id="niche" placeholder="fintech in Lagos, design studios in Accra, ai startups"></label>
+        <label class="field">And what for<input id="obj" placeholder="a job, clients, partners, to learn"></label>
         <button class="btn primary" type="submit">Scout</button><button class="btn" type="button" id="watchBtn">Keep watching</button></form></div>
       <div id="scoutOut" style="margin-top:30px">${empty("Loading what you've scouted before.")}</div></div>`;
     $("#scoutForm").addEventListener("submit", (e) => { e.preventDefault(); scout(); });
@@ -437,7 +495,7 @@ window.App = (function () {
   }
 
   /* ---------- What I do ---------- */
-  const CAP_KIND = { reminders: "rem", calendar: "event", medications: "dose", classes: "class", trips: "trip", lists: "list", dates: "rem", habits: "money", money: "money", notes: "list", hackathons: "hack", scout: "scout", markets: "event", trading: "scout", jobs: "hack", bills: "money", brief: "list", tools: "event", voice: "trip", channels: "class", safety: "dose" };
+  const CAP_KIND = { cycle: "hack", measures: "event", reminders: "rem", calendar: "event", medications: "dose", classes: "class", trips: "trip", lists: "list", dates: "rem", habits: "money", money: "money", notes: "list", hackathons: "hack", scout: "scout", markets: "event", trading: "scout", jobs: "hack", bills: "money", brief: "list", tools: "event", voice: "trip", channels: "class", safety: "dose" };
   async function renderWhat() {
     const main = $("#main");
     main.innerHTML = `<div class="wrap page"><div class="page-head"><h2>What I do</h2><p>You don't need commands. Say it the way you'd say it to a person. Here is everything I keep, each with a sentence you can try.</p></div><div class="grid auto" id="caps"></div>
@@ -467,8 +525,10 @@ window.App = (function () {
           <label class="field">Interests, for ranking<input id="tags" value="${esc((s.tags || []).join(", "))}" placeholder="ai, payments, base, ethereum"></label>
           <div class="grid two" style="gap:12px"><label class="field">Country, two letters<input data-set="country" maxlength="2" value="${esc(s.country || "")}"></label><label class="field">Email, as a last resort<input data-set="email" type="email" value="${esc(s.email || "")}"></label></div></div></div>
         <div class="card k-class">${cardHead("chat", "Where I reach you")}<div class="card-body"><dl class="kv">${(s.identities || []).map((i) => `<dt>${esc(cap(i.channel))}</dt><dd class="muted">${esc(i.external_id)}</dd>`).join("")}</dl><div class="row" style="margin-top:16px"><button class="btn sm" id="linkCode">Get a link code</button><b id="linkOut" class="serif" style="font-size:1.6rem;letter-spacing:.1em"></b></div><p class="faint small" style="margin-top:8px">Send link and the code from SMS or iMessage, or paste it in another browser, within fifteen minutes.</p></div></div>
+        <div class="card k-hack">${cardHead("flag", "Work tools")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Hackathons, grants and scouting for companies and people. Handy if you build or job-hunt; out of the way if not. They're always under More.</p><div class="seg" role="group" aria-label="Work tools in the bar"><button data-work="true" aria-pressed="${!!workOn()}">In the bar</button><button data-work="false" aria-pressed="${!workOn()}">Under More</button></div></div></div>
         <div class="card k-list">${cardHead("sliders", "Under the hood")}<div class="card-body"><dl class="kv"><dt>Model</dt><dd>${esc(s.provider || "plain language only, no model key")}</dd><dt>Spend today</dt><dd>$${Number(s.spend || 0).toFixed(3)} of $${s.budget}</dd></dl></div></div>
       </div></div>`;
+    $$("[data-work]", main).forEach((b) => b.addEventListener("click", async () => { me.work = b.dataset.work === "true"; await api("/api/settings", { work: me.work }, "PATCH"); drawTabs(); $$("[data-work]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); toast(me.work ? "Work tools are in the bar." : "Work tools moved under More."); }));
     $$("[data-mode]", main).forEach((b) => b.addEventListener("click", (e) => { setMode(b.dataset.mode, e.currentTarget); $$("[data-mode]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
     $$("[data-palette]", main).forEach((b) => b.addEventListener("click", (e) => { setPalette(b.dataset.palette, e.currentTarget); $$("[data-palette]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
     $$("[data-voice]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: `voice ${b.dataset.voice}` }); toast(r.text, "trip"); renderSettings(); }));
@@ -488,7 +548,7 @@ window.App = (function () {
   function landing(offline) {
     $("#landing").hidden = false;
     if (offline) { $("#linkForm button").disabled = true; }
-    const sample = [["remind me to call Ada tomorrow at 9", "Call Ada, tomorrow at 09:00. I'll ping you here.", "rem"], ["I'm going to Accra on the 20th", "Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"], ["can you track my meds?", "Yes. Tell me what you take and when, like \"I take vitamin D at 8 and 8pm\". I'll ring you at each dose with Taken and Skip, and keep the log.", "dose"], ["pay 2000 airtime to 0801 234 5678", "This sends 2,000 naira airtime to 0801 234 5678 through MTN. Go ahead? It waits ten minutes for a yes.", "hack"]];
+    const sample = [["remind me to call mum on sunday at 5", "Call mum, Sunday at 17:00. I'll ping you here.", "rem"], ["my period started today", "Got it, day one. Your next one is likely around the 24th; I'll give you a quiet heads-up two days before.", "dose"], ["I'm going to Accra on the 20th", "Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"], ["slept 6 hours", "Sleep 6 hours, logged. That's an hour under your week's average.", "event"]];
     $("#letters").innerHTML = sample.map(([u, b, k]) => `<div class="letter"><span class="you">${esc(u)}</span><div class="card ll k-${k}">${esc(b)}</div></div>`).join("");
     const now = new Date(), m = now.getHours() * 60 + now.getMinutes();
     const demo = [[7 * 60 + 30, "Run", "rem"], [8 * 60, "Vitamin D", "dose"], [10 * 60, "Algorithms", "class"], [13 * 60, "Lunch with Ada", "event"], [15 * 60 + 30, "Dentist", "event"], [17 * 60, "Call the landlord", "rem"], [20 * 60, "Vitamin D", "dose"], [21 * 60 + 30, "Submit the deck", "rem"]].map(([min, label, kind]) => ({ min, label, kind, time: `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}` }));

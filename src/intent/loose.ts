@@ -46,7 +46,49 @@ const COIN = /\b(btc|bitcoin|eth|ethereum|sol|solana|bnb|usdc|usdt|ton|hype|bonk
 
 type Rule = { test: RegExp; build: (t: string, m: RegExpMatchArray, now: Date) => Intent | null };
 
+const MEASURE_NAMES = "weight|sleep|water|mood|steps|blood pressure|bp|bench(?: press)?|squat|deadlift|heart rate|blood sugar|skincare|skin ?care|hair ?care";
+
 const RULES: Rule[] = [
+  // ---- cycle (before memory, so "forget my cycle data" isn't read as a memory) ----
+  { test: /^(?:forget|delete|clear|wipe)\s+(?:all\s+)?(?:of\s+)?my\s+(?:cycle|period|menstrual)\s+(?:data|history|tracking|logs?)$/i, build: () => ({ action: "cycle.forget", args: {} }) },
+  { test: /^(?:my\s+)?period\s+(?:started|came|began|is here|arrived|just started|has started)(?:\s+(.+))?$|^(?:i\s+)?(?:started|got)\s+my\s+period(?:\s+(.+))?$|^(?:i'?m|i am)\s+on\s+my\s+period(?:\s+(?:since\s+)?(.+))?$/i,
+    build: (_t, m) => { const w = m[1] ?? m[2] ?? m[3]; return { action: "cycle.start", args: w ? { when: w } : {} }; } },
+  { test: /^(?:my\s+)?period\s+(?:ended|stopped|finished|is over|has ended|has stopped)(?:\s+(.+))?$|^(?:my\s+)?period'?s\s+(?:over|done|finished)(?:\s+(.+))?$/i,
+    build: (_t, m) => { const w = m[1] ?? m[2]; return { action: "cycle.end", args: w ? { when: w } : {} }; } },
+  { test: /^(?:when(?:'s| is| will be)\s+my\s+next\s+period|when\s+will\s+my\s+period\s+(?:come|start)|where\s+am\s+i\s+in\s+my\s+cycle|am\s+i\s+late|is\s+my\s+period\s+late|(?:show\s+)?my\s+cycle|cycle\s+status|how\s+long\s+(?:until|till)\s+my\s+(?:next\s+)?period|(?:my\s+)?fertile\s+window|when\s+am\s+i\s+(?:fertile|ovulating)|when\s+do\s+i\s+ovulate)$/i,
+    build: () => ({ action: "cycle.status", args: {} }) },
+  { test: /^my\s+cycle\s+is\s+(?:usually\s+|normally\s+|about\s+|around\s+)?(\d{2})\s+days?(?:\s+long)?$/i, build: (_t, m) => ({ action: "cycle.settings", args: { avg_length: Number(m[1]) } }) },
+  { test: /^(?:my\s+)?periods?\s+(?:usually\s+|normally\s+)?lasts?\s+(?:about\s+|around\s+)?(\d{1,2})\s+days?$/i, build: (_t, m) => ({ action: "cycle.settings", args: { period_length: Number(m[1]) } }) },
+  { test: /^(stop|turn off|pause|no more|start|turn on|resume)\s+(?:my\s+)?(?:period|cycle)\s+reminders$/i, build: (_t, m) => ({ action: "cycle.settings", args: { reminders: /^(?:start|turn on|resume)$/i.test(m[1]) } }) },
+  { test: /^(don'?t|do not|stop)?\s*(?:put|show|include|putting|showing|including)\s+my\s+cycle\s+in\s+the\s+(?:morning\s+)?(?:brief|digest)$/i, build: (_t, m) => ({ action: "cycle.settings", args: { in_brief: !m[1] } }) },
+  { test: /^(?:i\s+)?took\s+(?:an?\s+)?(pregnancy|ovulation)\s+test[:,]?\s*(?:it(?:'s| was)\s+)?(.*)$/i, build: (_t, m) => ({ action: "cycle.log", args: { what: `${m[1].toLowerCase()} test${m[2] ? `: ${m[2]}` : ""}` } }) },
+  { test: /^(?:i\s+)?took\s+my\s+((?:birth control|contraceptive)\s+)?pill(?:\s+(today|yesterday|this morning|last night))?$/i, build: (_t, m) => ({ action: "cycle.log", args: { what: `took my ${m[1] ?? ""}pill`.replace(/\s+/g, " "), ...(m[2] ? { when: m[2] } : {}) } }) },
+  { test: /^(?:(?:i\s+have|i've\s+got|i\s+got|having|bad|really bad|some|a\s+bit\s+of)\s+)?((?:cramps|period pain|headache|migraine|bloating|bloated|spotting|heavy flow|light flow|medium flow|heavy bleeding|light bleeding|clots|tender breasts|sore breasts|back ?ache|lower back pain|acne|breakout|nausea|cravings|fatigue|mood swings?|low mood|mood low|irritable|anxious|emotional|teary|pms)(?:\s*(?:,|and)\s*(?:cramps|period pain|headache|migraine|bloating|bloated|spotting|clots|tender breasts|sore breasts|back ?ache|lower back pain|acne|nausea|cravings|fatigue|mood swings?|low mood|irritable|anxious|emotional|teary|pms))*)(\s+(?:today|yesterday|this morning|last night|tonight))?$/i,
+    build: (_t, m) => ({ action: "cycle.log", args: { what: m[1], ...(m[2] ? { when: m[2].trim() } : {}) } }) },
+
+  // ---- measures: weight, sleep, water, mood, steps, blood pressure, lifts, routines ----
+  { test: /^(?:my\s+)?(?:weight|body ?weight)(?:\s+(?:is|was|today))?\s*:?\s*(\d+(?:\.\d+)?)\s*(kg|kgs|kilos?|lbs?|pounds?)?$|^i\s+weigh(?:ed)?\s+(\d+(?:\.\d+)?)\s*(kg|kgs|kilos?|lbs?|pounds?)?(?:\s+(?:today|this morning))?$/i,
+    build: (_t, m) => ({ action: "measure.log", args: { name: "weight", value: Number(m[1] ?? m[3]), unit: m[2] ?? m[4] ?? "kg" } }) },
+  { test: /^(?:i\s+)?(?:slept|sleep|got)\s+(?:for\s+|about\s+|around\s+)?(\d+(?:\.\d+)?)\s*(?:h|hrs?|hours?)(?:\s*(?:and\s*)?(\d{1,2})\s*(?:m|mins?|minutes?)?)?(?:\s+(?:of\s+sleep\s*)?(last night|yesterday))?$/i,
+    build: (_t, m) => ({ action: "measure.log", args: { name: "sleep", value: Math.round((Number(m[1]) + (m[2] ? Number(m[2]) / 60 : 0)) * 100) / 100, unit: "hours", ...(m[3] ? { when: m[3] } : {}) } }) },
+  { test: /^(?:i\s+)?(?:drank|had)\s+(\d+(?:\.\d+)?)\s*(litres?|liters?|l|ml|glasses|glass|cups?|bottles?)\s+(?:of\s+)?water(?:\s+today)?$|^(\d+(?:\.\d+)?)\s*(litres?|liters?|l|ml|glasses|glass|cups?|bottles?)\s+of\s+water(?:\s+today)?$|^water:?\s*(\d+(?:\.\d+)?)\s*(litres?|liters?|l|ml|glasses|cups?|bottles?)?$/i,
+    build: (_t, m) => ({ action: "measure.log", args: { name: "water", value: Number(m[1] ?? m[3] ?? m[5]), unit: m[2] ?? m[4] ?? m[6] ?? "litres" } }) },
+  { test: /^(?:my\s+)?mood\s*:?\s*(\d{1,2})\s*(?:\/|out of)\s*(\d{1,2})$/i, build: (_t, m) => ({ action: "measure.log", args: { name: "mood", value: Number(m[1]), note: `${m[1]}/${m[2]}` } }) },
+  { test: /^(?:my\s+)?mood\s*:\s*([a-z][a-z ,'-]{1,60})$/i, build: (_t, m) => ({ action: "measure.log", args: { name: "mood", note: m[1].trim() } }) },
+  { test: /^(?:my\s+)?(?:bp|blood pressure)(?:\s+(?:is|was|today))?\s*:?\s*(\d{2,3})\s*(?:\/|over)\s*(\d{2,3})$/i, build: (_t, m) => ({ action: "measure.log", args: { name: "blood pressure", value: Number(m[1]), note: `${m[1]}/${m[2]}`, unit: "mmHg" } }) },
+  { test: /^(?:i\s+)?(?:walked\s+|did\s+)?(\d{1,3}(?:,\d{3})+|\d{3,6}|\d+(?:\.\d+)?k)\s+steps(?:\s+today)?$|^steps:?\s*(\d[\d,]*)$/i,
+    build: (_t, m) => { const raw = (m[1] ?? m[2]).replace(/,/g, ""); return { action: "measure.log", args: { name: "steps", value: /k$/i.test(raw) ? Number(raw.slice(0, -1)) * 1000 : Number(raw), unit: "steps" } }; } },
+  { test: /^(?:i\s+)?(bench(?:ed)?|bench press(?:ed)?|squat(?:ted)?|dead ?lift(?:ed)?|ohp|overhead pressed|pressed)\s+(\d+(?:\.\d+)?)\s*(kg|kgs|lbs?)?(?:\s*(?:x|for|×)\s*(\d+)(?:\s*reps?)?)?(?:\s*(?:x|for|×)\s*(\d+)\s*sets?)?$/i,
+    build: (_t, m) => ({ action: "measure.log", args: { name: m[1], value: Number(m[2]), unit: m[3] ?? "kg", ...(m[4] ? { note: `x${m[4]}${m[5] ? `, ${m[5]} sets` : ""}` } : {}) } }) },
+  { test: /^(?:i\s+)?(?:did|done|finished)\s+my\s+((?:morning |night |evening )?(?:skin ?care|hair ?care|face|beard|wash day|nail|self[- ]care)(?:\s+routine)?|[a-z]+\s+routine)(?:\s+(today|this morning|last night))?$/i,
+    build: (_t, m) => ({ action: "measure.log", args: { name: m[1].toLowerCase().replace(/\s+routine$/, "").replace(/skin ?care/, "skincare").replace(/hair ?care/, "haircare") + " routine", ...(m[2] ? { when: m[2] } : {}) } }) },
+  { test: new RegExp(`^(?:how(?:'s| is| has)|show(?: me)?|what(?:'s| is))\\s+my\\s+(${MEASURE_NAMES})(?:\\s+(?:been|going|looking))?(?:\\s+(this week|this month|lately|recently|over the last (\\d+) days))?$`, "i"),
+    build: (_t, m) => ({ action: "measure.show", args: { name: m[1], ...(m[2] ? { days: m[3] ? Number(m[3]) : /month/i.test(m[2]) ? 30 : 7 } : {}) } }) },
+  { test: new RegExp(`^(?:my\\s+)?(${MEASURE_NAMES})\\s+(this week|this month|lately|recently|over the last (\\d+) days)$`, "i"),
+    build: (_t, m) => ({ action: "measure.show", args: { name: m[1], days: m[3] ? Number(m[3]) : /month/i.test(m[2]) ? 30 : 7 } }) },
+  { test: new RegExp(`^(?:delete|clear|wipe|erase)\\s+(?:all\\s+)?(?:of\\s+)?my\\s+(${MEASURE_NAMES})\\s+(?:entries|data|history|logs?|records)$`, "i"), build: (_t, m) => ({ action: "measure.forget", args: { name: m[1] } }) },
+  { test: /^(?:what\s+am\s+i\s+tracking|what\s+do\s+you\s+track\s+for\s+me|(?:my|show my)\s+(?:measures|trackers|stats))$/i, build: () => ({ action: "measure.list", args: {} }) },
+
   // ---- memory / meta ----
   { test: /^(?:what do you (?:know|remember) about me|what have you got on me|show (?:my )?memory)/i, build: () => ({ action: "memory.list", args: {} }) },
   { test: /^(?:remember|note that|keep in mind|don'?t forget that)\s+(?!to\b)(.+)/i, build: (_t, m) => ({ action: "memory.remember", args: { fact: m[1] } }) },

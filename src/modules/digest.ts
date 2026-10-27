@@ -52,6 +52,15 @@ export async function buildDigest(db: Db, user: User, now: Date): Promise<string
   if (meds.length) side.push(`Meds: ${meds.map((m: any) => `${m.name} at ${m.times.join(" and ")}`).join(", ")}.`);
   if (assignments.length) side.push(`Due soon: ${assignments.map((a: any) => `${a.title} in ${humanDelta(now, a.due_at)}`).join(", ")}.`);
   if (hacks.length) side.push(`Hackathon deadlines: ${hacks.map((h: any) => `${h.title} in ${humanDelta(now, h.deadline)}`).join(", ")}.`);
+  // Cycle: one line, only for the person who tracks it, and only if they haven't turned it off.
+  if ((user.prefs?.cycle as any)?.inBrief !== false) {
+    const { cycleRows, cyclePicture, cyclePrefs } = await import("./cycle.js");
+    const pic = cyclePicture(await cycleRows(db, user.id), cyclePrefs(user), DateTime.fromJSDate(now).setZone(user.tz).toISODate()!);
+    if (pic.tracking && pic.nextStart && pic.day != null) {
+      const next = DateTime.fromISO(pic.nextStart).toFormat("ccc d LLL");
+      side.push(pic.inPeriod ? `Cycle: day ${pic.day}, on your period.` : pic.lateBy > 0 ? `Cycle: day ${pic.day}, period about ${pic.lateBy} day${pic.lateBy === 1 ? "" : "s"} later than expected.` : `Cycle: day ${pic.day}, next period around ${next}.`);
+    }
+  }
   if (tripDays !== null && !lead.includes(trips[0].destination)) side.push(`${trips[0].destination.replace(/\b[a-z]/g, (c: string) => c.toUpperCase())} in ${tripDays} day${tripDays === 1 ? "" : "s"}.`);
   if (side.length) lines.push("", ...side);
 

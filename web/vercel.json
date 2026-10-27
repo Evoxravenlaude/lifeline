@@ -2,8 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://lifeline-production.up.railway.app/api/:path*" },
-    { "source": "/auth/:path*", "destination": "https://lifeline-production.up.railway.app/auth/:path*" }
+    { "source": "/api/:path*", "destination": "https://YOUR-RAILWAY-DOMAIN.up.railway.app/api/:path*" },
+    { "source": "/auth/:path*", "destination": "https://YOUR-RAILWAY-DOMAIN.up.railway.app/auth/:path*" }
   ],
   "headers": [
     { "source": "/(.*)", "headers": [

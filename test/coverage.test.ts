@@ -9,6 +9,16 @@ const parse = (s: string) => parseByRules(s) ?? parseLoose(s, NOW);
 
 /** One ordinary sentence per action. If an action is added without a sentence here, this test fails. */
 const SENTENCES: Record<string, string[]> = {
+  "cycle.start": ["my period started today", "my period started yesterday", "started my period", "my period started on monday"],
+  "cycle.end": ["my period ended", "period's over", "my period ended yesterday"],
+  "cycle.log": ["cramps today", "heavy flow", "spotting", "headache and bloating", "took my pill", "took a pregnancy test: negative"],
+  "cycle.status": ["when is my next period", "where am I in my cycle", "am I late", "fertile window"],
+  "cycle.settings": ["my cycle is usually 30 days", "periods last 6 days", "stop period reminders", "don't put my cycle in the brief"],
+  "cycle.forget": ["forget my cycle data", "delete my period history"],
+  "measure.log": ["weight 72kg", "I weigh 72.4 kg", "slept 7 hours", "slept 6h30", "drank 2 litres of water", "8 glasses of water", "mood 4/5", "mood: tired", "bp 120/80", "10000 steps", "benched 80kg x5", "did my skincare routine"],
+  "measure.show": ["how's my weight", "my sleep this week", "water this month"],
+  "measure.list": ["what am I tracking"],
+  "measure.forget": ["delete my weight entries"],
   "reminder.create": ["can you remind me to call Ada tomorrow at 9am", "don't let me forget rent on the 1st", "ping me about the standup in 20 minutes"],
   "reminder.list": ["what are my reminders", "reminders"],
   "reminder.delete": ["cancel the reminder about rent", "delete reminder 3"],

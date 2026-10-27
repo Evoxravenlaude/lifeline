@@ -7,7 +7,7 @@ import { dispatch } from "./core/dispatch.js";
 import { getUserById } from "./core/handler.js";
 import { createBot } from "./telegram/bot.js";
 import { startWeb } from "./web/server.js";
-import { registerSms } from "./channels/sms.js";
+import { registerSms, smsProvider } from "./channels/sms.js";
 import { registerIMessage } from "./channels/imessage.js";
 import { startPumpfunWatcher } from "./modules/trading.js";
 import { ensurePriceJob } from "./modules/prices.js";
@@ -59,7 +59,7 @@ async function main() {
 
   log.info({
     allowed: config.allowedUserIds.length, model: providerName() ?? "rules-only", stt: Boolean(config.openaiKey),
-    sms: Boolean(config.twilioSid), imessage: config.imessageProvider || false, email: Boolean(config.smtpUrl), web: config.port,
+    sms: smsProvider() ?? false, imessage: config.imessageProvider || false, email: Boolean(config.smtpUrl), web: config.port,
   }, "lifeline starting");
   // During a redeploy the old container still polls for a few seconds and Telegram answers 409. Wait it out instead of crashing.
   for (let attempt = 1; bot; attempt++) {

@@ -9,6 +9,8 @@ import { allActions } from "../policy/registry.js";
 import type { Action } from "../policy/types.js";
 
 const CUES: Record<string, string[]> = {
+  cycle: ["period", "cycle", "menstrual", "fertile", "ovulat", "cramps", "spotting", "flow", "pms", "late", "pregnan", "bloating", "tampon", "pad"],
+  measure: ["weight", "weigh", "slept", "sleep", "water", "drank", "mood", "steps", "blood pressure", "bp", "bench", "squat", "deadlift", "kg", "hours", "tracking", "routine", "skincare", "heart rate"],
   reminder: ["remind", "forget", "nudge", "ping", "alarm", "later", "tonight", "tomorrow"],
   calendar: ["calendar", "schedule", "meeting", "call", "appointment", "event", "dinner", "lunch", "free", "busy", "week", "today", "tomorrow", "book"],
   medication: ["med", "meds", "pill", "pills", "tablet", "dose", "medicine", "medication", "vitamin", "prescription", "take", "taking"],

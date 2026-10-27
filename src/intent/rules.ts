@@ -42,14 +42,14 @@ const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   // habits / spend / notes / memory
   [/^track habit (.+?)(?:\s+(\d)x?(?:\/| per )week)?$/i, (m) => ({ action: "habit.add", args: { name: m[1], target_per_week: m[2] ? Number(m[2]) : undefined } })],
   [/^(?:done|finished) with (.+)$/i, (m) => ({ action: "list.done", args: { match: m[1] } })],
-  [/^(?:did|done)\s+(.+?)(\s+yesterday)?$/i, (m) => ({ action: "habit.checkin", args: { name: m[1], day: m[2] ? "yesterday" : "today" } })],
+  [/^(?:did|done)\s+(?!my\s+(?:[a-z]+\s+)?(?:skin ?care|hair ?care|face|beard|wash day|nail|self[- ]care|[a-z]+\s+routine)\b)(.+?)(\s+yesterday)?$/i, (m) => ({ action: "habit.checkin", args: { name: m[1], day: m[2] ? "yesterday" : "today" } })],
   [/^(?:my )?habits$/i, () => ({ action: "habit.list", args: {} })],
   [/^spent\s+([\d,.]+)\s*(naira|dollars?|pounds?|cfa|[a-z]{3})?\s*(?:on\s+)?(.+)?$/i, (m) => ({ action: "spend.log", args: { amount: Number(m[1].replace(/,/g, "")), currency: cur(m[2]), category: m[3]?.split(/\s+/)[0], note: m[3] } })],
   [/^(?:spend|spending|expenses)\s*(week|month)?$/i, (m) => ({ action: "spend.summary", args: { range: m[1]?.toLowerCase() } })],
   [/^note:?\s+(.+)$/i, (m) => ({ action: "note.add", args: { text: m[1] } })],
   [/^(?:find|search) notes?\s+(.+)$/i, (m) => ({ action: "note.search", args: { query: m[1] } })],
   [/^remember (?:that )?(.+)$/i, (m) => ({ action: "memory.remember", args: { fact: m[1] } })],
-  [/^forget (?:that |about )?(.+)$/i, (m) => ({ action: "memory.forget", args: { match: m[1] } })],
+  [/^forget (?!(?:all\s+)?(?:of\s+)?my\s+(?:cycle|period|menstrual)\s+(?:data|history|tracking|logs?)$)(?:that |about )?(.+)$/i, (m) => ({ action: "memory.forget", args: { match: m[1] } })],
 
   // hackathons
   [/^(?:hackathons?|find hackathons?|discover)(?:\s+(.+))?$/i, (m) => ({ action: "hackathon.discover", args: { tag: m[1] } })],

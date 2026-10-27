@@ -487,4 +487,38 @@ CREATE TABLE IF NOT EXISTS business_connections (
 );
 `,
   },
+  {
+    id: 4,
+    sql: `
+CREATE TABLE IF NOT EXISTS cycles (
+  id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL REFERENCES users(id),
+  started_on DATE NOT NULL,
+  ended_on DATE,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cycles_user ON cycles(user_id, started_on);
+
+CREATE TABLE IF NOT EXISTS cycle_logs (
+  id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL REFERENCES users(id),
+  day DATE NOT NULL,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cycle_logs_user ON cycle_logs(user_id, day);
+
+CREATE TABLE IF NOT EXISTS measures (
+  id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  value NUMERIC,
+  unit TEXT,
+  note TEXT,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS measures_user ON measures(user_id, name, at);
+`,
+  },
 ];

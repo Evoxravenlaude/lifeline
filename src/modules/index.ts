@@ -14,5 +14,7 @@ import "./launches.js";
 import "./bills.js";
 import "./scout.js";
 import "./extras.js";
+import "./cycle.js";
+import "./measures.js";
 import "../intent/persona.js";
 import "../pollers/hackathons.js";

@@ -20,6 +20,10 @@ for (const t of [
   "I'm entering the NEAR hackathon due nov 14", "I'm entering Colosseum Frontier due nov 30", "submitted NEAR",
   "I spent 4500 naira on data", "I spent 12000 naira on food", "I spent 3000 naira on transport", "I spent 20 usd on figma",
   "Ada's birthday is march 14", "did gym", "remember that I'm vegetarian",
+  "my period started on " + new Date(Date.now() - 62 * 864e5).toDateString(), "my period ended on " + new Date(Date.now() - 57 * 864e5).toDateString(),
+  "my period started on " + new Date(Date.now() - 33 * 864e5).toDateString(), "my period ended on " + new Date(Date.now() - 28 * 864e5).toDateString(),
+  "my period started on " + new Date(Date.now() - 4 * 864e5).toDateString(), "cramps and bloating today", "mood low",
+  "weight 72.8kg", "slept 6 hours", "drank 2 litres of water", "mood 3/5", "10000 steps",
 ]) await say(t);
 await db.query(`UPDATE memories SET confirmed=true WHERE user_id=$1`, [u0.id]);
 await db

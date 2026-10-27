@@ -139,6 +139,100 @@ describe("web app", () => {
   });
 });
 
+describe("SMS through an Android gateway", () => {
+  const saved = { ...config };
+  const app = () => createWeb(db, "lifeline_bot");
+  const SECRET = "test-signing-key";
+  const jwt = (secret = SECRET, claims: Record<string, unknown> = { iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 300 }) => {
+    const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const head = `${enc({ alg: "HS256", typ: "JWT" })}.${enc(claims)}`;
+    return `${head}.${createHmac("sha256", secret).update(head).digest("base64url")}`;
+  };
+  const httpsmsEvent = (contact: string, content: string) => JSON.stringify({ specversion: "1.0", type: "message.phone.received", id: "e1", source: "/v1/messages/receive", datacontenttype: "application/json", time: new Date().toISOString(), data: { message_id: "m1", user_id: "u1", owner: "+2348000000000", contact, timestamp: new Date().toISOString(), content, sim: "SIM1" } });
+  const sent: { url: string; body: any; headers: any }[] = [];
+  const realFetch = globalThis.fetch;
+  beforeAll(() => {
+    Object.assign(config, { smsProvider: "httpsms", smsGatewayKey: "gw-key", smsGatewayFrom: "+2348000000000", smsWebhookSecret: SECRET, smsDefaultCountry: "234" });
+    globalThis.fetch = (async (url: any, init: any) => {
+      const u = String(url);
+      if (/httpsms|textbee/.test(u)) { sent.push({ url: u, body: JSON.parse(init.body), headers: init.headers }); return new Response("{}", { status: 200, headers: { "content-type": "application/json" } }); }
+      return realFetch(url, init);
+    }) as typeof fetch;
+  });
+  afterAll(() => { Object.assign(config, saved); globalThis.fetch = realFetch; });
+
+  it("a signed text with a link code links the phone and the reply goes out through the gateway", async () => {
+    const u = await ensureUser(db, "telegram", "1501", "Ngozi");
+    const code = await createLinkCode(db, u.id);
+    sent.length = 0;
+    // the gateway reports the sender in local form; it must match the +234 identity
+    const r = await app().request("/webhooks/sms/httpsms", { method: "POST", body: httpsmsEvent("08031234567", `link ${code}`), headers: { "content-type": "application/json", authorization: `Bearer ${jwt()}`, "x-event-type": "message.phone.received" } });
+    expect(r.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toBe("https://api.httpsms.com/v1/messages/send");
+    expect(sent[0].headers["x-api-key"]).toBe("gw-key");
+    expect(sent[0].body).toMatchObject({ from: "+2348000000000", to: "+2348031234567" });
+    expect(sent[0].body.content).toMatch(/^Linked\. This is the same me, Ngozi/);
+    const linked = await db.one<{ user_id: number }>(`SELECT user_id FROM identities WHERE channel='sms' AND external_id='+2348031234567'`);
+    expect(linked?.user_id).toBe(u.id);
+    // and the next text runs through the brain as that person
+    sent.length = 0;
+    await app().request("/webhooks/sms/httpsms", { method: "POST", body: httpsmsEvent("+2348031234567", "I need to buy bread"), headers: { "content-type": "application/json", authorization: `Bearer ${jwt()}` } });
+    expect(sent[0].body.content).toMatch(/bread/i);
+  });
+
+  it("refuses unsigned, wrongly signed and expired webhooks", async () => {
+    sent.length = 0;
+    const body = httpsmsEvent("+2348031234567", "hi");
+    expect((await app().request("/webhooks/sms/httpsms", { method: "POST", body, headers: { "content-type": "application/json" } })).status).toBe(403);
+    expect((await app().request("/webhooks/sms/httpsms", { method: "POST", body, headers: { authorization: `Bearer ${jwt("wrong-key")}` } })).status).toBe(403);
+    expect((await app().request("/webhooks/sms/httpsms", { method: "POST", body, headers: { authorization: `Bearer ${jwt(SECRET, { exp: Math.floor(Date.now() / 1000) - 3600 })}` } })).status).toBe(403);
+    expect((await app().request("/webhooks/sms/textbee", { method: "POST", body: JSON.stringify({ sender: "+2348031234567", message: "hi" }) })).status).toBe(403);
+    expect((await app().request("/webhooks/sms/nope", { method: "POST", body: "{}" })).status).toBe(404);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("ignores texts from the gateway's own number and events that aren't incoming texts", async () => {
+    sent.length = 0;
+    const own = await app().request("/webhooks/sms/httpsms", { method: "POST", body: httpsmsEvent("+2348000000000", "hello"), headers: { authorization: `Bearer ${jwt()}` } });
+    expect((await own.json()).ignored).toBe("own number");
+    const other = JSON.stringify({ type: "message.phone.sent", data: { contact: "+2348031234567", content: "x" } });
+    expect((await (await app().request("/webhooks/sms/httpsms", { method: "POST", body: other, headers: { authorization: `Bearer ${jwt()}` } })).json()).ignored).toBe(true);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("TextBee: X-Signature over the body, reply through send-sms", async () => {
+    const u = await ensureUser(db, "telegram", "1502", "Ama");
+    const code = await createLinkCode(db, u.id);
+    sent.length = 0;
+    const raw = JSON.stringify({ smsId: "s1", sender: "+24106123456", message: `link ${code}`, receivedAt: new Date().toISOString(), deviceId: "dev1", webhookEvent: "MESSAGE_RECEIVED" });
+    const sig = createHmac("sha256", SECRET).update(raw).digest("hex");
+    const r = await app().request("/webhooks/sms/textbee", { method: "POST", body: raw, headers: { "content-type": "application/json", "x-signature": sig } });
+    expect(r.status).toBe(200);
+    expect(sent[0].url).toBe("https://api.textbee.dev/api/v1/gateway/send-sms");
+    expect(sent[0].body.recipients).toEqual(["+24106123456"]); // Gabon number kept as given
+    expect(sent[0].body.message).toMatch(/^Linked/);
+  });
+
+  it("normalises local numbers and leaves international ones alone", async () => {
+    const { normalisePhone } = await import("../src/channels/sms.js");
+    expect(normalisePhone("0803 123 4567")).toBe("+2348031234567");
+    expect(normalisePhone("2348031234567")).toBe("+2348031234567");
+    expect(normalisePhone("+241 06 12 34 56")).toBe("+24106123456");
+    expect(normalisePhone("0024106123456")).toBe("+24106123456");
+  });
+
+  it("Twilio is unchanged: settings expose the number to text", async () => {
+    Object.assign(config, { smsNumber: "+234 800 000 0000" });
+    const u = await ensureUser(db, "telegram", "1503", "Kemi");
+    const code = await createLinkCode(db, u.id);
+    const r = await app().request("/auth/link", { method: "POST", body: JSON.stringify({ code }), headers: { "content-type": "application/json" } });
+    const cookie = r.headers.get("set-cookie")!.split(";")[0];
+    expect((await (await app().request("/api/settings", { headers: { cookie } })).json()).smsNumber).toBe("+234 800 000 0000");
+    expect((await app().request("/webhooks/twilio", { method: "POST", body: new URLSearchParams({ From: "+1", Body: "hi" }) })).status).toBe(403);
+  });
+});
+
 describe("extras + scout", () => {
   it("lists, dates and rule parsing", async () => {
     const u = await ensureUser(db, "telegram", "1005", "Ex");
@@ -217,7 +311,7 @@ describe("load", () => {
 describe("web static + telegram html", () => {
   it("serves the app shell, styles, scripts and new endpoints", async () => {
     const a = createWeb(db, "lifeline_bot");
-    for (const p of ["/", "/styles.css", "/app.js", "/mascot.js", "/path.js", "/icon.svg", "/manifest.webmanifest", "/fonts/fraunces-latin-full-normal.woff2"]) expect((await a.request(p)).status, p).toBe(200);
+    for (const p of ["/", "/styles.css", "/app.js", "/mascot.js", "/path.js", "/icon.svg", "/manifest.webmanifest", "/fonts/eb-garamond-latin-wght-normal.woff2"]) expect((await a.request(p)).status, p).toBe(200);
     const html = await (await a.request("/")).text();
     expect(html).toContain('data-palette="manor"');
     expect(html).toContain("mascot.js");

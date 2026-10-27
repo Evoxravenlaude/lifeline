@@ -153,14 +153,14 @@ window.Path = (function () {
     el("path", { d: laneD, fill: "none", stroke: L.edge, "stroke-width": 22, "stroke-linecap": "round" }, svg);
     const lane = el("path", { d: laneD, fill: "none", stroke: L.lane, "stroke-width": 17, "stroke-linecap": "round" }, svg);
     const len = lane.getTotalLength();
-    const at = (min) => { const t = Math.max(0, Math.min(1, (min - START) / (END - START))); return lane.getPointAtLength(0.04 * len + t * 0.92 * len); };
+    const at = (min) => { const t = Math.max(0, Math.min(1, (min - START) / (END - START))); return lane.getPointAtLength(0.04 * len + t * 0.88 * len); };
 
     // quiet hours: lamps off
     if (o.quiet && o.quiet[0] != null) {
       const qs = o.quiet[0] * 60, qe = o.quiet[1] * 60;
       const from = qs > qe ? qs : qs, to = qs > qe ? END : qe;
       if (to > from && from < END) {
-        const a = 0.04 * len + Math.max(0, (from - START) / (END - START)) * 0.92 * len, b = 0.04 * len + Math.min(1, (to - START) / (END - START)) * 0.92 * len;
+        const a = 0.04 * len + Math.max(0, (from - START) / (END - START)) * 0.88 * len, b = 0.04 * len + Math.min(1, (to - START) / (END - START)) * 0.88 * len;
         el("path", { d: laneD, fill: "none", stroke: "#1b1f2a", "stroke-opacity": .1 + (1 - sky.light) * .1, "stroke-width": 17, "stroke-dasharray": `0 ${a} ${b - a} ${len}` }, svg);
       }
     }
@@ -208,7 +208,7 @@ window.Path = (function () {
       el("rect", { x: -w / 2, y: -12, width: w, height: 22, rx: 5, fill: "var(--panel)", stroke: "var(--ink)", "stroke-width": 1.4 }, sign);
       el("path", { d: "M-4 10 L0 15 L4 10 Z", fill: "var(--panel)", stroke: "var(--ink)", "stroke-width": 1.4, "stroke-linejoin": "round" }, sign);
       el("rect", { x: -3.5, y: 8.5, width: 7, height: 2.5, fill: "var(--panel)" }, sign);
-      const t = el("text", { x: 0, y: 4, "text-anchor": "middle", "font-family": "Hanken Grotesk, system-ui, sans-serif", "font-size": 12.5, "font-weight": 700, fill: "var(--ink)" }, sign);
+      const t = el("text", { x: 0, y: 4, "text-anchor": "middle", "font-family": "EB Garamond, Georgia, serif", "font-size": 14, "font-weight": 700, "font-feature-settings": "'lnum' 1", fill: "var(--ink)" }, sign);
       t.textContent = label;
     }
 

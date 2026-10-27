@@ -39,6 +39,18 @@ export const config = {
   twilioSid: process.env.TWILIO_ACCOUNT_SID ?? "",
   twilioToken: process.env.TWILIO_AUTH_TOKEN ?? "",
   twilioFrom: process.env.TWILIO_FROM ?? "",
+  /** Which SMS route is live. Empty: Twilio if its vars are set, else an Android gateway if its key is set, else none. See docs/SMS.md. */
+  smsProvider: (process.env.SMS_PROVIDER ?? "").toLowerCase() as "" | "twilio" | "httpsms" | "textbee",
+  /** API key from the Android gateway's dashboard (httpSMS: Settings, API key; TextBee: Dashboard, API keys). */
+  smsGatewayKey: process.env.SMS_GATEWAY_API_KEY ?? "",
+  /** httpSMS: the gateway phone's own number in E.164 (+234...), used as "from". TextBee: the device id. */
+  smsGatewayFrom: process.env.SMS_GATEWAY_FROM ?? "",
+  /** The signing key/secret you set on the gateway's webhook; unsigned or wrongly signed webhooks are refused. */
+  smsWebhookSecret: process.env.SMS_WEBHOOK_SECRET ?? "",
+  /** The number people text, as you'd write it for a friend: +234 801 234 5678. Shown on the web app. */
+  smsNumber: process.env.SMS_NUMBER ?? "",
+  /** Country code assumed for local numbers like 0801...: 234 Nigeria by default. */
+  smsDefaultCountry: (process.env.SMS_DEFAULT_COUNTRY_CODE ?? "234").replace(/\D/g, ""),
   imessageProvider: (process.env.IMESSAGE_PROVIDER ?? "") as "" | "bluebubbles" | "sendblue",
   bluebubblesUrl: (process.env.BLUEBUBBLES_URL ?? "").replace(/\/$/, ""),
   bluebubblesPassword: process.env.BLUEBUBBLES_PASSWORD ?? "",

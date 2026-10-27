@@ -44,6 +44,21 @@ export const CAPABILITIES: Capability[] = [
     limits: "I store and remind. Anything about the medicine itself, a pharmacist or doctor checks.",
   },
   {
+    key: "cycle", name: "Periods and cycle",
+    cues: ["period", "periods", "cycle", "menstrual", "menstruation", "ovulation", "ovulating", "fertile", "pms", "cramps", "spotting", "flow", "late period", "pregnancy test", "contraceptive", "the pill"],
+    what: "I keep track of your periods and your cycle: when it started, how it went, how you felt, and when the next one is likely.",
+    say: ["my period started today", "cramps and bloating today", "when is my next period", "my cycle is usually 30 days"],
+    then: "A couple of days before the next one I give you a quiet heads-up, and the morning note shows where you are in your cycle. Say \"forget my cycle data\" any time and it's gone.",
+    limits: "My dates are estimates from your own history, not birth control. If your cycle is very irregular or something feels off, a doctor or nurse can look properly.",
+  },
+  {
+    key: "measures", name: "Tracking anything",
+    cues: ["weight", "weigh", "slept", "sleep", "water", "glasses", "mood", "steps", "blood pressure", "bp", "skincare", "routine", "benched", "lift", "track my", "how's my", "log my", "calories"],
+    what: "I keep a running record of anything you measure: weight, sleep, water, mood, steps, blood pressure, lifts, skincare, whatever matters to you.",
+    say: ["slept 7 hours", "weight 72kg", "mood 4/5", "how's my sleep this week"],
+    then: "Ask for any of them by week or month and I tell you the average, the high, the low and which way it's moving.",
+  },
+  {
     key: "classes", name: "Classes and assignments",
     cues: ["class", "classes", "lecture", "assignment", "homework", "due", "coursework", "exam", "timetable", "school", "uni", "course"],
     what: "I keep your timetable and your due dates, and I warn you before both.",
@@ -94,46 +109,46 @@ export const CAPABILITIES: Capability[] = [
     then: "Facts I pick up on my own sit unconfirmed until you keep or drop them on Sunday evenings. Anything about health or money I never assume.",
   },
   {
-    key: "hackathons", name: "Hackathons",
+    key: "hackathons", name: "Hackathons and competitions",
     cues: ["hackathon", "hackathons", "bounty", "bounties", "colosseum", "ethglobal", "devpost", "superteam", "dorahacks", "devfolio", "submission", "ledger", "prize", "interests"],
-    what: "I watch the hackathon sources, rank what's open against your interests, and track what you've entered through to payout.",
+    what: "If you build things, I watch hackathon and grant sources, rank what's open against your interests, and track what you've entered through to the prize.",
     say: ["any hackathons for ai this month", "interests: payments, base, ai agents", "I'm entering the NEAR hackathon due nov 14", "submitted NEAR", "ledger"],
     then: "New ones that fit arrive in your brief with a plain odds score. Entries get deadline nudges, and I chase unpaid prizes until they land.",
   },
   {
-    key: "scout", name: "Scout",
+    key: "scout", name: "Scout: companies and people",
     cues: ["scout", "founders", "founder", "who's building", "who is building", "startups", "projects in", "partnership", "partnerships", "outreach", "intro", "dm", "find people", "niche"],
-    what: "I find new and upcoming projects in a niche and the people behind them, with their socials, and draft the first message.",
-    say: ["who's building payments on base", "scout ai agent startups to partner with", "draft outreach to Perpz about an integration", "watch devtools on ethereum"],
-    then: "I pull from GitHub, launch feeds, token lists and the open web, then give you names, links and handles. A watch keeps feeding your brief.",
+    what: "Looking for clients, partners, a job or people to learn from? I find new and growing companies in any field and the people behind them, with their public links, and draft the first message.",
+    say: ["who's building fintech in Lagos", "find design studios in Accra to partner with", "scout ai startups hiring designers", "draft a message to Paystack about an internship"],
+    then: "I search the open web, GitHub, launch sites and company lists, then give you names, links and handles. Say \"keep watching\" and new ones land in your morning note.",
     limits: "I draft; you send. I don't post or DM from your accounts.",
   },
   {
-    key: "markets", name: "Prices and wallets",
+    key: "markets", name: "Crypto prices and wallets",
     cues: ["price", "prices", "btc", "eth", "sol", "token", "coin", "above", "below", "portfolio", "wallet", "balance", "holdings", "market"],
-    what: "I quote prices, watch for levels you set, and keep an eye on wallets you give me.",
+    what: "If you hold crypto, I quote prices, ring you at levels you set, and keep an eye on public wallet addresses you give me.",
     say: ["what's eth right now", "tell me when btc goes above 100k", "watch wallet 0xabc... on base", "portfolio"],
     then: "Level alerts ring once and reset. Wallet watches tell you about inflows and outflows.",
   },
   {
     key: "trading", name: "Copy-trading, shadow only",
     cues: ["copy", "copytrade", "copy-trade", "follow trader", "polymarket", "pump.fun", "pumpfun", "launchpad", "trader", "shadow"],
-    what: "I follow traders you name on Polymarket or pump.fun and show you what you would have made or lost, without placing anything.",
+    what: "If you trade, I follow traders you name on Polymarket or pump.fun and show you what copying them would have made or lost, without placing anything.",
     say: ["follow 0xabc... on polymarket max 10 per trade 50 a day", "shadow report", "stop following 0xabc"],
     then: "Every trade they make shows up as a line in your shadow ledger with the paper result.",
     limits: "Nothing is ever executed. This is a mirror, not a hand on the wheel.",
   },
   {
-    key: "jobs", name: "Jobs and launches",
+    key: "jobs", name: "Jobs",
     cues: ["job", "jobs", "hiring", "role", "roles", "opening", "greenhouse", "lever", "ashby", "launch", "launches", "launching", "show hn", "new repos"],
-    what: "I watch job boards for roles that fit and tell you what's launching in your areas.",
-    say: ["watch jobs at lever dorahacks for growth", "what's launching", "stop watching dorahacks jobs"],
+    what: "I watch company job boards for roles that fit you and tell you what's new, in your morning note rather than as pings.",
+    say: ["watch jobs at stripe for product design", "watch jobs at flutterwave for marketing", "what jobs did you find"],
     then: "New roles and launches land in your brief, not as separate pings.",
   },
   {
     key: "bills", name: "Bills and airtime",
     cues: ["bill", "bills", "airtime", "top up", "topup", "recharge", "data bundle", "electricity", "dstv", "pay for"],
-    what: "I pay Nigerian billers and airtime through Flutterwave, after you say yes to the exact amount.",
+    what: "In Nigeria I can buy airtime and data and pay billers like electricity and TV through Flutterwave, after you say yes to the exact amount.",
     say: ["which billers do airtime", "pay 2000 airtime to 0801 234 5678"],
     then: "I echo the amount, the biller and the number, and wait ten minutes for your yes. Nothing moves without it.",
     limits: "Needs a Flutterwave key on the server, and the number must be one you've confirmed before.",
@@ -183,9 +198,25 @@ const ABOUT_YOU = /\b(?:what (?:can|do|else can) (?:you|u) do|what (?:are|r) (?:
 /** Split a message into sentences, so "I'm good. What do you do?" is read as two things. */
 export const sentences = (t: string) => t.split(/(?<=[.!?])\s+|\s*\n+\s*/).map((x) => x.trim()).filter(Boolean);
 
+const WHAT_TRACK = /\b(?:what (?:can|do|else can) (?:you|u|i) track|what (?:things )?(?:can|do) (?:you|u) (?:keep track of|monitor|log)|things (?:i|you) can track|what can i log)\b/i;
+
+/** "What can you track?": everything with a record, for everybody. */
+export function trackAnswer(): string {
+  return [
+    "Anything you'd keep a record of. The common ones:",
+    "Body: sleep, water, weight, mood, steps, blood pressure, lifts, skincare. Say \"slept 7 hours\" or \"weight 72kg\".",
+    "Periods and your cycle: when it starts and ends, cramps, flow, mood, and when the next one is likely. Say \"my period started today\".",
+    "Medication: every dose, with Taken and Skip. Say \"I take vitamin D at 8am and 8pm\".",
+    "Habits: gym, reading, prayer, practice, anything you want a streak for. Say \"did gym\".",
+    "Money: what you spend and on what. Say \"I spent 2000 naira on lunch\".",
+    "Ask \"how's my sleep this week\" or \"when is my next period\" any time and I'll show you where things stand.",
+  ].join("\n");
+}
+
 /** True when the message asks about the bot's abilities rather than asking it to do something. */
 export function isCapabilityQuestion(text: string): boolean {
   const all = text.trim();
+  if (WHAT_TRACK.test(all)) return true;
   if (ABOUT_YOU.test(all)) return true;
   return sentences(all).some((t) => {
     if (OVERVIEW.test(t)) return true;
@@ -211,15 +242,16 @@ export function explain(c: Capability): string {
 
 /** The short answer to "who are you". */
 export function intro(): string {
-  return `I'm lifeline, and the tortoise is Pip. I keep your day and your deadlines so they don't have to live in your head: reminders, calendar, medication, trips, lists, hackathons, the people behind new projects, prices. Ask "what can you do" for the long version, or just tell me something to keep.`;
+  return `I'm lifeline, and the tortoise is Pip. I'm an assistant for everyday life: I remember what you tell me and bring it back at the right time. Reminders, your calendar, lists, medication, your cycle, trips, spending, birthdays, and anything else you'd rather not carry in your head. Ask "what can you do" for the long version, or just tell me something to keep.`;
 }
 
 export function overview(name?: string | null): string {
   const first = name ? name.split(" ")[0] : null;
   return [
-    `${first ? `${first}, here's` : "Here's"} what I'm for. I keep your day: reminders, calendar, medication, classes, trips, lists, habits, spending, and the dates that matter. I keep the work side too: hackathons ranked to your interests and tracked to payout, new projects and the founders behind them, prices and wallets, jobs and launches.`,
-    `You don't need commands. Say it the way you'd say it to a person: "remind me to call Ada tomorrow at 9", "I spent 4500 naira on data", "who's building payments on base".`,
-    `Anything that moves money, deletes, or reaches someone else waits for your yes, and you can undo most things for five minutes. Ask "can you do X" about anything and I'll tell you exactly how.`,
+    `${first ? `${first}, here's` : "Here's"} what I'm for. I keep your day: reminders, your calendar, lists, birthdays, classes and trips. I look after the body side too: medication, periods and your cycle, sleep, water, weight, mood, habits, anything you want to track. And the money side: what you spend, what's due, and bills or airtime when you say yes.`,
+    `If you work on things, I can do more: find jobs and companies in your field and the people behind them, watch hackathons and grants, keep crypto prices and wallets in view. None of that gets in the way if it's not for you.`,
+    `You don't need commands. Say it the way you'd say it to a friend: "remind me to call mum on Sunday at 5", "my period started today", "I spent 4500 naira on lunch", "slept 6 hours".`,
+    `Anything that moves money, deletes, or reaches someone else waits for your yes, and you can undo most things for five minutes.`,
   ].join("\n\n");
 }
 
@@ -227,6 +259,7 @@ export function overview(name?: string | null): string {
 export function answerCapability(text: string, name?: string | null): string | null {
   const t = text.trim();
   const lead = /^(?:i(?:'m| am) (?:good|fine|great|okay|ok|well|alright)|(?:all )?good|fine|not bad)\b/i.test(t) ? "Glad to hear it. " : "";
+  if (WHAT_TRACK.test(t)) return lead + trackAnswer();
   if (OVERVIEW.test(t) || ABOUT_YOU.test(t)) {
     // A specific area named alongside ("what do you do for trips") gets that card instead of the overview.
     const specific = matchCapabilities(t.replace(ABOUT_YOU, ""));
@@ -244,9 +277,11 @@ export function answerCapability(text: string, name?: string | null): string | n
 /** Full index for /help: short, grouped, nothing that looks like a manual. */
 export function helpIndex(): string {
   const groups: [string, string[]][] = [
-    ["Your day", ["reminders", "calendar", "medications", "classes", "trips", "lists", "dates", "habits", "money", "notes"]],
-    ["Your work", ["hackathons", "scout", "markets", "trading", "jobs", "bills"]],
-    ["Me", ["brief", "tools", "voice", "channels", "safety"]],
+    ["Your day", ["reminders", "calendar", "lists", "dates", "trips", "classes", "notes", "brief"]],
+    ["Body and health", ["medications", "cycle", "measures", "habits"]],
+    ["Money", ["money", "bills"]],
+    ["Work and growth", ["jobs", "scout", "hackathons", "markets", "trading"]],
+    ["Me", ["tools", "voice", "channels", "safety"]],
   ];
   const by = Object.fromEntries(CAPABILITIES.map((c) => [c.key, c]));
   const out: string[] = ["Ask me about any of these in plain words, or ask \"can you do X\" and I'll show you how.", ""];

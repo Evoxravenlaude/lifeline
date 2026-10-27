@@ -17,7 +17,7 @@ import { log } from "../core/log.js";
 import type { Db } from "../core/db.js";
 import { ensureUser, getUserById, handleCallback, handleMessage, redeemLinkCode, identitiesOf } from "../core/handler.js";
 import { registerSender } from "../core/dispatch.js";
-import { handleTextChannel, verifyTwilio } from "../channels/sms.js";
+import { handleGatewayWebhook, handleTextChannel, verifyTwilio } from "../channels/sms.js";
 import { parseInbound } from "../channels/imessage.js";
 import { buildDigest } from "../modules/digest.js";
 import { rankedForUser } from "../modules/hackathons.js";
@@ -122,7 +122,7 @@ export function createWeb(db: Db, botUsername: string) {
   /* ---- app data ---- */
   app.get("/api/me", async (c) => {
     const u = user(c);
-    return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey), pip: pipLine("return", u), quiet_start: u.quiet_start, quiet_end: u.quiet_end, palette: u.prefs.palette ?? null, mode: u.prefs.mode ?? null });
+    return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey), pip: pipLine("return", u), quiet_start: u.quiet_start, quiet_end: u.quiet_end, palette: u.prefs.palette ?? null, mode: u.prefs.mode ?? null, work: typeof u.prefs.work === "boolean" ? u.prefs.work : null, tags: Array.isArray(u.prefs.tags) ? u.prefs.tags : [] });
   });
   app.get("/api/capabilities", (c) => c.json({ capabilities: CAPABILITIES, pip: PIP_BIO }));
   app.get("/api/messages", async (c) => c.json((await db.query(`SELECT id, role, content, created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 60`, [user(c).id])).reverse()));
@@ -160,6 +160,38 @@ export function createWeb(db: Db, botUsername: string) {
     return c.json({ pending, reminders, events, meds, ledger, lists, memory, dates, classes_today, habits, spend: await spentToday(db, u.id), quiet: inQuietHours(now, u.tz, u.quiet_start, u.quiet_end) });
   });
   app.get("/api/digest", async (c) => c.json({ text: await buildDigest(db, user(c), new Date()) }));
+  /** Cycle and measures for the Health view. Only ever the signed-in person's own data. */
+  app.get("/api/health", async (c) => {
+    const u = user(c);
+    const { cycleRows, cyclePicture, cyclePrefs } = await import("../modules/cycle.js");
+    const today = DateTime.now().setZone(u.tz).toISODate()!;
+    const rows = await cycleRows(db, u.id);
+    const pic = cyclePicture(rows, cyclePrefs(u), today);
+    const cycle = pic.tracking
+      ? {
+          ...pic,
+          history: rows.slice(-6).map((r, i, a) => ({ start: r.started_on, end: r.ended_on, length: a[i + 1] ? Math.round((Date.parse(a[i + 1].started_on) - Date.parse(r.started_on)) / 86_400_000) : null })),
+          logs: await db.query(`SELECT to_char(day,'YYYY-MM-DD') AS day, kind, value FROM cycle_logs WHERE user_id=$1 AND day >= $2::date - 20 ORDER BY day DESC, id DESC`, [u.id, today]),
+          settings: cyclePrefs(u),
+        }
+      : { tracking: false };
+    const rowsM = await db.query<{ name: string; value: string | null; unit: string | null; note: string | null; at: string }>(
+      `SELECT name, value::text, unit, note, at FROM measures WHERE user_id=$1 AND at >= now() - interval '60 days' ORDER BY name, at`, [u.id]);
+    const byName = new Map<string, typeof rowsM>();
+    for (const r of rowsM) byName.set(r.name, [...(byName.get(r.name) ?? []), r]);
+    const weekAgo = Date.now() - 7 * 86_400_000;
+    const measures = [...byName.entries()].map(([name, rs]) => {
+      const last = rs[rs.length - 1];
+      const recent = rs.filter((r) => r.value != null && new Date(r.at).getTime() >= weekAgo).map((r) => Number(r.value));
+      return {
+        name, unit: rs.find((r) => r.unit)?.unit ?? null,
+        last: { value: last.value == null ? null : Number(last.value), at: last.at, note: last.note },
+        points: rs.filter((r) => r.value != null).map((r) => ({ at: r.at, value: Number(r.value) })),
+        avg7: recent.length ? Math.round((recent.reduce((s, v) => s + v, 0) / recent.length) * 10) / 10 : null,
+      };
+    });
+    return c.json({ cycle, measures });
+  });
   app.get("/api/hackathons", async (c) => {
     const u = user(c);
     const feed = await rankedForUser(db, u, new Date(), 12, { unseenOnly: false });
@@ -206,14 +238,16 @@ export function createWeb(db: Db, botUsername: string) {
       tz: u.tz, digest_hour: u.digest_hour, quiet_start: u.quiet_start, quiet_end: u.quiet_end, name: u.name, email: u.email ?? null,
       country: u.prefs.country ?? "", tags: u.prefs.tags ?? [], persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", personaCustom: u.prefs.personaCustom ?? "",
       personas: PERSONAS, identities: await identitiesOf(db, u.id), provider: providerName(), spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd,
+      smsNumber: config.smsNumber || null,
     });
   });
   app.patch("/api/settings", async (c) => {
     const u = user(c);
     const body = await c.req.json();
-    const look: Record<string, string> = {};
+    const look: Record<string, string | boolean> = {};
     if (typeof body.palette === "string" && /^(manor|claret|riviera|tobacco|ivory)$/.test(body.palette)) look.palette = body.palette;
     if (body.mode === "day" || body.mode === "night") look.mode = body.mode;
+    if (typeof body.work === "boolean") look.work = body.work; // show the work tools (hackathons, scout) in the web app's bar
     if (Object.keys(look).length) {
       await db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [u.id, JSON.stringify(look)]);
       return c.json({ ok: true, text: "Saved." });
@@ -234,6 +268,14 @@ export function createWeb(db: Db, botUsername: string) {
   app.get("/api/quip", pipRoute);
 
   /* ---- inbound webhooks ---- */
+  /** Android SMS gateways (httpSMS, TextBee): signed JSON in, reply sent back through the gateway's API. See docs/SMS.md. */
+  app.post("/webhooks/sms/:provider", async (c) => {
+    const raw = await c.req.text();
+    const r = await handleGatewayWebhook(db, c.req.param("provider"), raw, {
+      authorization: c.req.header("authorization"), "x-signature": c.req.header("x-signature"), "x-event-type": c.req.header("x-event-type"),
+    });
+    return c.json(r.body, r.status as 200);
+  });
   app.post("/webhooks/twilio", async (c) => {
     const form = Object.fromEntries((await c.req.formData()).entries()) as Record<string, string>;
     if (!verifyTwilio(`${config.publicUrl}/webhooks/twilio`, form, c.req.header("x-twilio-signature") ?? "")) return c.text("forbidden", 403);

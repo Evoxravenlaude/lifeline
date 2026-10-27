@@ -27,7 +27,7 @@ Five palettes, each with a day and a night setting. The palette changes the pain
 
 Kinds (the card plates), muted heritage pastels by day and deep versions by night: reminder mustard, event dusty blue, dose sage, class heather, trip tan, money eucalyptus, hackathon rose clay, scout lavender, list stone.
 
-**Type.** Fraunces (variable: optical size, softness, a little wonk) for the display and the voice of the product; Hanken Grotesk for everything you read and tap, with tabular figures for times. Self-hosted, no font CDN. Scale on a 1.25 ratio from 16px: 13 · 16 · 20 · 25 · 31 · 39 · 49, display up to 96 on wide screens.
+**Type.** The faces an old house prints with. Libre Caslon Display for what's engraved: headings and the wordmark (Caslon is the English printer's face of the 1700s). EB Garamond for everything read and tapped, at 18px because Garamond sits small; italic Garamond is the voice for your own words and Pip's lines. Old-style figures in prose, lining tabular figures for times, amounts and counts. Self-hosted, no font CDN. Scale on a 1.25 ratio: 14, 16, 20, 25, 31, 39, 49, display up to 96 on wide screens.
 
 **Shape.** Cards: 10px radius, 1.5px ink edge, 4px offset plate, no blur shadows anywhere. Buttons share the edge; the primary one is filled with the accent. Pills only for chips.
 

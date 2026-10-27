@@ -38,11 +38,11 @@ export function toHtml(text: string): string {
  */
 const OLD_TILES: Record<string, string> = { Today: "today", Hackathons: "any hackathons for me", Lists: "my lists", Money: "how much did I spend this week", Scout: "Scout", Pip: "Pip", "☼ Today": "today", "⚑ Hackathons": "any hackathons for me", "☐ Lists": "my lists", "¤ Money": "how much did I spend this week", "◎ Scout": "Scout", "🐢 Pip": "Pip" };
 /** Four ways in, under the welcome only. They scroll away with it. */
-const WAYS_IN = () => new InlineKeyboard().text("What's on today", "say:today").text("What can you do?", "say:what can you do").row().text("My lists", "say:my lists").text("Hackathons for me", "say:any hackathons for me");
+const WAYS_IN = () => new InlineKeyboard().text("What's on today", "say:today").text("What can you do?", "say:what can you do").row().text("My lists", "say:my lists").text("Things I can track", "say:what can you track");
 const COMMANDS = [
-  ["today", "Your day in one message"], ["what", "What I can do, in plain words"], ["lists", "Your lists"], ["trips", "Trips you're planning"],
-  ["hackathons", "Hackathons ranked for you"], ["scout", "Find projects and the people behind them"], ["money", "This week's spending"],
-  ["persona", "Change how I talk"], ["link", "Use me on the web, SMS or iMessage"], ["pending", "What's waiting on your yes"], ["undo", "Take back the last thing"], ["doctor", "Check that everything's connected"],
+  ["today", "Your day in one message"], ["what", "What I can do, in plain words"], ["lists", "Your lists"], ["cycle", "Your period and cycle"],
+  ["track", "Sleep, weight, water, mood and more"], ["money", "This week's spending"], ["trips", "Trips you're planning"],
+  ["jobs", "Jobs and companies in your field"], ["hackathons", "Hackathons and grants, if you build"], ["persona", "Change how I talk"], ["link", "Use me on the web, SMS or iMessage"], ["pending", "What's waiting on your yes"], ["undo", "Take back the last thing"], ["doctor", "Check that everything's connected"],
 ] as const;
 const TZ_CHOICES: [string, string][] = [["Lagos", "Africa/Lagos"], ["Libreville", "Africa/Libreville"], ["Accra", "Africa/Accra"], ["Nairobi", "Africa/Nairobi"], ["London", "Europe/London"], ["New York", "America/New_York"], ["Dubai", "Asia/Dubai"], ["Lisbon", "Europe/Lisbon"], ["Singapore", "Asia/Singapore"]];
 
@@ -112,8 +112,8 @@ export function createBot(db: Db): Bot {
       const k = new InlineKeyboard();
       TZ_CHOICES.forEach(([l, z], i) => { k.text(l, `ob:tz:${z}`); if (i % 3 === 2) k.row(); });
       await say(c, [
-        `${first ? `${first}, hello` : "Hello"}. I'm lifeline. I keep your day and your deadlines so they don't live in your head: reminders, calendar, medication, classes, trips, lists; hackathons ranked to your taste and chased to payout; new projects and the people behind them; prices and wallets.`,
-        `You talk to me the way you'd text a sharp friend. No commands to learn. Anything that moves money, deletes, or reaches someone else waits for your yes.`,
+        `${first ? `${first}, hello` : "Hello"}. I'm lifeline, an assistant for everyday life. I remember what you tell me and bring it back at the right time: reminders, your calendar, lists, medication, your period and cycle, sleep and anything else you track, trips, spending, birthdays.`,
+        `You talk to me the way you'd text a friend. No commands to learn. Anything that moves money, deletes, or reaches someone else waits for your yes.`,
         `One thing first: where are you? That sets your clock, so "tomorrow at 9" means your 9.`,
       ].join("\n\n"), { reply_markup: k });
       return;
@@ -153,7 +153,7 @@ export function createBot(db: Db): Bot {
     const u = await userOf(c);
     await say(c, `Model spend in the last day: $${(await spentToday(db, u.id)).toFixed(3)} of $${config.dailyModelBudgetUsd}.`);
   });
-  for (const [cmd, text] of [["pending", "pending"], ["undo", "undo"], ["memory", "what do you know about me"], ["audit", "/audit"], ["link", "link"], ["today", "today"], ["lists", "my lists"], ["trips", "trip"], ["hackathons", "any hackathons for me"], ["money", "how much did I spend this week"]] as const) {
+  for (const [cmd, text] of [["pending", "pending"], ["undo", "undo"], ["memory", "what do you know about me"], ["audit", "/audit"], ["link", "link"], ["today", "today"], ["lists", "my lists"], ["trips", "trip"], ["hackathons", "any hackathons for me"], ["money", "how much did I spend this week"], ["cycle", "where am I in my cycle"], ["track", "what am I tracking"], ["jobs", "what jobs did you find"]] as const) {
     bot.command(cmd, async (c) => send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram" })));
   }
 
@@ -209,8 +209,8 @@ export function createBot(db: Db): Bot {
         await db.query(`UPDATE users SET prefs = prefs || '{"onboarded":true}'::jsonb WHERE id=$1`, [u.id]);
         return say(c, [
           `${PERSONAS[value]?.label ?? value}. That's the whole setup.`,
-          `Try me with something real: "remind me to call Ada tomorrow at 9", "I'm going to Accra on the 20th", "who's building payments on base". If you want hackathons and launches ranked to your taste, tell me what you're into whenever, like "interests: ai, payments, base". Any chains, any themes.`,
-          `And if you ever wonder whether I can do something, just ask. "Can you track my meds?" gets a straight answer.`,
+          `Try me with something real: "remind me to call mum on Sunday at 5", "I need to buy rice and eggs", "my period started today", "slept 6 hours".`,
+          `If you ever wonder whether I can do something, just ask. "Can you track my meds?" gets a straight answer.`,
         ].join("\n\n"), { reply_markup: WAYS_IN() });
       }
       return;
