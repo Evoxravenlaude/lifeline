@@ -154,7 +154,7 @@ describe("tool selection keeps model calls small", () => {
     expect(chatFallback("can we talk about this later", true)).toMatch(/whenever you're ready|No rush/);
     expect(chatFallback("hey", false)).not.toContain("•");
     expect(chatFallback("what do you think about solana?", false)).toContain("/help");
-    expect(chatFallback("what do you think about solana?", true)).toContain("model call");
+    expect(chatFallback("what do you think about solana?", true)).toContain("think that one through");
   });
 });
 

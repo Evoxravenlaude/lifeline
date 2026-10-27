@@ -20,18 +20,12 @@ import { draftReply } from "../intent/model.js";
 import { polish, personaOf } from "../core/voice.js";
 import { pipLine } from "../core/pip.js";
 import { admit, circleSummary, FULL_MESSAGE, isOwner } from "../core/circle.js";
+import { copyButton, toPlain, toTelegramHtml } from "../core/format.js";
 import { answerWebLogin, webLoginExists } from "../core/weblogin.js";
 
 /** Telegram HTML: escape; bold the head line of a multi-line message so lists read at a glance; keep links clickable. */
-export function toHtml(text: string): string {
-  const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const lines = text.split("\n");
-  return lines.map((line, i) => {
-    const e = esc(line);
-    const isHead = (i === 0 && lines.length >= 3 && line.length < 70 && /[.:!?]$/.test(line)) || (/^[A-Z][^:]{1,40}:$/.test(line) && line.length < 44);
-    return isHead ? `<b>${e}</b>` : e;
-  }).join("\n");
-}
+/** Telegram HTML from the reply's markdown. Kept under this name for older callers. */
+export function toHtml(text: string): string { return toTelegramHtml(text); }
 
 /**
  * No persistent keyboard: it took a third of the chat to repeat what the Menu button does.
@@ -52,10 +46,13 @@ const TZ_CHOICES: [string, string][] = [["Lagos", "Africa/Lagos"], ["Libreville"
 
 export { getUserById } from "../core/handler.js";
 
+/** The reply's own buttons, plus a Copy button when the reply holds one thing worth copying (a code, an address, a drafted message). */
 function kb(r: Reply): InlineKeyboard | undefined {
-  if (!r.buttons?.length) return undefined;
+  const copy = copyButton(r.text);
+  if (!r.buttons?.length && !copy) return undefined;
   const k = new InlineKeyboard();
-  r.buttons.forEach((b, i) => { k.text(b.label, b.data); if (i % 2 === 1) k.row(); });
+  (r.buttons ?? []).forEach((b, i) => { k.text(b.label, b.data); if (i % 2 === 1) k.row(); });
+  if (copy) { if (r.buttons?.length) k.row(); k.copyText(copy.label, copy.text); }
   return k;
 }
 
@@ -67,7 +64,7 @@ export function createBot(db: Db): Bot {
     for (let i = 0; i < parts.length; i++) {
       const markup = i === parts.length - 1 ? kb(reply) : undefined;
       await bot.api.sendMessage(Number(externalId), toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } })
-        .catch(() => bot.api.sendMessage(Number(externalId), parts[i], { reply_markup: markup }));
+        .catch(() => bot.api.sendMessage(Number(externalId), toPlain(parts[i]), { reply_markup: markup }));
     }
   });
 
@@ -95,13 +92,13 @@ export function createBot(db: Db): Bot {
     const remove = r.buttons?.length ? undefined : await clearOld(c);
     for (let i = 0; i < parts.length; i++) {
       const markup = i === parts.length - 1 ? kb(r) ?? remove : undefined;
-      await c.reply(toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } }).catch(() => c.reply(parts[i], { reply_markup: markup }));
+      await c.reply(toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } }).catch(() => c.reply(toPlain(parts[i]), { reply_markup: markup }));
     }
   };
   const say = async (c: Context, text: string, extra: Record<string, unknown> = {}) => {
     const u = await userOf(c);
     const t = polish(text, { persona: personaOf(u.prefs) });
-    await c.reply(toHtml(t), { parse_mode: "HTML", link_preview_options: { is_disabled: true }, ...extra }).catch(() => c.reply(t, extra as any));
+    await c.reply(toHtml(t), { parse_mode: "HTML", link_preview_options: { is_disabled: true }, ...extra }).catch(() => c.reply(toPlain(t), extra as any));
   };
 
   bot.command("start", async (c) => {
@@ -242,7 +239,8 @@ export function createBot(db: Db): Bot {
       return send(c, await handleMessage(db, u, data.slice(4), { channel: "telegram" }));
     }
     const r = await handleCallback(db, u, data);
-    await c.answerCallbackQuery({ text: r.text.slice(0, 190) });
+    const short = toPlain(r.text);
+    await c.answerCallbackQuery({ text: short.length > 190 ? short.slice(0, 187).replace(/\s+\S*$/, "") + "…" : short });
     await c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
     if (r.text.length > 60 || r.buttons?.length) await send(c, r);
   });
@@ -263,7 +261,8 @@ export function createBot(db: Db): Bot {
     if (!owner || m.from?.id === owner.telegram_id) return; // owner's own outgoing message
     const draft = await draftReply(db, owner, `${m.from?.first_name ?? "Someone"}: ${m.text}`);
     if (!draft) return;
-    await bot.api.sendMessage(owner.telegram_id, `${m.from?.first_name ?? "Someone"} wrote: "${m.text.slice(0, 300)}"\n\nA reply you could send:\n${draft}`);
+    const md = `${m.from?.first_name ?? "Someone"} wrote: "${m.text.slice(0, 300)}"\n\nA reply you could send:\n\`\`\`\n${draft.replace(/\`\`\`/g, "")}\n\`\`\``;
+    await bot.api.sendMessage(owner.telegram_id, toTelegramHtml(md), { parse_mode: "HTML", reply_markup: kb({ text: md }) }).catch(() => bot.api.sendMessage(owner.telegram_id, toPlain(md)));
   });
 
   bot.catch((e) => log.error({ err: e.error }, "bot error"));

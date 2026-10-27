@@ -36,6 +36,10 @@ export const config = {
   port: Number(process.env.PORT ?? 3000),
   publicUrl: (process.env.PUBLIC_URL ?? "").replace(/\/$/, ""),
   /** Extra origins allowed to call /api and /auth with cookies (a Vercel-hosted web front that does NOT proxy through rewrites). Usually empty: web/vercel.json proxies instead. */
+  /** The website people open (the Vercel address). Falls back to the first web origin, then the server's own address. */
+  webUrl: (process.env.WEB_URL ?? "").replace(/\/$/, ""),
+  /** The phone number or Apple ID email people send iMessages to, when iMessage is set up. */
+  imessageAddress: process.env.IMESSAGE_ADDRESS ?? "",
   webOrigins: (process.env.WEB_ORIGINS ?? "").split(",").map((s) => s.trim().replace(/\/$/, "")).filter(Boolean),
   sessionSecret: process.env.SESSION_SECRET ?? "",
   twilioSid: process.env.TWILIO_ACCOUNT_SID ?? "",

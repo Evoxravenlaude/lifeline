@@ -95,7 +95,8 @@ const walletAdd = defineAction({
   async run(args, ctx) {
     if (/^[0-9a-f]{64}$/i.test(args.address) || args.address.split(" ").length >= 12) throw new Error("That looks like a private key or seed phrase, so I haven't kept it. I only take public addresses, and you should move whatever is on that one.");
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO wallets (user_id, chain, address, label) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id, chain, address) DO UPDATE SET label=EXCLUDED.label RETURNING id`, [ctx.user.id, args.chain, args.address, args.label ?? null]);
-    return { reply: `Watching ${args.label ?? args.address.slice(0, 8)} on ${args.chain}. Say "portfolio" any time for the balances.`, undo: { payload: { id: r!.id } } };
+    const chain = args.chain.charAt(0).toUpperCase() + args.chain.slice(1);
+    return { reply: `Watching ${args.label ? `${args.label} (\`${args.address}\`)` : `\`${args.address}\``} on ${chain}. Say "portfolio" any time for the balances.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM wallets WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);

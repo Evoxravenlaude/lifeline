@@ -15,7 +15,7 @@ async function fw(path: string, init: RequestInit = {}) {
   if (!config.flutterwaveKey) throw new Error("Bills aren't switched on for this server yet; it needs a Flutterwave key. Everything else still works.");
   const r = await fetch(`${config.flutterwaveBase}${path}`, { ...init, headers: { authorization: `Bearer ${config.flutterwaveKey}`, "content-type": "application/json", ...(init.headers ?? {}) } });
   const j: any = await r.json().catch(() => ({}));
-  if (!r.ok || j.status === "error") throw new Error(j.message ?? `Flutterwave ${r.status}`);
+  if (!r.ok || j.status === "error") throw new Error(j.message ? `Flutterwave turned that down: ${String(j.message).replace(/\.?$/, ".")}` : `Flutterwave ${r.status}`);
   return j;
 }
 

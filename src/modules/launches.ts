@@ -117,7 +117,7 @@ const contact = defineAction({
     if (p.twitter_username) ways.push(`@${p.twitter_username} on X`);
     ways.push(`GitHub ${p.html_url}`);
     lines.push(`Ways in: ${ways.join(", ")}.`);
-    lines.push("", "A first message you could send, edit it first:", `Hi ${p.name?.split(" ")[0] ?? p.login}, saw ${args.about ?? "your project"} on GitHub. I build on similar ground and had one concrete question: [your question]. Happy to share what we've learned if useful. [you]`);
+    lines.push("", "A first message you could send. Fill in the brackets first:", "```", `Hi ${p.name?.split(" ")[0] ?? p.login}, saw ${args.about ?? "your project"} on GitHub. I build on similar ground and had one concrete question: [your question]. Happy to share what we've learned if useful. [you]`, "```");
     lines.push("", "A public reply or the project's own inbox is the safe route in the UK, EU and Nigeria; a personal email needs their consent first.");
     return { reply: lines.join("\n") };
   },

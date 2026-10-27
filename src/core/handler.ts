@@ -9,6 +9,10 @@
  *   4. intent: rules, model, loose language, small talk
  * Every reply passes through the voice pass before it leaves.
  */
+import { log } from "./log.js";
+import { BROKE } from "./humanize.js";
+import { waysIn } from "./ways.js";
+import { toPlain } from "./format.js";
 import { randomBytes } from "node:crypto";
 import type { Db } from "./db.js";
 import { config } from "./config.js";
@@ -96,7 +100,17 @@ export function renderDecision(d: Decision): Reply {
 const YES = /^(?:yes|y|yes please|yep|yeah|yup|confirm|go ahead|go|do it|sure|ok go|okay go|send it|pay it)[.!]*$/i;
 const NO = /^(?:no|n|nope|nah|cancel|never ?mind|don'?t|stop|forget it|leave it)[.!]*$/i;
 
+/** Every message gets an answer in words, even when something underneath breaks. */
 export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date }): Promise<Reply> {
+  try {
+    return await answerMessage(db, user, text, opts);
+  } catch (e: any) {
+    log.error({ err: e?.message, user: user.id }, "message failed");
+    return { text: BROKE };
+  }
+}
+
+async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date }): Promise<Reply> {
   const now = opts.now ?? new Date();
   const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}` };
   const t = text.trim();
@@ -116,9 +130,16 @@ export async function handleMessage(db: Db, user: User, text: string, opts: { fo
     const row = await db.one<{ id: number }>(`SELECT id FROM undo_stack WHERE user_id=$1 AND NOT used ORDER BY id DESC LIMIT 1`, [user.id]);
     return finish(db, user, { text: row ? await undo(ctx, row.id) : "There's nothing to undo." });
   }
+  if (/^(?:pending|what'?s pending|what'?s waiting(?: on me)?|anything waiting)\??$/i.test(t)) {
+    const rows = await db.query<{ id: number; echo: string }>(`SELECT id, echo FROM pending_actions WHERE user_id=$1 AND resolved IS NULL AND expires_at > $2 ORDER BY id DESC LIMIT 5`, [user.id, now]);
+    if (!rows.length) return finish(db, user, { text: "Nothing is waiting on your yes." });
+    const [last, ...rest] = rows;
+    const more = rest.length ? `\n\nAlso waiting:\n${rest.map((r) => `- ${r.echo}`).join("\n")}` : "";
+    return finish(db, user, { text: `${last.echo}\n\nGo ahead?${more}`, buttons: [{ label: "Yes, go ahead", data: `confirm:${last.id}` }, { label: "No", data: `cancel:${last.id}` }] });
+  }
   if (/^link$/i.test(t)) {
     const code = await createLinkCode(db, user.id);
-    return finish(db, user, { text: `Your link code is ${code}. From the other place (the web app, SMS or iMessage) send "link ${code}" in the next fifteen minutes and it becomes the same me.` });
+    return finish(db, user, { text: `Your link code is \`${code}\`. It works for fifteen minutes.\n\n${waysIn(code)}\n\nOnce it's linked, everything you've told me is there too.` });
   }
 
   // 2. An open follow-up: read the message as the answer first.
@@ -186,6 +207,15 @@ async function finish(db: Db, user: User, r: Reply): Promise<Reply> {
 
 /** Button presses (Telegram callback_data, web button, or "1"/"2" on SMS). */
 export async function handleCallback(db: Db, user: User, data: string, now = new Date()): Promise<Reply> {
+  try {
+    return await answerButton(db, user, data, now);
+  } catch (e: any) {
+    log.error({ err: e?.message, user: user.id, data }, "button failed");
+    return { text: BROKE };
+  }
+}
+
+async function answerButton(db: Db, user: User, data: string, now: Date): Promise<Reply> {
   const ctx: Ctx = { db, user, now, sourceMessage: `[button ${data}]` };
   const [kind, a, b] = data.split(":");
   const say = (text: string, buttons?: Reply["buttons"]): Reply => ({ text: polish(text, { persona: personaOf(user.prefs) }), buttons });
@@ -211,6 +241,7 @@ export async function handleCallback(db: Db, user: User, data: string, now = new
 
 /** For text-only channels: map "1"/"2" replies to the last message's buttons. */
 export function buttonsAsText(r: Reply): string {
-  if (!r.buttons?.length) return r.text;
-  return `${r.text}\n${r.buttons.map((b, i) => `${i + 1}) ${b.label}`).join("  ")}`;
+  const text = toPlain(r.text);
+  if (!r.buttons?.length) return text;
+  return `${text}\n${r.buttons.map((b, i) => `${i + 1}) ${b.label}`).join("  ")}`;
 }

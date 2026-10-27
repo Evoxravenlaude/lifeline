@@ -42,7 +42,7 @@ export function smalltalk(text: string, prefs: Record<string, unknown> = {}, nam
 
 /** When nothing understood the message. Short, human, no command wall. */
 export function didNotCatch(modelDown: boolean): string {
-  if (modelDown) return pick(["I didn't catch that, and my chat brain is offline right now. Plain asks still work: reminders, lists, prices, hackathons. /doctor shows what's wrong.", "Chat is down on my side for the moment. I can still do the practical things if you say them straight. /help has examples."]);
+  if (modelDown) return pick(["I didn't catch that, and I can't hold a free conversation right now. Plain asks still work: a reminder, a list, something to track or spend. /doctor shows what's wrong.", "Conversation is down on my side for the moment. I can still do the practical things if you say them plainly. /help has examples."]);
   return pick(["I didn't catch that. Say it another way?", "Not sure what you'd like me to do with that. Try it plainly, or ask me \"can you ...\" and I'll tell you."]);
 }
 

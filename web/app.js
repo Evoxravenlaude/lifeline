@@ -7,12 +7,16 @@ window.App = (function () {
     try {
       const r = await fetch(p, { method: m || (b ? "POST" : "GET"), headers: { "content-type": "application/json" }, body: b ? JSON.stringify(b) : undefined, credentials: "same-origin" });
       const type = r.headers.get("content-type") || "";
-      if (!type.includes("application/json")) return { error: "unreachable", status: r.status };
+      if (!type.includes("application/json")) return { error: "unreachable", status: r.status, text: "I can't reach lifeline right now. It may be restarting; try again in a minute." };
       const j = await r.json();
-      if (!r.ok) return { error: j.error || "failed", status: r.status, ...j };
+      if (!r.ok) {
+        if (r.status === 401 && signedIn && !p.startsWith("/auth/")) { signedIn = false; setTimeout(() => { location.hash = ""; location.reload(); }, 2200); return { error: "signed out", status: 401, text: "You've been signed out on this device. Taking you to sign in again." }; }
+        return { status: r.status, ...j, error: j.error || "failed", text: j.text || "That didn't go through on my side. Try once more?" };
+      }
       return j;
-    } catch { return { error: "offline" }; }
+    } catch { return { error: "offline", text: "You look to be offline. Check your connection and try again." }; }
   };
+  let signedIn = false;
   /** The brain answers /api/public with its bot name. Anything else means this page can't reach it. */
   async function reachable() { const p = await api("/api/public"); return !p.error && typeof p.botUsername === "string"; }
   function cantReach() {
@@ -23,7 +27,50 @@ window.App = (function () {
     document.body.insertBefore(box, document.body.firstChild.nextSibling);
   }
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const linkify = (s) => esc(s).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  /* Replies come in a small markdown (see src/core/format.ts). Render it here so nobody sees a raw asterisk,
+     and make codes, addresses and drafted messages tap-to-copy. */
+  const ADDR = /\b0x[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\b|(?<![\w/.=?&#])(?=[1-9A-HJ-NP-Za-km-z]*\d)(?=[1-9A-HJ-NP-Za-km-z]*[A-Z])(?=[1-9A-HJ-NP-Za-km-z]*[a-z])[1-9A-HJ-NP-Za-km-z]{32,44}(?![\w/])/g;
+  const marks = (t, b, i) => t
+    .replace(/\*\*(?=\S)([^*\n]+?)(?<=\S)\*\*/g, (_, x) => b(x))
+    .replace(/(?<![\w])__(?=\S)([^_\n]+?)(?<=\S)__(?![\w])/g, (_, x) => b(x))
+    .replace(/(?<![*\w])\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?![*\w])/g, (_, x) => i(x))
+    .replace(/(?<![\w_])_(?=[^\s_])([^_\n]+?)(?<=[^\s_])_(?![\w_])/g, (_, x) => i(x));
+  const untable = (t) => t.split("\n").flatMap((l) => !/^\s*\|.*\|\s*$/.test(l) ? [l] : /^\s*\|[\s:|-]+\|\s*$/.test(l) ? [] : [l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()).filter(Boolean).join(" · ")]).join("\n");
+  function md(src) {
+    const blocks = [], spans = [];
+    let t = untable(String(src ?? "")).replace(/```[ \t]*[\w+-]*[ \t]*\n?([\s\S]*?)```/g, (_, b) => { blocks.push(b.replace(/\n$/, "")); return `\u0000B${blocks.length - 1}\u0000`; })
+      .replace(/`([^`\n]+)`/g, (_, x) => { spans.push(x); return `\u0000S${spans.length - 1}\u0000`; });
+    t = t.split("\n").map((line) => {
+      const bullet = /^\s*[-*+•]\s+/.test(line); if (bullet) line = line.replace(/^\s*[-*+•]\s+/, "");
+      const head = /^\s*#{1,6}\s+/.test(line); if (head) line = line.replace(/^\s*#{1,6}\s+/, "").replace(/\s*#+\s*$/, "");
+      let e = esc(line)
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, l, u) => `<a href="${u}" target="_blank" rel="noopener">${l}</a>`)
+        .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, pre, u) => `${pre}<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+      e = marks(e, (x) => `<b>${x}</b>`, (x) => `<i>${x}</i>`);
+      e = e.split(/(<a [^>]*>.*?<\/a>|<[^>]+>)/).map((p) => p.startsWith("<") ? p : p.replace(ADDR, (m) => `<code class="cp" role="button" tabindex="0" title="Copy">${m}</code>`)).join("");
+      if (head) e = `<b>${e}</b>`;
+      return (bullet ? "• " : "") + e;
+    }).join("\n");
+    return t
+      .replace(/\u0000S(\d+)\u0000/g, (_, k) => `<code class="cp" role="button" tabindex="0" title="Copy">${esc(spans[+k])}</code>`)
+      .replace(/\u0000B(\d+)\u0000/g, (_, k) => `<div class="draft"><pre>${esc(blocks[+k])}</pre><button class="btn sm" type="button" data-copy="${esc(blocks[+k])}">${ico("copy", "sm")}Copy</button></div>`);
+  }
+  /** The same reply as plain words, for toasts. */
+  const plain = (src) => untable(String(src ?? "")).replace(/```[^\n]*\n?([\s\S]*?)```/g, "$1").replace(/`([^`\n]+)`/g, "$1").replace(/^\s*#{1,6}\s+/gm, "").replace(/^\s*[-*+]\s+/gm, "• ").replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1");
+  const linkify = (s) => md(s);
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); }
+    catch { const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); } catch {} ta.remove(); }
+    toast("Copied.");
+  }
+  document.addEventListener("click", (e) => {
+    const el = e.target.closest(".cp, [data-copy]");
+    if (!el) return;
+    e.preventDefault();
+    copyText(el.dataset.copy ?? el.textContent);
+    if (el.matches(".cp")) { el.classList.add("copied"); setTimeout(() => el.classList.remove("copied"), 900); }
+  });
+  document.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches && e.target.matches(".cp")) { e.preventDefault(); copyText(e.target.textContent); } });
   const ico = (n, cls = "") => `<svg class="ico ${cls}"><use href="#i-${n}"/></svg>`;
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
   const title = (s) => String(s || "").replace(/\b[a-z]/g, (c) => c.toUpperCase());
@@ -41,6 +88,8 @@ window.App = (function () {
   const partOfDay = () => { const h = Math.floor(minsOf(Date.now()) / 60); return h < 5 ? "Late" : h < 12 ? "Morning" : h < 17 ? "Afternoon" : h < 21 ? "Evening" : "Night"; };
 
   const toast = (t, kind) => { const e = $("#toast"); e.textContent = t; e.style.setProperty("--k", kind ? `var(--k-${kind})` : ""); e.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove("show"), 2600); };
+  /** Say what happened in words: the reply on success, a plain sentence on failure, never a blank or a code. */
+  const tell = (r, fallback, kind) => toast(r && r.error ? r.text || "That didn't go through. Try once more?" : plain(r && r.text) || fallback, r && r.error ? null : kind);
 
   /* ---------- look: palette × day/night, changed with a circle from the control ---------- */
   const PALETTES = { manor: ["Manor", "linen, bottle green, brass", "#EDE6D6", "#2D4A3A", "#0F1411", "#8DB39A", "#A8843F"], claret: ["Claret", "bone, oxblood, gold", "#F1EBE3", "#6B1F2A", "#170D10", "#D88A93", "#B48A3C"], riviera: ["Riviera", "sand, navy, brass", "#EFE9DC", "#1F3550", "#0D1420", "#8FB0D6", "#B08A4E"], tobacco: ["Tobacco", "leaf, amber, cream", "#EEE5D6", "#5A3A22", "#17110C", "#D9A066", "#B7792E"], ivory: ["Ivory", "paper, ink, a little brass", "#F2F0EA", "#141414", "#0B0B0A", "#EFEDE6", "#9C7F45"] };
@@ -74,6 +123,7 @@ window.App = (function () {
     if (!(await reachable())) { cantReach(); window.__bootDone && window.__bootDone(); return landing(true); }
     me = await api("/api/me");
     if (me.error || typeof me.id !== "number") { me = null; return landing(); }
+    signedIn = true;
     document.body.classList.add("app");
     $("#app").hidden = false;
     if (me.palette && !localStorage.getItem("ll_palette")) setPalette(me.palette, null, false);
@@ -184,16 +234,16 @@ window.App = (function () {
   async function press(data, el) {
     if (el) el.disabled = true;
     const r = await api("/api/button", { data });
-    if (r.error) { if (el) el.disabled = false; return toast("That didn't go through. Try once more?"); }
-    toast(r.text || "Done.", /confirm/.test(data) ? "metal" : null);
+    if (r.error) { if (el) el.disabled = false; return tell(r); }
+    tell(r, "Done.", /confirm/.test(data) ? "metal" : null);
     pip && pip.set(/undo|cancel/.test(data) ? "idle" : "done", r.text && r.text.length < 80 ? r.text : undefined);
     state = await api("/api/state");
     if (view === "today" || view === "lists") route(); else updatePip();
   }
   async function act(action, args, okKind) {
     const r = await api("/api/do", { action, args });
-    if (r.error) return toast("That didn't go through. Try once more?");
-    toast(r.text, okKind);
+    if (r.error) return tell(r);
+    tell(r, "Done.", okKind);
     state = await api("/api/state");
     return r;
   }
@@ -364,9 +414,9 @@ window.App = (function () {
     </div></div>`;
     wireTries(main); wireButtons(main);
     $$("[data-habit]", main).forEach((b) => b.addEventListener("click", () => act("habit.checkin", { name: b.dataset.habit }, "money").then(renderHealth)));
-    $$("[data-say]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: b.dataset.say }); toast(r.text || "Done.", "hack"); renderHealth(); }));
+    $$("[data-say]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: b.dataset.say }); tell(r, "Done.", "hack"); renderHealth(); }));
     $$("[data-ask]", main).forEach((b) => b.addEventListener("click", () => openSay(b.dataset.ask)));
-    $("#logAny").addEventListener("submit", async (e) => { e.preventDefault(); const v = $("#logAny input").value.trim(); if (!v) return; const r = await api("/api/chat", { text: v }); toast(r.text || "Logged.", "event"); renderHealth(); });
+    $("#logAny").addEventListener("submit", async (e) => { e.preventDefault(); const v = $("#logAny input").value.trim(); if (!v) return; const r = await api("/api/chat", { text: v }); tell(r, "Logged.", "event"); renderHealth(); });
   }
   const dayName = (iso) => iso ? new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "";
   const daysFrom = (iso) => iso ? Math.round((new Date(iso + "T12:00:00") - new Date(new Date().toDateString() + " 12:00")) / 864e5) : null;
@@ -439,8 +489,8 @@ window.App = (function () {
       <div class="section-title" style="margin-top:44px"><h3>Your entries</h3><span class="sp"></span><span class="faint small">${esc(h.stats)}</span></div>
       ${h.ledger.length ? `<div class="board">${cols.map(([name, st]) => { const es = h.ledger.filter((e) => st.includes(e.status)); return `<div class="col"><h4><span class="dot k-hack"></span>${name}<span class="faint">${es.length || ""}</span></h4>${es.map((e) => `<div class="card k-hack"><div class="card-body" style="padding:14px 16px"><b>${esc(e.title)}</b><p class="small muted" style="margin:4px 0 10px">${e.deadline ? `closes ${esc(when(e.deadline))}` : "no deadline yet"}${e.prize ? `. ${esc(e.prize)}${e.payout_received ? ", paid" : ", unpaid"}` : ""}</p><select aria-label="Status of ${esc(e.title)}" data-status="${esc(e.title)}">${["interested", "registered", "building", "submitted", "won", "lost", "withdrawn"].map((s) => `<option ${s === e.status ? "selected" : ""}>${s}</option>`).join("")}</select></div></div>`).join("") || `<p class="faint small">Nothing here.</p>`}</div>`; }).join("")}</div>` : `<div class="card k-hack">${empty(`Nothing entered yet. When you commit to one, say ${tryLink("I'm entering NEAR, due nov 14")} and I'll keep the deadline and chase the prize.`)}</div>`}`;
     wireTries(main);
-    $$("[data-enter]", main).forEach((b) => b.addEventListener("click", async () => { b.disabled = true; const r = await api("/api/chat", { text: `I'm entering ${b.dataset.enter}${b.dataset.due ? " due " + b.dataset.due : ""}` }); toast(r.text, "hack"); renderHackathons(); }));
-    $$("[data-status]", main).forEach((s) => s.addEventListener("change", async () => { const r = await api("/api/chat", { text: `${s.dataset.status} status ${s.value}` }); toast(r.text, "hack"); renderHackathons(); }));
+    $$("[data-enter]", main).forEach((b) => b.addEventListener("click", async () => { b.disabled = true; const r = await api("/api/chat", { text: `I'm entering ${b.dataset.enter}${b.dataset.due ? " due " + b.dataset.due : ""}` }); tell(r, "Done.", "hack"); renderHackathons(); }));
+    $$("[data-status]", main).forEach((s) => s.addEventListener("change", async () => { const r = await api("/api/chat", { text: `${s.dataset.status} status ${s.value}` }); tell(r, "Done.", "hack"); renderHackathons(); }));
   }
 
   /* ---------- Scout ---------- */
@@ -453,7 +503,7 @@ window.App = (function () {
         <button class="btn primary" type="submit">Scout</button><button class="btn" type="button" id="watchBtn">Keep watching</button></form></div>
       <div id="scoutOut" style="margin-top:30px">${empty("Loading what you've scouted before.")}</div></div>`;
     $("#scoutForm").addEventListener("submit", (e) => { e.preventDefault(); scout(); });
-    $("#watchBtn").addEventListener("click", async () => { const n = $("#niche").value.trim(); if (!n) return $("#niche").focus(); const r = await api("/api/chat", { text: `keep scouting ${n}${$("#obj").value ? " for " + $("#obj").value : ""}` }); toast(r.text, "scout"); });
+    $("#watchBtn").addEventListener("click", async () => { const n = $("#niche").value.trim(); if (!n) return $("#niche").focus(); const r = await api("/api/chat", { text: `keep scouting ${n}${$("#obj").value ? " for " + $("#obj").value : ""}` }); tell(r, "Done.", "scout"); });
     const r = await api("/api/scout"); $("#scoutOut").innerHTML = scoutCards(r.results || [], r.watches || []); wireScout();
   }
   function scoutCards(results, watches) {
@@ -524,18 +574,23 @@ window.App = (function () {
           <label class="field">What I call you<input data-set="name" value="${esc(s.name || "")}"></label>
           <label class="field">Interests, for ranking<input id="tags" value="${esc((s.tags || []).join(", "))}" placeholder="ai, payments, base, ethereum"></label>
           <div class="grid two" style="gap:12px"><label class="field">Country, two letters<input data-set="country" maxlength="2" value="${esc(s.country || "")}"></label><label class="field">Email, as a last resort<input data-set="email" type="email" value="${esc(s.email || "")}"></label></div></div></div>
-        <div class="card k-class">${cardHead("chat", "Where I reach you")}<div class="card-body"><dl class="kv">${(s.identities || []).map((i) => `<dt>${esc(cap(i.channel))}</dt><dd class="muted">${esc(i.external_id)}</dd>`).join("")}</dl><div class="row" style="margin-top:16px"><button class="btn sm" id="linkCode">Get a link code</button><b id="linkOut" class="serif" style="font-size:1.6rem;letter-spacing:.1em"></b></div><p class="faint small" style="margin-top:8px">Send link and the code from SMS or iMessage, or paste it in another browser, within fifteen minutes.</p></div></div>
+        <div class="card k-class">${cardHead("chat", "Where I reach you")}<div class="card-body"><dl class="kv">${(s.identities || []).map((i) => `<dt>${esc(cap(i.channel))}</dt><dd class="muted">${esc(i.external_id)}</dd>`).join("")}</dl><div class="row" style="margin-top:16px"><button class="btn sm" id="linkCode">Get a link code</button><button id="linkOut" class="link-code" type="button" hidden title="Copy"></button></div><p class="faint small" style="margin-top:8px">${s.smsNumber ? `Text <b>link</b> and the code to <code class="cp" role="button" tabindex="0" title="Copy">${esc(s.smsNumber)}</code>, or send it from iMessage or another browser, within fifteen minutes.` : "Send link and the code from iMessage, or type it in another browser, within fifteen minutes."} Tap the code to copy it.</p></div></div>
         <div class="card k-hack">${cardHead("flag", "Work tools")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Hackathons, grants and scouting for companies and people. Handy if you build or job-hunt; out of the way if not. They're always under More.</p><div class="seg" role="group" aria-label="Work tools in the bar"><button data-work="true" aria-pressed="${!!workOn()}">In the bar</button><button data-work="false" aria-pressed="${!workOn()}">Under More</button></div></div></div>
         <div class="card k-list">${cardHead("sliders", "Under the hood")}<div class="card-body"><dl class="kv"><dt>Model</dt><dd>${esc(s.provider || "plain language only, no model key")}</dd><dt>Spend today</dt><dd>$${Number(s.spend || 0).toFixed(3)} of $${s.budget}</dd></dl></div></div>
       </div></div>`;
     $$("[data-work]", main).forEach((b) => b.addEventListener("click", async () => { me.work = b.dataset.work === "true"; await api("/api/settings", { work: me.work }, "PATCH"); drawTabs(); $$("[data-work]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); toast(me.work ? "Work tools are in the bar." : "Work tools moved under More."); }));
     $$("[data-mode]", main).forEach((b) => b.addEventListener("click", (e) => { setMode(b.dataset.mode, e.currentTarget); $$("[data-mode]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
     $$("[data-palette]", main).forEach((b) => b.addEventListener("click", (e) => { setPalette(b.dataset.palette, e.currentTarget); $$("[data-palette]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
-    $$("[data-voice]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: `voice ${b.dataset.voice}` }); toast(r.text, "trip"); renderSettings(); }));
-    $("#voiceForm").addEventListener("submit", async (e) => { e.preventDefault(); const v = $("#customVoice").value.trim(); if (!v) return; const r = await api("/api/do", { action: "persona.set", args: { custom: v } }); toast(r.text, "trip"); });
-    $$("[data-set]", main).forEach((i) => i.addEventListener("change", async () => { const v = i.type === "number" ? Number(i.value) : i.value; const r = await api("/api/settings", { [i.dataset.set]: v }, "PATCH"); toast(r.text || "Saved.", "event"); me = await api("/api/me"); }));
-    $("#tags").addEventListener("change", async (e) => { const r = await api("/api/chat", { text: "interests: " + e.target.value }); toast(r.text, "hack"); });
-    $("#linkCode").addEventListener("click", async () => { const r = await api("/api/chat", { text: "link" }); $("#linkOut").textContent = (r.text.match(/\b[A-Z0-9]{6}\b/) || [""])[0]; });
+    $$("[data-voice]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: `voice ${b.dataset.voice}` }); tell(r, "Done.", "trip"); renderSettings(); }));
+    $("#voiceForm").addEventListener("submit", async (e) => { e.preventDefault(); const v = $("#customVoice").value.trim(); if (!v) return; const r = await api("/api/do", { action: "persona.set", args: { custom: v } }); tell(r, "Done.", "trip"); });
+    $$("[data-set]", main).forEach((i) => i.addEventListener("change", async () => { const v = i.type === "number" ? Number(i.value) : i.value; const r = await api("/api/settings", { [i.dataset.set]: v }, "PATCH"); tell(r, "Saved.", "event"); me = await api("/api/me"); }));
+    $("#tags").addEventListener("change", async (e) => { const r = await api("/api/chat", { text: "interests: " + e.target.value }); tell(r, "Done.", "hack"); });
+    $("#linkCode").addEventListener("click", async () => {
+      const r = await api("/api/chat", { text: "link" });
+      const code = ((r.text || "").match(/\b[A-Z0-9]{6}\b/) || [""])[0];
+      if (!code) return toast("I couldn't make a code just now. Try again in a moment.");
+      const o = $("#linkOut"); o.textContent = code; o.dataset.copy = `link ${code}`; o.hidden = false;
+    });
   }
 
   /* ---------- More (phone) ---------- */
@@ -605,7 +660,7 @@ window.App = (function () {
       e.preventDefault(); const code = $("#code").value.trim();
       if (code.length < 6) return ($("#lerr").textContent = "Six characters, from the bot.");
       const r = await api("/auth/link", { code });
-      if (r.ok) location.reload(); else $("#lerr").textContent = "That code didn't work. Codes last fifteen minutes; say link to the bot for a fresh one.";
+      if (r.ok) location.reload(); else $("#lerr").textContent = r.status === 401 || !r.text ? "That code didn't work. Codes last fifteen minutes; say link to the bot for a fresh one." : r.text;
     });
     window.__bootDone && window.__bootDone();
   }
@@ -633,7 +688,7 @@ window.App = (function () {
     };
     setTimeout(tick, 2500);
   }
-  async function onTg(u) { const r = await api("/auth/telegram", u); if (r.ok) location.reload(); else $("#lerr").textContent = r.error === "not in the circle" ? "That Telegram account isn't in this circle." : "That sign-in didn't check out. Try again."; }
+  async function onTg(u) { const r = await api("/auth/telegram", u); if (r.ok) location.reload(); else $("#lerr").textContent = r.text || "That sign-in didn't check out. Try again."; }
 
   boot();
   return { onTg, openSay, setPalette, setMode };

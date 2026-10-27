@@ -131,14 +131,16 @@ const settings = defineAction({
       const hour = args.digest_hour ?? ctx.user.digest_hour;
       await ctx.db.query(`UPDATE jobs SET cron=$2, tz=$3 WHERE user_id=$1 AND kind='digest'`, [ctx.user.id, `0 ${hour} * * *`, tz]);
     }
+    const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
     const bits: string[] = [];
-    if (args.tz) bits.push(`clock set to ${args.tz}`);
-    if (args.digest_hour !== undefined) bits.push(`morning brief at ${String(args.digest_hour).padStart(2, "0")}:00`);
-    if (args.quiet_start !== undefined || args.quiet_end !== undefined) bits.push(`quiet hours ${args.quiet_start ?? ctx.user.quiet_start}:00 to ${args.quiet_end ?? ctx.user.quiet_end}:00`);
+    if (args.tz) bits.push(`your clock is set to ${args.tz.split("/").pop()!.replace(/_/g, " ")} time`);
+    if (args.digest_hour !== undefined) bits.push(`your morning brief comes at ${hh(args.digest_hour)}`);
+    if (args.quiet_start !== undefined || args.quiet_end !== undefined) bits.push(`quiet hours run ${hh(args.quiet_start ?? ctx.user.quiet_start)} to ${hh(args.quiet_end ?? ctx.user.quiet_end)}`);
     if (args.name) bits.push(`I'll call you ${args.name}`);
-    if (args.country) bits.push(`country ${args.country.toUpperCase()}`);
-    if (args.email) bits.push(`email ${args.email}`);
-    return { reply: bits.length ? `Done: ${bits.join(", ")}.` : "Nothing to change there." };
+    if (args.country) bits.push(`your country is ${args.country.toUpperCase()}`);
+    if (args.email) bits.push(`your email is ${args.email}`);
+    const said = bits.join(", ");
+    return { reply: bits.length ? `Saved. ${said.charAt(0).toUpperCase()}${said.slice(1)}.` : "Nothing to change there." };
   },
 });
 

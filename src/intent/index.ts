@@ -52,12 +52,12 @@ export function chatFallback(text: string, modelConfigured: boolean): string {
   if (/\b(how are you|how's it going|you good)\b/.test(t)) return "Steady as ever. You?";
   if (/\?$/.test(t) || /^(what|why|how|when|where|who|can|could|should|do you|is it|are you)\b/.test(t)) {
     return modelConfigured
-      ? "I lost the thread on that one; my model call didn't come back. Try again in a moment, or say it a different way."
-      : "I can't chat freely without a model key on this server, but I can keep things: reminders, calendar, meds, lists, trips, hackathons, prices. Say /help to see the shapes I understand.";
+      ? "I couldn't think that one through just now. Try again in a moment, or put it another way."
+      : "I can't hold a free conversation right now, but I can still keep things: your calendar, reminders, medication, cycle, lists, spending, trips. /help has examples.";
   }
   return modelConfigured
     ? pick(["Say a bit more and I'll take it from there.", "I'm with you. What would you like me to do with that?", "Got it. Want me to keep that somewhere, or are we just talking?"])
-    : "I'm in command mode on this server (no model key yet). Tell me a thing to keep: a reminder, a date, a list, a hackathon. Or say /help.";
+    : "I didn't catch that, and I can't hold a free conversation right now. Plain asks still work: a reminder, a date, a list, something to track or spend. /help has examples.";
 }
 
 /** The /start line. Three sentences, then silence. */

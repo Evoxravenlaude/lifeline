@@ -15,8 +15,13 @@ export interface VoiceOpts {
 }
 
 export function polish(text: string, opts: VoiceOpts = {}): string {
-  let t = text;
-  // Em and en dashes become commas or full stops. "a — b" reads as "a, b"; "a—b" too.
+  // Code and drafted messages pass through untouched: indentation, dashes and all.
+  const kept: string[] = [];
+  let t = text.replace(/```[\s\S]*?```|`[^`\n]+`/g, (m) => { kept.push(m); return `\u0001${kept.length - 1}\u0001`; });
+  // Dashes. A range keeps its meaning ("1–2 min" is "1 to 2 min", never "1, 2 min"); a joined pair keeps a hyphen ("Lagos–Accra");
+  // a dash used as a pause becomes a comma.
+  t = t.replace(/(\d)\s*[–—]\s*(?=\d)/g, "$1 to ");
+  t = t.replace(/(\p{L})[–](?=\p{L})/gu, "$1-");
   t = t.replace(/\s*[—–]\s*/g, ", ");
   t = t.replace(/,\s*,/g, ",").replace(/,\s*([.!?])/g, "$1").replace(/\n, /g, "\n").replace(/^, /gm, "");
   // Decorative emoji go, unless the user picked a voice that lives on them. Even then: one, at the end.
@@ -28,11 +33,11 @@ export function polish(text: string, opts: VoiceOpts = {}): string {
   }
   // Robotic residue.
   t = t.replace(/\bSuccessfully\s+/gi, "").replace(/\bhas been (added|created|removed|deleted|saved|updated)\b/gi, "is $1").replace(/^(?:Error|Invalid)[:\s]+/gim, "");
-  // A reply starts with a capital, unless it starts with a handle, an address or a link.
+  // A reply starts with a capital, unless it starts with a handle, an address, a link or code.
   if (/^[a-z]/.test(t) && !/^(?:https?:|0x|@|\$)/.test(t)) t = t.charAt(0).toUpperCase() + t.slice(1);
-  // Whitespace: no leading spaces on lines, no triple blank lines, no double spaces.
+  // Whitespace: no trailing spaces, no triple blank lines, no double spaces. List indentation is flattened.
   t = t.split("\n").map((l) => l.replace(/[ \t]+$/g, "").replace(/^[ \t]+(?=\S)/, "").replace(/ {2,}/g, " ")).join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  return t;
+  return t.replace(/\u0001(\d+)\u0001/g, (_, k) => kept[Number(k)]);
 }
 
 /** Light accent for replies written without a model. Register only; nothing factual changes. */

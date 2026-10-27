@@ -37,6 +37,18 @@ Nothing understood:
 Capability question ("can you track meds?"):
 > Yes. Tell me what you take and when, like "I take vitamin D at 8 and 8pm". I'll ring you at each dose with Taken and Skip, keep the log, and tell you when you're running low. I don't give medical advice; a pharmacist checks anything about the medicine itself.
 
+## Formatting and copying
+
+Replies are written in a small markdown and rendered per channel by `src/core/format.ts`: Telegram gets HTML, SMS and iMessage get plain text, and the web renders the same marks. Nobody should ever see a raw `**` or `#`.
+
+- **Bold** only for a short label on its own line (a day in a routine, a section of a plan). Lists are "- item". No tables; if one slips through it becomes "a · b" lines.
+- Anything someone might copy goes in backticks: a link code, a wallet address, an amount to paste. A message or email they'll send goes in a fenced block. On Telegram these are tap-to-copy, and a reply with exactly one such thing gets a Copy button. On the web they copy on tap.
+- Ranges say "to": "1 to 2 minutes". The voice pass turns "1–2" into "1 to 2", never "1, 2".
+
+## Errors
+
+Errors are sentences that say what happened and what to do next, in the same voice as everything else. `src/core/humanize.ts` translates anything an action throws: an HTTP code becomes "The price service is busy…", a missing detail becomes "I didn't get when from that…". Modules throw plain sentences on purpose and those pass through. If a whole message falls over, the person still gets an answer, never silence.
+
 ## Personas
 
 A persona changes register, not substance. Dates, amounts, names and the policy gate are identical in every voice. Plain is the default and is what every string in the code is written in; the other voices are applied on top by the model, or by the light `style()` pass when no model is available.

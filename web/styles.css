@@ -281,13 +281,21 @@ main { min-height: 60vh; }
 .convo > *, .home-grid > *, .grid > *, .stack > *, .board > *, .land-grid > * { min-width: 0; }
 .next > * { min-width: 0; } .next .row { flex-wrap: wrap; }
 .thread { display: flex; flex-direction: column; gap: 22px; padding: 6px 0 24px; min-height: 50vh; }
-.msg { max-width: 64ch; animation: in .32s var(--ease) both; }
+.msg { max-width: 64ch; min-width: 0; overflow-wrap: anywhere; animation: in .32s var(--ease) both; }
 .msg.me { align-self: flex-end; text-align: right; font-family: var(--body); font-style: italic; font-size: 1.3rem; line-height: 1.35; }
 .msg.bot { display: grid; grid-template-columns: 34px 1fr; gap: 12px; }
 .msg.bot .av { width: 34px; height: 34px; border: var(--edge); border-radius: 50%; background: var(--k-trip); display: grid; place-items: center; overflow: hidden; }
 .msg.bot .av svg { width: 30px; height: 30px; }
 .msg.bot .tx { white-space: pre-wrap; line-height: 1.62; padding-top: 4px; }
 .msg.bot .tx a { color: var(--accent); }
+/* Tap-to-copy: codes and addresses inline, drafted messages as a block with its own button. */
+code.cp { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .86em; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--sunk); cursor: copy; overflow-wrap: anywhere; transition: background var(--fill), border-color var(--fill); }
+code.cp:hover, code.cp:focus-visible { border-color: var(--ink); }
+code.cp.copied { background: var(--k-dose); border-color: var(--ink); }
+.link-code { font-family: var(--display); font-size: 1.6rem; letter-spacing: .12em; padding: 2px 12px; border: var(--edge); border-radius: 8px; background: var(--panel); cursor: copy; color: var(--ink); }
+.link-code:hover { background: var(--sunk); }
+.draft { display: grid; gap: 8px; justify-items: start; margin: 4px 0; }
+.draft pre { margin: 0; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--body); font-style: italic; font-size: 1.0625rem; line-height: 1.55; padding: 12px 14px; border: var(--edge); border-radius: var(--r); background: var(--panel); }
 .msg.bot.hold .tx { padding: 14px 16px; background: var(--panel); border: var(--edge); border-radius: var(--r); box-shadow: 4px 4px 0 0 var(--metal), 4px 4px 0 var(--edge-w) var(--ink); }
 .msg .btns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .msg .at { display: block; font: 500 var(--t-13) var(--body); font-style: normal; color: var(--ink-3); margin-top: 4px; }

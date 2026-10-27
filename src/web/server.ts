@@ -43,6 +43,11 @@ const PUBLIC_DIR = path.relative(process.cwd(), path.join(path.dirname(fileURLTo
 
 export function createWeb(db: Db, botUsername: string) {
   const app = new Hono<{ Variables: { user: User } }>();
+  /** Anything that breaks still answers in a sentence, never a bare 500 page. */
+  app.onError((err, c) => {
+    log.error({ err: err?.message, path: c.req.path }, "web error");
+    return c.json({ error: "server", text: "Something broke on my side while doing that, so it may not have gone through. Try once more in a moment." }, 500);
+  });
 
   registerSender("web", async (externalId, reply) => {
     const u = await db.one<{ id: number }>(`SELECT user_id AS id FROM identities WHERE channel='web' AND external_id=$1`, [externalId]);
@@ -85,7 +90,7 @@ export function createWeb(db: Db, botUsername: string) {
     const { hash, ...rest } = data;
     const check = Object.keys(rest).sort().map((k) => `${k}=${rest[k]}`).join("\n");
     const expected = createHmac("sha256", createHash("sha256").update(config.telegramToken).digest()).update(check).digest("hex");
-    if (expected !== hash || Date.now() / 1000 - Number(rest.auth_date) > 86_400) return c.json({ error: "bad signature" }, 401);
+    if (expected !== hash || Date.now() / 1000 - Number(rest.auth_date) > 86_400) return c.json({ error: "bad signature", text: "That Telegram sign-in didn't check out, or it's more than a day old. Try signing in again." }, 401);
     const id = Number(rest.id);
     if ((await admit(db, id)) === "full") return c.json({ error: "full", text: FULL_MESSAGE() }, 403);
     const user = await ensureUser(db, "telegram", String(id), [rest.first_name, rest.last_name].filter(Boolean).join(" "));
@@ -105,7 +110,7 @@ export function createWeb(db: Db, botUsername: string) {
   app.post("/auth/link", async (c) => {
     const { code } = await c.req.json();
     const user = await redeemLinkCode(db, String(code ?? ""), "web", `web:${randomBytes(8).toString("hex")}`);
-    if (!user) return c.json({ error: "invalid or expired code" }, 401);
+    if (!user) return c.json({ error: "invalid or expired code", text: "That code didn't work. Codes last fifteen minutes; say link to the bot for a fresh one." }, 401);
     await newSession(c, user);
     return c.json({ ok: true });
   });
@@ -119,7 +124,7 @@ export function createWeb(db: Db, botUsername: string) {
   app.use("/api/*", async (c, next) => {
     if (c.req.path === "/api/public" || c.req.path === "/api/capabilities") return next();
     const u = await session(c);
-    if (!u) return c.json({ error: "unauthenticated" }, 401);
+    if (!u) return c.json({ error: "unauthenticated", text: "You're signed out on this device. Sign in again to carry on." }, 401);
     c.set("user", u);
     await next();
   });
@@ -133,14 +138,15 @@ export function createWeb(db: Db, botUsername: string) {
   app.get("/api/messages", async (c) => c.json((await db.query(`SELECT id, role, content, created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 60`, [user(c).id])).reverse()));
   app.post("/api/chat", async (c) => {
     const { text } = await c.req.json();
-    if (!text || String(text).length > 4000) return c.json({ error: "empty" }, 400);
+    if (!text || !String(text).trim()) return c.json({ error: "empty", text: "There was nothing in that message." }, 400);
+    if (String(text).length > 4000) return c.json({ error: "too long", text: "That's longer than I can take in one message. Try it in two parts." }, 400);
     return c.json(await handleMessage(db, user(c), String(text), { channel: "web" }));
   });
   /** A structured action from a web control (tick, add to a list). Same gate, same audit, same voice as a sentence. */
   app.post("/api/do", async (c) => {
     const u = user(c);
     const { action, args } = await c.req.json();
-    if (typeof action !== "string" || !/^[a-z]+\.[a-z_]+$/.test(action)) return c.json({ error: "bad action" }, 400);
+    if (typeof action !== "string" || !/^[a-z]+\.[a-z_]+$/.test(action)) return c.json({ error: "bad action", text: "That button didn't work. Reload the page and try again." }, 400);
     const d = await propose(ctxOf(u, `${action} ${JSON.stringify(args ?? {}).slice(0, 200)}`), action, args ?? {});
     const r = d.kind === "pending" ? { text: `${d.echo}\n\nGo ahead? This waits ten minutes for a yes.`, buttons: [{ label: "Yes, go ahead", data: `confirm:${d.pendingId}` }, { label: "No", data: `cancel:${d.pendingId}` }] } : d.kind === "ran" && d.undoId ? { text: d.reply, buttons: [{ label: "Undo", data: `undo:${d.undoId}` }] } : { text: "reply" in d ? d.reply : "" };
     return c.json({ ...r, text: polish(r.text, { persona: personaOf(u.prefs) }) });
@@ -213,7 +219,7 @@ export function createWeb(db: Db, botUsername: string) {
   app.post("/api/scout", async (c) => {
     const u = user(c);
     const { niche, objective } = await c.req.json();
-    if (!niche) return c.json({ error: "niche required" }, 400);
+    if (!niche) return c.json({ error: "niche required", text: "Tell me what to look for first, like \"fintech in Lagos\"." }, 400);
     await scout(db, String(niche), objective ? String(objective) : undefined, 10).catch((e) => log.warn({ err: e?.message }, "scout"));
     await db.query(`INSERT INTO audit_log (user_id, action, tier, args, outcome, source_message) VALUES ($1,'scout.find',1,$2,'ran','[web] scout')`, [u.id, JSON.stringify({ niche, objective })]);
     const results = await db.query(`SELECT * FROM scout_results WHERE niche=$1 ORDER BY first_seen DESC LIMIT 30`, [String(niche).toLowerCase()]);

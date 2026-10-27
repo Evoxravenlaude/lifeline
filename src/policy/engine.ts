@@ -9,6 +9,7 @@
  * source message, so a returning user (or you, after an incident) can see
  * exactly which sentence produced which action.
  */
+import { humanError } from "../core/humanize.js";
 import { getAction } from "./registry.js";
 import type { ActionResult, Ctx, Thread, Tier } from "./types.js";
 
@@ -27,7 +28,7 @@ export type Decision =
 
 export async function propose(ctx: Ctx, actionName: string, rawArgs: unknown): Promise<Decision> {
   const action = getAction(actionName);
-  if (!action) return { kind: "error", reply: `I don't have an action called ${actionName}.` };
+  if (!action) return { kind: "error", reply: `I can't do that one yet. Ask "what can you do" to see what I can.` };
 
   const parsed = action.schema.safeParse(rawArgs);
   if (!parsed.success) {
@@ -68,9 +69,7 @@ async function runNow(ctx: Ctx, actionName: string, tier: Tier, args: unknown): 
     result = await action.run(args, ctx);
   } catch (e: any) {
     await audit(ctx, actionName, tier, args, `error: ${e?.message ?? e}`);
-    const msg = String(e?.message ?? "");
-    if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|socket hang up|network|aborted|timeout/i.test(msg)) return { kind: "error", reply: "I couldn't reach the source for that just now. Try again in a minute." };
-    return { kind: "error", reply: msg || "That didn't work, and I'm not sure why. Try once more?" };
+    return { kind: "error", reply: humanError(e, actionName) };
   }
   await audit(ctx, actionName, tier, args, "ran");
   let undoId: number | undefined;

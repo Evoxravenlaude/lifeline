@@ -210,7 +210,7 @@ export function describeCycle(pic: CyclePicture, todayISO: string): string[] {
   if (!pic.tracking || !pic.nextStart || pic.day == null) return [];
   const lines: string[] = [];
   const until = daysBetween(todayISO, pic.nextStart);
-  if (pic.inPeriod) lines.push(`Day ${pic.day} of your cycle, so you're on your period.`);
+  if (pic.inPeriod) lines.push(`Day ${pic.day} of your cycle, so you're on your period. The next one is likely around ${pretty(pic.nextStart)}.`);
   else if (pic.lateBy > 0) lines.push(`Day ${pic.day} of your cycle. Your period is ${pic.lateBy} day${pic.lateBy === 1 ? "" : "s"} later than I'd expect from your history.`);
   else lines.push(`Day ${pic.day} of your cycle. Next period likely around ${pretty(pic.nextStart)} (${inDays(until)}).`);
   if (pic.fertileStart && pic.fertileEnd && pic.lateBy === 0) {

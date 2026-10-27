@@ -1,3 +1,4 @@
+import { activePlaces, waysIn } from "../core/ways.js";
 /**
  * What the bot can do, written so the bot can explain itself. One card per
  * area. Used four ways: answering "can you X" / "how do I X" / "what can you
@@ -218,6 +219,7 @@ export function isCapabilityQuestion(text: string): boolean {
   const all = text.trim();
   if (WHAT_TRACK.test(all)) return true;
   if (ABOUT_YOU.test(all)) return true;
+  if (/\b(?:whats\s?app|signal|messenger|instagram|discord|imessage|sms)\b/i.test(all) && /^(?:can|do|does|will|are|is|how)\b|\?$/i.test(all)) return true;
   return sentences(all).some((t) => {
     if (OVERVIEW.test(t)) return true;
     if (!ASKING.test(t)) return false;
@@ -234,7 +236,13 @@ export function matchCapabilities(text: string, max = 2): Capability[] {
 }
 
 /** A card in prose: yes, here's how, here's what happens, here's the edge. */
-export function explain(c: Capability): string {
+export function explain(c: Capability, asked = ""): string {
+  if (c.key === "channels") {
+    const NAMES: Record<string, string> = { whatsapp: "WhatsApp", "whats app": "WhatsApp", signal: "Signal", instagram: "Instagram", messenger: "Messenger", discord: "Discord" };
+    const no = /whats\s?app|signal|instagram|messenger|discord/i.exec(asked);
+    const lead = no ? `Not ${NAMES[no[0].toLowerCase()] ?? no[0]}, no. ` : "";
+    return `${lead}Right now you can use me on ${activePlaces()}, all with one memory. There's no app to install and nothing to log into. To add another place, say "link" and I'll give you a six-character code:\n\n${waysIn()}`;
+  }
   const lines = [`Yes. ${c.what}`, `Say something like "${c.say[0]}"${c.say[1] ? ` or "${c.say[1]}"` : ""}.`, c.then];
   if (c.limits) lines.push(c.limits);
   return lines.join(" ");
@@ -260,6 +268,11 @@ export function answerCapability(text: string, name?: string | null): string | n
   const t = text.trim();
   const lead = /^(?:i(?:'m| am) (?:good|fine|great|okay|ok|well|alright)|(?:all )?good|fine|not bad)\b/i.test(t) ? "Glad to hear it. " : "";
   if (WHAT_TRACK.test(t)) return lead + trackAnswer();
+  // Places I'm not: say so plainly, then where I am.
+  if (/\b(?:whats\s?app|signal|messenger|instagram|discord)\b/i.test(t) && /\b(?:can|do|does|will|are|work|use|on|in|add|available)\b/i.test(t)) {
+    const ch = CAPABILITIES.find((c) => c.key === "channels");
+    if (ch) return lead + explain(ch, t);
+  }
   if (OVERVIEW.test(t) || ABOUT_YOU.test(t)) {
     // A specific area named alongside ("what do you do for trips") gets that card instead of the overview.
     const specific = matchCapabilities(t.replace(ABOUT_YOU, ""));
@@ -270,7 +283,7 @@ export function answerCapability(text: string, name?: string | null): string | n
   const ask = sentences(t).find((x) => ASKING.test(x)) ?? t;
   const hits = matchCapabilities(ask);
   if (!hits.length) return null;
-  if (hits.length === 1) return lead + explain(hits[0]);
+  if (hits.length === 1 || hits[0].key === "channels") return lead + explain(hits[0], ask);
   return `${lead}${explain(hits[0])}\n\nIf you meant ${hits[1].name.toLowerCase()}: ${hits[1].what} Say "${hits[1].say[0]}".`;
 }
 

@@ -240,7 +240,7 @@ const outreach = defineAction({
     const who = row ? `${row.name}${row.twitter ? ` (${row.twitter})` : ""}${row.objective ? `, ${row.objective}` : ""}` : args.project;
     const draft = await draftReply(ctx.db, ctx.user, `Project: ${who}\nWhat I want: ${args.ask}`, "Write a 3 to 5 sentence first message: specific, one concrete ask, no flattery, no em dashes, signed with the user's first name. Output the message only.");
     const route = row?.twitter ? `Send it as a public reply or a DM to ${row.twitter}.` : "Send it through their public channel or the contact on their site.";
-    return { reply: `Here's a first message for ${row?.name ?? args.project}, edit it before you send:\n\n${draft ?? `Hi, I'm ${ctx.user.name ?? "[name]"}. ${args.ask}. [add one specific line about their project]`}\n\n${route} In the UK, EU and Nigeria a personal email needs their consent first; a public reply doesn't.` };
+    return { reply: `Here's a first message for ${row?.name ?? args.project}. Edit it before you send:\n\n\`\`\`\n${(draft ?? `Hi, I'm ${ctx.user.name ?? "[name]"}. ${args.ask}. [add one specific line about their project]`).replace(/\`\`\`/g, "")}\n\`\`\`\n\n${route} In the UK, EU and Nigeria a personal email needs their consent first; a public reply doesn't.` };
   },
 });
 

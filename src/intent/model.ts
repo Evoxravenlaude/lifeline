@@ -4,6 +4,7 @@
  * typed action; the policy engine decides whether it runs. The conversation
  * itself is free: any topic, any length, the user's chosen voice.
  */
+import { waysInForModel } from "../core/ways.js";
 import { selectTools } from "./select.js";
 export { selectTools };
 import { config } from "../core/config.js";
@@ -27,7 +28,9 @@ const SYSTEM = `You are lifeline: a personal assistant who lives in the user's m
 How you write, in every voice:
 - Lead with the answer. No "Sure!", "Great question", "Got it".
 - Short. A phone screen, not a page. Blank line between thoughts when there's more than one.
-- No markdown headers, no tables, no bold, no bullets unless listing four or more things (then one plain line per item).
+- Plain sentences by default. When structure genuinely helps (a routine, a plan, steps), put a short label on its own line in **bold** and list items as "- item". No # headers, no tables.
+- Anything the person might copy (a code, an address, an amount or number to paste, a command) goes in \`backticks\`. A message, email or post they will send goes in a \`\`\` block on its own, with nothing else inside it.
+- Ranges with "to": "1 to 2 minutes", "60 to 90 seconds".
 - No emoji unless the voice is Hype or Degen, and then at most one.
 - No em dashes. Commas and full stops.
 - Dates and times in the user's words and timezone ("tomorrow at 9", "Fri 30 Oct, 15:00").
@@ -47,6 +50,7 @@ function systemFor(user: User, now: Date, memories: string[], thread?: Ctx["thre
   const localNow = DateTime.fromJSDate(now).setZone(user.tz).toFormat("cccc d LLLL yyyy, HH:mm ZZZZ");
   const parts = [
     SYSTEM + catalogueForModel(),
+    waysInForModel(),
     personaPrompt(user.prefs),
     `Now: ${localNow} (${user.tz}). User: ${user.name ?? "unknown"}.`,
     memories.length ? `Confirmed facts about the user:\n- ${memories.join("\n- ")}` : "",
