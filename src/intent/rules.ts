@@ -10,6 +10,8 @@ export interface Intent {
 
 const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   // reminders
+  // time first: "remind me at 9 tomorrow to stretch", "remind me tomorrow to call Ada"
+  [/^remind me ((?:at|on|in|by|today|tomorrow|tonight|next|this|every)\b.*?)\s+(?:to|that|about)\s+(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[2], when: m[1] } })],
   [/^remind me (?:to )?(.+?)\s+(?:at|on|in|today|tomorrow|tonight|next|this)\s+(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1], when: m[0].slice(m[0].indexOf(m[1]) + m[1].length).trim() } })],
   [/^remind me (?:to )?(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1] } })],
   [/^(?:list|show|my) reminders$/i, () => ({ action: "reminder.list", args: {} })],

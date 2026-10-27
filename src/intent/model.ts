@@ -55,7 +55,7 @@ function systemFor(user: User, now: Date, memories: string[], thread?: Ctx["thre
   return parts.filter(Boolean).join("\n\n");
 }
 
-const MODEL_TIMEOUT_MS = 20_000;
+const MODEL_TIMEOUT_MS = 35_000; // room for one fallback provider after a slow first one
 
 export async function parseWithModel(text: string, ctx: Ctx, memories: string[], history: Msg[]): Promise<ModelResult | null> {
   if (!providerName()) return null;

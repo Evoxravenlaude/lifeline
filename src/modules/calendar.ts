@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
-import { fmt, parseWhen } from "../core/time.js";
+import { fmt, parseWhen, human } from "../core/time.js";
 import { cancelJob, onJob, push, schedule } from "../core/scheduler.js";
 import { DateTime } from "luxon";
 
@@ -55,7 +55,7 @@ const add = defineAction({
       [ctx.user.id, row!.id, start, end ?? new Date(start.getTime() + 3_600_000)],
     );
     return {
-      reply: `${args.title}, ${fmt(start, ctx.user.tz)}${args.location ? ` at ${args.location}` : ""}. I'll ping you ${remind === 0 ? "when it starts" : `${remind} minutes before`}.${clash ? ` Heads up, that overlaps with ${clash.title}.` : ""}`,
+      reply: `${args.title.charAt(0).toUpperCase() + args.title.slice(1)}, ${human(start, ctx.user.tz, ctx.now)}${args.location ? ` at ${args.location}` : ""}. I'll ping you ${remind === 0 ? "when it starts" : `${remind} minutes before`}.${clash ? ` Heads up, that overlaps with ${clash.title}.` : ""}`,
       undo: { payload: { eventId: row!.id, jobId } },
     };
   },

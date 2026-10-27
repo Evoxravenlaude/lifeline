@@ -113,7 +113,7 @@
 /* ---------- base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
 html { overflow-x: clip; -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; scroll-padding-top: calc(var(--bar-h) + 16px); }
-body { margin: 0; min-height: 100dvh; background: var(--paper); color: var(--ink); font: 400 var(--t-16)/1.55 var(--body); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; overflow-x: hidden; font-feature-settings: "tnum" 0; }
+body { margin: 0; min-height: 100dvh; background: var(--paper); color: var(--ink); font: 400 var(--t-16)/1.55 var(--body); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-feature-settings: "tnum" 0; }
 h1, h2, h3, h4 { font-family: var(--display); font-weight: 480; margin: 0; letter-spacing: -.012em; font-variation-settings: "SOFT" 50, "WONK" 0; }
 h1 { font-size: clamp(3rem, 8.4vw, 6rem); line-height: .95; font-variation-settings: "opsz" 144, "SOFT" 100, "WONK" 1; font-weight: 420; }
 h2 { font-size: var(--t-39); line-height: 1.04; font-variation-settings: "opsz" 96, "SOFT" 60; }
@@ -292,7 +292,7 @@ main { min-height: 60vh; }
 .msg.thinking .tx::after { content: ""; display: inline-block; width: 1.4em; text-align: left; animation: dots 1.2s steps(4) infinite; }
 @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
 @keyframes in { from { opacity: 0; transform: translateY(6px); } }
-.composer { position: sticky; bottom: 0; padding: 14px 0 20px; background: linear-gradient(to top, var(--paper) 70%, transparent); }
+.composer { position: sticky; bottom: 0; padding: 12px 0 20px; background: var(--paper); border-top: var(--edge-w) solid var(--line); }
 .composer form { display: flex; gap: 10px; align-items: flex-end; }
 .composer textarea { resize: none; min-height: 50px; max-height: 180px; line-height: 1.45; padding: 13px 16px; border-radius: var(--r); box-shadow: 4px 4px 0 0 var(--accent), 4px 4px 0 var(--edge-w) var(--ink); }
 .composer .btn { min-height: 50px; }
@@ -380,6 +380,7 @@ main { min-height: 60vh; }
 
 /* Pip, the large one */
 .pip-wrap { width: 100%; }
+.pip-wrap > .pip-line { text-align: center; font-family: var(--display); font-size: 1.125rem; line-height: 1.35; color: var(--ink-2); margin-top: 8px; font-variation-settings: "opsz" 24, "SOFT" 100; min-height: 2.7em; }
 .pip { width: 100%; height: auto; display: block; overflow: visible; }
 .pip * { transform-box: fill-box; }
 .pip .body { transform-origin: 50% 90%; animation: breathe 5.2s ease-in-out infinite; }

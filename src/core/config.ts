@@ -26,6 +26,8 @@ export const config = {
   openaiCompatKey: process.env.OPENAI_COMPAT_API_KEY ?? "",
   openaiCompatBaseUrl: (process.env.OPENAI_COMPAT_BASE_URL ?? "https://api.groq.com/openai/v1").replace(/\/$/, ""),
   openaiCompatModel: process.env.OPENAI_COMPAT_MODEL ?? "llama-3.3-70b-versatile",
+  /** Used when the main model is rate-limited (Groq only). Empty string turns it off. */
+  openaiCompatFallbackModel: process.env.OPENAI_COMPAT_FALLBACK_MODEL ?? "llama-3.1-8b-instant",
   // web + messaging channels
   port: Number(process.env.PORT ?? 3000),
   publicUrl: (process.env.PUBLIC_URL ?? "").replace(/\/$/, ""),

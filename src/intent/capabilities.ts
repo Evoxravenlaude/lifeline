@@ -177,15 +177,23 @@ export const CAPABILITIES: Capability[] = [
 
 const ASKING = /^(?:(?:hey|hi|yo|pip|lifeline)[,!\s]+)?(?:(?:can|could|do|does|are|will|would|is)\s+(?:you|u|it|this|one)|how\s+(?:do|can|would|does)\s+(?:i|you|it|one))\b|^(?:what|which|is there)\b.*\b(?:can|able|way|possible|support|handle|help)\b|^(?:help|help me)\s+(?:with|on)\b/i;
 const OVERVIEW = /^(?:what (?:can|do) (?:you|u) do|what are you(?: for)?|who are you|what is this|what is lifeline|what can i (?:say|ask|do)|help|features|capabilities|what do you know how to do)\b[?.!]*$/i;
+/** "what do you do" and friends anywhere in a message: "i'm good. what do you do", "tell me more about what you are". */
+const ABOUT_YOU = /\b(?:what (?:can|do|else can) (?:you|u) do|what (?:are|r) (?:you|u)(?: for| about)?\b|who (?:are|r) (?:you|u)|what you (?:are|do|can do)|tell me (?:more )?about (?:yourself|you\b|what you|lifeline|this bot)|what(?:'s| is) (?:this|lifeline)(?: bot| app| for)?\??$|how (?:do|does) (?:you|this|it) work|what are your (?:features|abilities|functions)|introduce yourself)/i;
 
-/** True when the sentence is a question about the bot's abilities rather than a request to do something. */
+/** Split a message into sentences, so "I'm good. What do you do?" is read as two things. */
+export const sentences = (t: string) => t.split(/(?<=[.!?])\s+|\s*\n+\s*/).map((x) => x.trim()).filter(Boolean);
+
+/** True when the message asks about the bot's abilities rather than asking it to do something. */
 export function isCapabilityQuestion(text: string): boolean {
-  const t = text.trim();
-  if (OVERVIEW.test(t)) return true;
-  if (!ASKING.test(t)) return false;
-  // "can you remind me at 9" is a request; "can you do reminders" is a question. Requests carry concrete arguments.
-  const concrete = /\b(?:at|on|in|by|tomorrow|tonight|next|every|\d)\b/i.test(t) && !/\b(?:how|what kind|what sort|which)\b/i.test(t);
-  return !concrete || /\b(?:how do i|how can i|what can|is there a way|able to|do you (?:do|support|handle|keep|track|know))\b/i.test(t);
+  const all = text.trim();
+  if (ABOUT_YOU.test(all)) return true;
+  return sentences(all).some((t) => {
+    if (OVERVIEW.test(t)) return true;
+    if (!ASKING.test(t)) return false;
+    // "can you remind me at 9" is a request; "can you do reminders" is a question. Requests carry concrete arguments.
+    const concrete = /\b(?:at|on|in|by|tomorrow|tonight|next|every|\d)\b/i.test(t) && !/\b(?:how|what kind|what sort|which)\b/i.test(t);
+    return !concrete || /\b(?:how do i|how can i|what can|is there a way|able to|do you (?:do|support|handle|keep|track|know))\b/i.test(t);
+  });
 }
 
 export function matchCapabilities(text: string, max = 2): Capability[] {
@@ -201,6 +209,11 @@ export function explain(c: Capability): string {
   return lines.join(" ");
 }
 
+/** The short answer to "who are you". */
+export function intro(): string {
+  return `I'm lifeline, and the tortoise is Pip. I keep your day and your deadlines so they don't have to live in your head: reminders, calendar, medication, trips, lists, hackathons, the people behind new projects, prices. Ask "what can you do" for the long version, or just tell me something to keep.`;
+}
+
 export function overview(name?: string | null): string {
   const first = name ? name.split(" ")[0] : null;
   return [
@@ -213,11 +226,19 @@ export function overview(name?: string | null): string {
 /** The answer to a capability question, or null if the question doesn't map to anything. */
 export function answerCapability(text: string, name?: string | null): string | null {
   const t = text.trim();
-  if (OVERVIEW.test(t)) return overview(name);
-  const hits = matchCapabilities(t);
+  const lead = /^(?:i(?:'m| am) (?:good|fine|great|okay|ok|well|alright)|(?:all )?good|fine|not bad)\b/i.test(t) ? "Glad to hear it. " : "";
+  if (OVERVIEW.test(t) || ABOUT_YOU.test(t)) {
+    // A specific area named alongside ("what do you do for trips") gets that card instead of the overview.
+    const specific = matchCapabilities(t.replace(ABOUT_YOU, ""));
+    if (specific.length) return lead + explain(specific[0]);
+    const whoOnly = /\b(?:who (?:are|r) (?:you|u)|what (?:are|r) (?:you|u)\b(?! for)|introduce yourself)/i.test(t) && !/\bwhat (?:can|do|else can) (?:you|u) do|what you (?:do|can do)|how (?:do|does)/i.test(t);
+    return lead + (whoOnly ? intro() : overview(lead ? null : name));
+  }
+  const ask = sentences(t).find((x) => ASKING.test(x)) ?? t;
+  const hits = matchCapabilities(ask);
   if (!hits.length) return null;
-  if (hits.length === 1) return explain(hits[0]);
-  return `${explain(hits[0])}\n\nIf you meant ${hits[1].name.toLowerCase()}: ${hits[1].what} Say "${hits[1].say[0]}".`;
+  if (hits.length === 1) return lead + explain(hits[0]);
+  return `${lead}${explain(hits[0])}\n\nIf you meant ${hits[1].name.toLowerCase()}: ${hits[1].what} Say "${hits[1].say[0]}".`;
 }
 
 /** Full index for /help: short, grouped, nothing that looks like a manual. */

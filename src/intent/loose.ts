@@ -56,7 +56,7 @@ const RULES: Rule[] = [
   { test: /^(?:my )?(?:time ?zone|tz)\s+(?:is\s+)?(?:now\s+)?([A-Za-z]+\/[A-Za-z_]+)|^i(?:'m| am) (?:now )?in\s+([A-Za-z]+\/[A-Za-z_]+)/i, build: (_t, m) => ({ action: "settings.update", args: { tz: m[1] ?? m[2] } }) },
   { test: /^(?:send|do) (?:my |the )?(?:digest|brief|briefing|morning (?:message|update)) at (\d{1,2})/i, build: (_t, m) => ({ action: "settings.update", args: { digest_hour: Number(m[1]) } }) },
   { test: /^(?:my )?(?:email|e-mail) (?:is |address is )?(\S+@\S+)/i, build: (_t, m) => ({ action: "settings.update", args: { email: m[1] } }) },
-  { test: /^(?:call me|my name is|i'?m)\s+([A-Z][a-z]+)$/i, build: (_t, m) => ({ action: "settings.update", args: { name: m[1] } }) },
+  { test: /^(?:call me|my name is|my name'?s)\s+([A-Za-z][\w'-]{1,30}(?:\s[A-Za-z][\w'-]{1,30})?)[.!]?$/i, build: (_t, m) => ({ action: "settings.update", args: { name: m[1].replace(/\b[a-z]/g, (c) => c.toUpperCase()) } }) },
   { test: /^(?:what'?s|how'?s|give me)\s+(?:my |the )?(?:day|digest|brief|briefing|morning|rundown)(?: (?:look|looking) like)?$|^(?:brief|digest|rundown) me/i, build: () => ({ action: "digest.now", args: {} }) },
 
   // ---- lists ----

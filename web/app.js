@@ -2,7 +2,26 @@
 window.App = (function () {
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-  const api = (p, b, m) => fetch(p, { method: m || (b ? "POST" : "GET"), headers: { "content-type": "application/json" }, body: b ? JSON.stringify(b) : undefined, credentials: "same-origin" }).then((r) => r.json()).catch(() => ({ error: "offline" }));
+  /** Every call returns an object; anything that isn't lifeline's own JSON comes back as { error }, never as a silent success. */
+  const api = async (p, b, m) => {
+    try {
+      const r = await fetch(p, { method: m || (b ? "POST" : "GET"), headers: { "content-type": "application/json" }, body: b ? JSON.stringify(b) : undefined, credentials: "same-origin" });
+      const type = r.headers.get("content-type") || "";
+      if (!type.includes("application/json")) return { error: "unreachable", status: r.status };
+      const j = await r.json();
+      if (!r.ok) return { error: j.error || "failed", status: r.status, ...j };
+      return j;
+    } catch { return { error: "offline" }; }
+  };
+  /** The brain answers /api/public with its bot name. Anything else means this page can't reach it. */
+  async function reachable() { const p = await api("/api/public"); return !p.error && typeof p.botUsername === "string"; }
+  function cantReach() {
+    const onVercel = /vercel\.app$/.test(location.hostname) || !/railway\.app$/.test(location.hostname);
+    const box = document.createElement("div");
+    box.className = "wrap"; box.style.padding = "24px var(--gutter)";
+    box.innerHTML = `<div class="card k-hack" role="alert"><div class="card-head">${ico("x")}<span>This page can't reach the lifeline server</span></div><div class="card-body" style="display:grid;gap:10px"><p>The site loaded, but the server that keeps your day didn't answer.</p>${onVercel ? `<p class="muted">If this is the Vercel site, <b>web/vercel.json</b> must send <b>/api</b> and <b>/auth</b> to your Railway address (Railway, your service, Settings, Networking). Push the fix and Vercel redeploys.</p>` : `<p class="muted">The server may be restarting. Try again in a minute.</p>`}<div class="row"><button class="btn sm" onclick="location.reload()">Try again</button></div></div></div>`;
+    document.body.insertBefore(box, document.body.firstChild.nextSibling);
+  }
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const linkify = (s) => esc(s).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
   const ico = (n, cls = "") => `<svg class="ico ${cls}"><use href="#i-${n}"/></svg>`;
@@ -50,8 +69,9 @@ window.App = (function () {
   async function boot() {
     paintBar();
     $("#modeBtnL").addEventListener("click", toggleMode);
+    if (!(await reachable())) { cantReach(); window.__bootDone && window.__bootDone(); return landing(true); }
     me = await api("/api/me");
-    if (me.error) { me = null; return landing(); }
+    if (me.error || typeof me.id !== "number") { me = null; return landing(); }
     document.body.classList.add("app");
     $("#app").hidden = false;
     if (me.palette && !localStorage.getItem("ll_palette")) setPalette(me.palette, null, false);
@@ -69,11 +89,12 @@ window.App = (function () {
     });
     window.addEventListener("hashchange", route);
     state = await api("/api/state");
+    if (state.error || !Array.isArray(state.pending)) state = { pending: [], reminders: [], events: [], meds: [], ledger: [], lists: [], memory: [], dates: [], classes_today: [], habits: [], quiet: false };
     route();
     window.__bootDone && window.__bootDone();
     setInterval(refresh, 30000);
   }
-  async function refresh() { const s = await api("/api/state"); if (s.error) return; state = s; if (view === "today") renderToday(true); updatePip(); }
+  async function refresh() { const s = await api("/api/state"); if (s.error || !Array.isArray(s.pending)) return; state = s; if (view === "today") renderToday(true); updatePip(); }
 
   function route() {
     const h = location.hash.replace("#", "") || "today";
@@ -155,6 +176,7 @@ window.App = (function () {
   async function press(data, el) {
     if (el) el.disabled = true;
     const r = await api("/api/button", { data });
+    if (r.error) { if (el) el.disabled = false; return toast("That didn't go through. Try once more?"); }
     toast(r.text || "Done.", /confirm/.test(data) ? "metal" : null);
     pip && pip.set(/undo|cancel/.test(data) ? "idle" : "done", r.text && r.text.length < 80 ? r.text : undefined);
     state = await api("/api/state");
@@ -264,7 +286,7 @@ window.App = (function () {
     pip && pip.set("thinking", "Reading that properly.");
     const r = await api("/api/chat", { text: msg });
     th.remove();
-    if (r.error) { addMsg("assistant", "I couldn't reach the brain just now. Once more in a moment?"); pip && pip.set("error", "That one slipped."); return; }
+    if (r.error || typeof r.text !== "string") { addMsg("assistant", "I couldn't reach the server just now, so that wasn't kept. Once more in a moment?"); pip && pip.set("error", "That one slipped."); return; }
     addMsg("assistant", r.text, r.buttons);
     const waits = r.buttons && r.buttons.some((b) => /^confirm:/.test(b.data));
     state = await api("/api/state");
@@ -287,7 +309,7 @@ window.App = (function () {
       e.preventDefault(); const text = input.value.trim(); if (!text) return;
       out.hidden = false; out.innerHTML = `<p class="faint serif"><i>Reading that properly.</i></p>`;
       const r = await api("/api/chat", { text });
-      out.innerHTML = `<p>${linkify(r.text || "I couldn't reach the brain just now.")}</p>${r.buttons && r.buttons.length ? `<div class="row">${r.buttons.map((b) => `<button class="btn sm ${/^confirm:/.test(b.data) ? "metal" : ""}" data-btn="${esc(b.data)}">${esc(b.label)}</button>`).join("")}</div>` : ""}`;
+      out.innerHTML = `<p>${linkify(r.text || "I couldn't reach the server just now, so that wasn't kept.")}</p>${r.buttons && r.buttons.length ? `<div class="row">${r.buttons.map((b) => `<button class="btn sm ${/^confirm:/.test(b.data) ? "metal" : ""}" data-btn="${esc(b.data)}">${esc(b.label)}</button>`).join("")}</div>` : ""}`;
       $$("[data-btn]", out).forEach((b) => b.addEventListener("click", async () => { const rr = await api("/api/button", { data: b.dataset.btn }); out.innerHTML = `<p>${linkify(rr.text)}</p>`; state = await api("/api/state"); if (view === "today" || view === "lists") route(); }));
       input.value = ""; state = await api("/api/state"); if (view === "today" || view === "lists") { const keep = o; route(); document.body.appendChild(keep); } updatePip();
     });
@@ -463,8 +485,9 @@ window.App = (function () {
   }
 
   /* ---------- Landing (signed out) ---------- */
-  function landing() {
+  function landing(offline) {
     $("#landing").hidden = false;
+    if (offline) { $("#linkForm button").disabled = true; }
     const sample = [["remind me to call Ada tomorrow at 9", "Call Ada, tomorrow at 09:00. I'll ping you here.", "rem"], ["I'm going to Accra on the 20th", "Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"], ["can you track my meds?", "Yes. Tell me what you take and when, like \"I take vitamin D at 8 and 8pm\". I'll ring you at each dose with Taken and Skip, and keep the log.", "dose"], ["pay 2000 airtime to 0801 234 5678", "This sends 2,000 naira airtime to 0801 234 5678 through MTN. Go ahead? It waits ten minutes for a yes.", "hack"]];
     $("#letters").innerHTML = sample.map(([u, b, k]) => `<div class="letter"><span class="you">${esc(u)}</span><div class="card ll k-${k}">${esc(b)}</div></div>`).join("");
     const now = new Date(), m = now.getHours() * 60 + now.getMinutes();

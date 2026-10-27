@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
-import { fmt, parseWhen } from "../core/time.js";
+import { fmt, human, parseWhen, parseWhenOrMorning } from "../core/time.js";
 import { cancelJob, onJob, push, schedule } from "../core/scheduler.js";
 
 onJob("reminder", async (job, deps) => {
@@ -32,11 +32,11 @@ const create = defineAction({
     return { need: "when", question: `When should I remind you${args.text.length < 60 ? ` to ${args.text}` : ""}?` };
   },
   async run(args, ctx) {
-    const due = args.when ? parseWhen(args.when, ctx.user.tz, ctx.now) : new Date(ctx.now.getTime() + 3_600_000);
+    const due = args.when ? parseWhenOrMorning(args.when, ctx.user.tz, ctx.now) : new Date(ctx.now.getTime() + 3_600_000);
     if (!due) throw new Error(`I couldn't read a time from "${args.when}". When should I ring you?`);
     const row = await ctx.db.one<{ id: number }>(
       `INSERT INTO reminders (user_id, text, due_at, cron) VALUES ($1,$2,$3,$4) RETURNING id`,
-      [ctx.user.id, args.text, due, args.repeat ?? null],
+      [ctx.user.id, args.text.replace(/^(?:to|that i (?:need to|should|have to)|about)\s+/i, ""), due, args.repeat ?? null],
     );
     const jobId = await schedule(ctx.db, {
       userId: ctx.user.id,
@@ -47,8 +47,9 @@ const create = defineAction({
       tz: ctx.user.tz,
     });
     await ctx.db.query(`UPDATE reminders SET job_id=$2 WHERE id=$1`, [row!.id, jobId]);
-    const when = args.repeat ? `repeating, next ${fmt(due, ctx.user.tz)}` : args.when ? fmt(due, ctx.user.tz) : "in an hour";
-    const cap = args.text.charAt(0).toUpperCase() + args.text.slice(1);
+    const when = args.repeat ? `repeating, next ${human(due, ctx.user.tz, ctx.now)}` : args.when ? human(due, ctx.user.tz, ctx.now) : "in an hour";
+    const clean = args.text.replace(/^(?:to|that i (?:need to|should|have to)|about)\s+/i, "");
+    const cap = clean.charAt(0).toUpperCase() + clean.slice(1);
     return { reply: `${cap}, ${when}. I'll ping you here.`, undo: { payload: { reminderId: row!.id, jobId } } };
   },
   async undo(p, ctx) {

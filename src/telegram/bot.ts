@@ -3,7 +3,7 @@
  * inline keyboards. Also handles voice notes, .ics uploads, the persona
  * picker, and Telegram Business messages (draft replies, never auto-sent).
  */
-import { Bot, InlineKeyboard, Keyboard, type Context } from "grammy";
+import { Bot, InlineKeyboard, type Context } from "grammy";
 import { config } from "../core/config.js";
 import { log } from "../core/log.js";
 import type { Db } from "../core/db.js";
@@ -12,7 +12,7 @@ import { registerSender } from "../core/dispatch.js";
 import { propose } from "../policy/engine.js";
 import { FULL_HELP } from "../intent/index.js";
 import { overview } from "../intent/capabilities.js";
-import { diagnostics, providerName } from "../intent/providers.js";
+import { diagnostics, providerChain } from "../intent/providers.js";
 import { transcribe } from "../core/stt.js";
 import { PERSONAS } from "../intent/persona.js";
 import { spentToday } from "../core/budget.js";
@@ -31,8 +31,18 @@ export function toHtml(text: string): string {
   }).join("\n");
 }
 
-const QUICK = new Keyboard().text("Today").text("Hackathons").text("Scout").row().text("Lists").text("Money").text("Pip").resized().persistent();
-const QUICK_MAP: Record<string, string> = { Today: "today", Hackathons: "any hackathons for me", Lists: "my lists", Money: "how much did I spend this week" };
+/**
+ * No persistent keyboard: it took a third of the chat to repeat what the Menu button does.
+ * The old tiles still work if someone taps one before it disappears.
+ */
+const OLD_TILES: Record<string, string> = { Today: "today", Hackathons: "any hackathons for me", Lists: "my lists", Money: "how much did I spend this week", Scout: "Scout", Pip: "Pip", "☼ Today": "today", "⚑ Hackathons": "any hackathons for me", "☐ Lists": "my lists", "¤ Money": "how much did I spend this week", "◎ Scout": "Scout", "🐢 Pip": "Pip" };
+/** Four ways in, under the welcome only. They scroll away with it. */
+const WAYS_IN = () => new InlineKeyboard().text("What's on today", "say:today").text("What can you do?", "say:what can you do").row().text("My lists", "say:my lists").text("Hackathons for me", "say:any hackathons for me");
+const COMMANDS = [
+  ["today", "Your day in one message"], ["what", "What I can do, in plain words"], ["lists", "Your lists"], ["trips", "Trips you're planning"],
+  ["hackathons", "Hackathons ranked for you"], ["scout", "Find projects and the people behind them"], ["money", "This week's spending"],
+  ["persona", "Change how I talk"], ["link", "Use me on the web, SMS or iMessage"], ["pending", "What's waiting on your yes"], ["undo", "Take back the last thing"], ["doctor", "Check that everything's connected"],
+] as const;
 const TZ_CHOICES: [string, string][] = [["Lagos", "Africa/Lagos"], ["Libreville", "Africa/Libreville"], ["Accra", "Africa/Accra"], ["Nairobi", "Africa/Nairobi"], ["London", "Europe/London"], ["New York", "America/New_York"], ["Dubai", "Asia/Dubai"], ["Lisbon", "Europe/Lisbon"], ["Singapore", "Asia/Singapore"]];
 
 export { getUserById } from "../core/handler.js";
@@ -67,10 +77,18 @@ export function createBot(db: Db): Bot {
   });
 
   const userOf = (c: Context) => ensureUser(db, "telegram", String(c.from!.id), [c.from!.first_name, c.from!.last_name].filter(Boolean).join(" "));
+  /** The old tile keyboard goes away with the first reply that has no buttons of its own. */
+  const clearOld = async (c: Context): Promise<{ remove_keyboard: true } | undefined> => {
+    const u = await userOf(c);
+    if (u.prefs.kbCleared) return undefined;
+    await db.query(`UPDATE users SET prefs = prefs || '{"kbCleared":true}'::jsonb WHERE id=$1`, [u.id]);
+    return { remove_keyboard: true };
+  };
   const send = async (c: Context, r: Reply) => {
     const parts = chunks(r.text);
+    const remove = r.buttons?.length ? undefined : await clearOld(c);
     for (let i = 0; i < parts.length; i++) {
-      const markup = i === parts.length - 1 ? kb(r) : undefined;
+      const markup = i === parts.length - 1 ? kb(r) ?? remove : undefined;
       await c.reply(toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } }).catch(() => c.reply(parts[i], { reply_markup: markup }));
     }
   };
@@ -93,8 +111,11 @@ export function createBot(db: Db): Bot {
       ].join("\n\n"), { reply_markup: k });
       return;
     }
-    await say(c, `Welcome back${first ? `, ${first}` : ""}. ${pipLine("return", u)}`, { reply_markup: QUICK });
+    if (!u.prefs.kbCleared) { await db.query(`UPDATE users SET prefs = prefs || '{"kbCleared":true}'::jsonb WHERE id=$1`, [u.id]); await c.reply("…", { reply_markup: { remove_keyboard: true } }).then((m) => c.api.deleteMessage(m.chat.id, m.message_id)).catch(() => {}); }
+    await say(c, `Welcome back${first ? `, ${first}` : ""}. ${pipLine("return", u)} Just talk to me, or start here:`, { reply_markup: WAYS_IN() });
   });
+  bot.api.setMyCommands(COMMANDS.map(([command, description]) => ({ command, description }))).catch((e) => log.warn({ err: e?.message }, "setMyCommands failed"));
+  bot.command("scout", async (c) => say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } }));
   bot.command("help", async (c) => say(c, FULL_HELP));
   bot.command("what", async (c) => { const u = await userOf(c); await say(c, overview(u.name)); });
   bot.command("pip", async (c) => {
@@ -103,9 +124,16 @@ export function createBot(db: Db): Bot {
     await say(c, line ?? pipLine("idle", u));
   });
   bot.command("doctor", async (c) => {
-    const p = providerName();
-    const age = (t: number | null) => (t ? `${Math.round((Date.now() - t) / 1000)}s ago` : "never");
-    await c.reply([`provider: ${p ?? "none (rules + loose NL only)"}`, `last model success: ${age(diagnostics.lastOkAt)}`, `last model error: ${age(diagnostics.lastErrorAt)}${diagnostics.lastError ? `\n  ${diagnostics.lastError}` : ""}`, `gemini key for scout: ${config.geminiKey ? "yes" : "no"}`, `stt: ${config.openaiKey ? "yes" : "no"}, email: ${config.smtpUrl ? "yes" : "no"}, public url: ${config.publicUrl || "unset"}`].join("\n"));
+    const chain = providerChain();
+    const age = (t: number | null) => (t ? (Date.now() - t < 90_000 ? `${Math.round((Date.now() - t) / 1000)}s ago` : `${Math.round((Date.now() - t) / 60_000)} min ago`) : "never");
+    const lines = [
+      `Models, in the order I try them: ${chain.length ? chain.join(", then ") : "none set, so I only understand plain shapes"}.`,
+      `Last good answer: ${age(diagnostics.lastOkAt)}${diagnostics.lastProvider ? ` (${diagnostics.lastProvider})` : ""}. Last failure: ${age(diagnostics.lastErrorAt)}.`,
+      ...Object.values(diagnostics.errors).map((e) => `  ${e}`),
+      `Scout web search: ${config.geminiKey ? "on" : "off (needs GEMINI_API_KEY)"}. Voice notes: ${config.openaiKey ? "on" : "off"}. Email: ${config.smtpUrl ? "on" : "off"}.`,
+      `Web address: ${config.publicUrl || "not set (PUBLIC_URL)"}.`,
+    ];
+    await c.reply(lines.join("\n"), { link_preview_options: { is_disabled: true } });
   });
   bot.command("persona", async (c) => {
     const u = await userOf(c);
@@ -118,7 +146,7 @@ export function createBot(db: Db): Bot {
     const u = await userOf(c);
     await say(c, `Model spend in the last day: $${(await spentToday(db, u.id)).toFixed(3)} of $${config.dailyModelBudgetUsd}.`);
   });
-  for (const [cmd, text] of [["pending", "pending"], ["undo", "undo"], ["memory", "what do you know about me"], ["audit", "/audit"], ["link", "link"], ["today", "today"]] as const) {
+  for (const [cmd, text] of [["pending", "pending"], ["undo", "undo"], ["memory", "what do you know about me"], ["audit", "/audit"], ["link", "link"], ["today", "today"], ["lists", "my lists"], ["trips", "trip"], ["hackathons", "any hackathons for me"], ["money", "how much did I spend this week"]] as const) {
     bot.command(cmd, async (c) => send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram" })));
   }
 
@@ -144,13 +172,13 @@ export function createBot(db: Db): Bot {
 
   bot.on("message:text", async (c) => {
     const raw = c.message.text.trim();
-    if (raw === "Pip") {
+    if (OLD_TILES[raw] === "Pip") {
       const u = await userOf(c);
       const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise with spectacles who keeps the user's day. One line (max 16 words) in the user's chosen voice: a dry, warm remark about keeping time, carrying things, or the day. No emoji. Output the line only.");
       return say(c, line ?? pipLine("idle", u));
     }
-    if (raw === "Scout") return say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } });
-    const text = QUICK_MAP[raw] ?? raw;
+    if (OLD_TILES[raw] === "Scout" || raw === "/scout") return say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } });
+    const text = OLD_TILES[raw] && !["Scout", "Pip"].includes(OLD_TILES[raw]) ? OLD_TILES[raw] : raw;
     const forwarded = Boolean((c.message as any).forward_origin || (c.message as any).forward_date);
     await c.replyWithChatAction("typing").catch(() => {});
     await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded }));
@@ -176,9 +204,14 @@ export function createBot(db: Db): Bot {
           `${PERSONAS[value]?.label ?? value}. That's the whole setup.`,
           `Try me with something real: "remind me to call Ada tomorrow at 9", "I'm going to Accra on the 20th", "who's building payments on base". If you want hackathons and launches ranked to your taste, tell me what you're into whenever, like "interests: ai, payments, base". Any chains, any themes.`,
           `And if you ever wonder whether I can do something, just ask. "Can you track my meds?" gets a straight answer.`,
-        ].join("\n\n"), { reply_markup: QUICK });
+        ].join("\n\n"), { reply_markup: WAYS_IN() });
       }
       return;
+    }
+    if (data.startsWith("say:")) {
+      await c.answerCallbackQuery();
+      await c.replyWithChatAction("typing").catch(() => {});
+      return send(c, await handleMessage(db, u, data.slice(4), { channel: "telegram" }));
     }
     const r = await handleCallback(db, u, data);
     await c.answerCallbackQuery({ text: r.text.slice(0, 190) });

@@ -51,7 +51,7 @@ describe("follow-ups", () => {
     const a = await handleMessage(db, u, "remind me to call Ada", { channel: "sms", now: NOW });
     expect(a.text).toBe("When should I remind you to call Ada?");
     const b = await handleMessage(db, (await getUserById(db, u.id))!, "tomorrow at 9", { channel: "sms", now: NOW });
-    expect(b.text).toMatch(/^Call Ada, Wed 28 Oct, 09:00\. I'll ping you here\./);
+    expect(b.text).toMatch(/^Call Ada, tomorrow at 09:00\. I'll ping you here\./);
     const c = await handleMessage(db, (await getUserById(db, u.id))!, "remind me to stretch", { channel: "sms", now: NOW });
     expect(c.text).toContain("When");
     const d = await handleMessage(db, (await getUserById(db, u.id))!, "no", { channel: "sms", now: NOW });

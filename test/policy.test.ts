@@ -45,7 +45,7 @@ describe("policy engine", () => {
     const d = await propose(ctx(), "reminder.create", { text: "call Ada", when: "tomorrow 9am" });
     expect(d.kind).toBe("ran");
     if (d.kind !== "ran") return;
-    expect(d.reply).toContain("Tue 27 Oct, 09:00");
+    expect(d.reply).toContain("Call Ada, tomorrow at 09:00");
     expect(d.undoId).toBeDefined();
     const rows = await db.query(`SELECT * FROM reminders WHERE NOT deleted`);
     expect(rows).toHaveLength(1);

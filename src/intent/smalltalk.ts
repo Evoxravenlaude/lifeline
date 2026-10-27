@@ -5,7 +5,7 @@
  */
 import { PERSONAS } from "./persona.js";
 import { accent } from "../core/voice.js";
-import { overview } from "./capabilities.js";
+import { overview, intro } from "./capabilities.js";
 
 const pick = (a: string[]) => a[Math.floor(Math.random() * a.length)];
 
@@ -16,10 +16,12 @@ const RULES: [RegExp, (name: string | null, m: RegExpMatchArray) => string][] = 
   [/^(?:how are you|how'?s it going|you good|wyd|what'?s up|sup|how are things)\b/i, () => pick(["Steady. Keeping your day warm. You?", "All good here. What's next?", "Quiet on my end. Nothing's on fire."])],
   [/^(?:ok|okay|k|cool|nice|great|alright|sounds good|fine|got it|noted|perfect|sweet)\b[.!]?$/i, () => pick(["Good.", "Right.", "Okay."])],
   [/^(?:bye|goodbye|good night|gn|night|see you|talk later|ttyl|off to bed)\b/i, () => pick(["Rest well. Reminders still ring.", "Later. I've got the list.", "Night."])],
-  [/^(?:who are you|what are you|what can you do|what do you do|what is this)\b/i, (n) => overview(n)],
+  [/^(?:who are you|what are you)\b/i, () => intro()],
+  [/^(?:what can you do|what do you do|what is this)\b/i, (n) => overview(n)],
   [/^(?:what'?s my name|who am i)\b/i, (n) => (n ? `You're ${n}. Or that's what you told Telegram, anyway.` : "You haven't told me. Say \"my name is ...\" and I'll keep it.")],
   [/^(?:yes|yeah|yep|no|nope|nah)\b[.!]?$/i, () => pick(["Nothing's waiting on a yes or no right now. What did you mean?", "Nothing pending. Say what you'd like."])],
   [/^(?:sorry|my bad|oops|apologies)\b/i, () => "No harm done."],
+  [/^(?:i(?:'m| am) (?:good|fine|great|okay|ok|well|alright|doing (?:good|well|fine))|doing (?:good|well|fine)|not bad|all good)\b[^?]*$/i, () => pick(["Good to hear. Anything you want me to keep for you today?", "Glad. Say the word if there's something to remember.", "Good. I'm here when you need something kept."])],
   [/^(?:lol|haha|lmao|rofl|😂|🤣)/i, () => pick(["Ha.", "Glad it landed."])],
   [/^(?:love you|you'?re the best|good bot|well done|nice one)\b/i, () => pick(["Careful, I'll get ideas.", "Noted, and returned.", "I try."])],
   [/^(?:are you (?:a )?(?:bot|robot|ai|human|real))\b/i, () => "A bot, with a tortoise for a face. The memory is real, though."],

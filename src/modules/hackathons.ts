@@ -86,8 +86,9 @@ const discover = defineAction({
   schema: z.object({ tag: z.string().optional(), limit: z.number().int().min(1).max(15).optional() }),
   async run(args, ctx) {
     const u = args.tag ? { ...ctx.user, prefs: { ...ctx.user.prefs, tags: [args.tag] } } : ctx.user;
-    const list = await rankedForUser(ctx.db, u, ctx.now, args.limit ?? 8);
-    if (!list.length) return { reply: args.tag ? `Nothing open for ${args.tag} right now. I check the sources every six hours; ask again later or drop the filter.` : "Nothing new that fits right now. I check the sources every six hours, and anything that fits lands in your morning brief." };
+    // Asked directly, show everything open that fits, including ones the morning brief already mentioned.
+    const list = await rankedForUser(ctx.db, u, ctx.now, args.limit ?? 8, { unseenOnly: false });
+    if (!list.length) return { reply: args.tag ? `Nothing open for ${args.tag} right now. I check the sources every six hours; ask again later or drop the filter.` : "Nothing open that fits right now. I check the sources every six hours, and anything that fits lands in your morning brief. Tell me what you're into to widen it: \"interests: ai, payments, base\"." };
     for (const h of list) await ctx.db.query(`INSERT INTO hackathon_seen (user_id, hackathon_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ctx.user.id, h.id]);
     const head = list.length === 1 ? "One worth a look." : `${list.length} worth a look, best fit first.`;
     return { reply: [head, "", ...list.map((h) => hackLine(h, ctx.user.tz, ctx.now))].join("\n") };

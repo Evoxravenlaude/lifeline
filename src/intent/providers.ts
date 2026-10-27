@@ -1,6 +1,7 @@
 /**
- * Model providers behind one interface. Anthropic (SDK) and Gemini (REST).
- * MODEL_PROVIDER picks; default is whichever key is set (Anthropic first).
+ * Model providers behind one interface: Anthropic (SDK), Gemini (REST) and
+ * any OpenAI-compatible endpoint (Groq by default). MODEL_PROVIDER picks the
+ * first to try; every other configured provider is a fallback.
  * Gemini additionally offers Google Search grounding, used by the scout.
  */
 import { z } from "zod";
@@ -19,44 +20,57 @@ export interface CompleteOpts { system: string; messages: Msg[]; tools?: Tool[];
 export type Provider = "anthropic" | "gemini" | "openai";
 
 /** Last model outcome, for /doctor and the fallback message. */
-export const diagnostics: { lastError: string | null; lastOkAt: number | null; lastErrorAt: number | null } = { lastError: null, lastOkAt: null, lastErrorAt: null };
+export const diagnostics: { lastError: string | null; lastOkAt: number | null; lastErrorAt: number | null; lastProvider: string | null; errors: Record<string, string> } = { lastError: null, lastOkAt: null, lastErrorAt: null, lastProvider: null, errors: {} };
+
+const CALL_TIMEOUT_MS = 15_000;
+
+/** Every provider that has a key, the chosen one first. */
+export function providerChain(): Provider[] {
+  const has: Record<Provider, boolean> = { anthropic: Boolean(config.anthropicKey), gemini: Boolean(config.geminiKey), openai: Boolean(config.openaiCompatKey) };
+  const order: Provider[] = [];
+  if (config.modelProvider && has[config.modelProvider]) order.push(config.modelProvider);
+  for (const p of ["anthropic", "openai", "gemini"] as Provider[]) if (has[p] && !order.includes(p)) order.push(p);
+  return order;
+}
 
 export function providerName(): Provider | null {
-  const p = config.modelProvider;
-  if (p === "anthropic" && config.anthropicKey) return "anthropic";
-  if (p === "gemini" && config.geminiKey) return "gemini";
-  if (p === "openai" && config.openaiCompatKey) return "openai";
-  if (config.anthropicKey) return "anthropic";
-  if (config.geminiKey) return "gemini";
-  if (config.openaiCompatKey) return "openai";
-  return null;
+  return providerChain()[0] ?? null;
 }
 
+/**
+ * Try each configured provider in turn. Within a provider: the full request,
+ * then the same request without tools (many endpoints choke on tool lists),
+ * and on Groq a rate limit drops to the lighter model. Every attempt has a
+ * time limit, so one slow provider never stalls the conversation.
+ */
 export async function complete(opts: CompleteOpts, forceProvider?: Provider): Promise<Completion | null> {
-  const p = forceProvider ?? providerName();
-  if (!p) return null;
-  const run = () => (p === "anthropic" ? anthropic(opts) : p === "gemini" ? gemini(opts) : openaiCompat(opts));
-  try {
-    const r = await run();
-    diagnostics.lastOkAt = Date.now();
-    return r;
-  } catch (e: any) {
-    diagnostics.lastError = `${p}: ${e?.message ?? e}`.slice(0, 300);
-    diagnostics.lastErrorAt = Date.now();
-    // Many endpoints choke on a large tool list; the conversation must survive that.
-    if (opts.tools?.length) {
+  const chain = forceProvider ? [forceProvider] : providerChain();
+  if (!chain.length) return null;
+  let last: unknown = null;
+  for (const p of chain) {
+    const attempts: (() => Promise<Completion>)[] = [() => call(p, opts)];
+    if (opts.tools?.length) attempts.push(() => call(p, { ...opts, tools: undefined }));
+    for (const attempt of attempts) {
       try {
-        const r = await (p === "anthropic" ? anthropic({ ...opts, tools: undefined }) : p === "gemini" ? gemini({ ...opts, tools: undefined }) : openaiCompat({ ...opts, tools: undefined }));
-        diagnostics.lastOkAt = Date.now();
+        const r = await attempt();
+        diagnostics.lastOkAt = Date.now(); diagnostics.lastProvider = p; delete diagnostics.errors[p];
         return r;
-      } catch (e2: any) {
-        diagnostics.lastError = `${p}: ${e2?.message ?? e2}`.slice(0, 300);
-        throw e2;
+      } catch (e: any) {
+        last = e;
+        const msg = `${p}: ${e?.name === "TimeoutError" || e?.name === "AbortError" ? `no answer within ${CALL_TIMEOUT_MS / 1000}s` : e?.message ?? e}`.slice(0, 300);
+        diagnostics.lastError = msg; diagnostics.lastErrorAt = Date.now(); diagnostics.errors[p] = msg;
+        if (/\b(401|403)\b/.test(String(e?.message))) break; // bad key: no point retrying this provider
       }
     }
-    throw e;
   }
+  throw last;
 }
+
+function call(p: Provider, o: CompleteOpts): Promise<Completion> {
+  return p === "anthropic" ? anthropic(o) : p === "gemini" ? gemini(o) : openaiCompat(o);
+}
+
+const isGroq = () => /groq\.com/.test(config.openaiCompatBaseUrl);
 
 /**
  * Any OpenAI-compatible chat endpoint: Groq, OpenRouter, Cerebras, Mistral,
@@ -75,10 +89,13 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
     body.tools = o.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: geminiSchema(z.toJSONSchema(t.schema, { io: "input" })) } }));
     body.tool_choice = "auto";
   }
-  const r = await fetch(`${config.openaiCompatBaseUrl}/chat/completions`, {
-    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiCompatKey}` }, body: JSON.stringify(body),
+  const post = (model: string) => fetch(`${config.openaiCompatBaseUrl}/chat/completions`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiCompatKey}` }, body: JSON.stringify({ ...body, model }), signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
   });
-  if (!r.ok) throw new Error(`${config.openaiCompatBaseUrl} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  let r = await post(config.openaiCompatModel);
+  // Groq's free tier limits tokens per minute per model; the small model has far more room.
+  if ((r.status === 429 || r.status === 413) && isGroq() && config.openaiCompatFallbackModel && config.openaiCompatFallbackModel !== config.openaiCompatModel) r = await post(config.openaiCompatFallbackModel);
+  if (!r.ok) throw new Error(`${config.openaiCompatBaseUrl.replace(/^https?:\/\//, "")} ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j: any = await r.json();
   const m = j.choices?.[0]?.message ?? {};
   const tc = m.tool_calls?.[0]?.function;
@@ -93,7 +110,7 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
 
 async function anthropic(o: CompleteOpts): Promise<Completion> {
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: config.anthropicKey });
+  const client = new Anthropic({ apiKey: config.anthropicKey, timeout: CALL_TIMEOUT_MS, maxRetries: 0 });
   const res = await client.messages.create({
     model: config.model,
     max_tokens: o.maxTokens ?? 1500,
@@ -133,7 +150,7 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
   if (o.grounded) tools.push({ google_search: {} });
   if (tools.length) body.tools = tools;
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiKey}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(o.grounded ? CALL_TIMEOUT_MS * 3 : CALL_TIMEOUT_MS),
   });
   if (!r.ok) throw new Error(`gemini ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j: any = await r.json();

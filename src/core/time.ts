@@ -23,6 +23,28 @@ export function parseClock(text: string): [number, number] | null {
   return [h, min];
 }
 
+/** "today at 14:00", "tomorrow at 09:00", "Fri 30 Oct at 15:00": how a person says when. */
+export function human(d: Date | string, tz: string, now = new Date()): string {
+  const dt = DateTime.fromJSDate(typeof d === "string" ? new Date(d) : d).setZone(tz);
+  const today = DateTime.fromJSDate(now).setZone(tz).startOf("day");
+  const days = Math.round(dt.startOf("day").diff(today, "days").days);
+  const t = dt.toFormat("HH:mm");
+  if (days === 0) return `today at ${t}`;
+  if (days === 1) return `tomorrow at ${t}`;
+  if (days > 1 && days < 7) return `${dt.toFormat("cccc")} at ${t}`;
+  return `${dt.toFormat("ccc d LLL")} at ${t}`;
+}
+
+/** Parse a time, and when only a day was given ("tomorrow", "friday"), settle on 09:00 rather than the current hour. */
+export function parseWhenOrMorning(text: string, tz: string, now: Date): Date | null {
+  const ref = DateTime.fromJSDate(now).setZone(tz);
+  const r = chrono.parse(text, { instant: now, timezone: ref.offset }, { forwardDate: true })[0];
+  if (!r) return null;
+  const d = r.start.date();
+  if (r.start.isCertain("hour") || /\b(?:in \d|hours?|minutes?|mins?)\b/i.test(text)) return d;
+  return DateTime.fromJSDate(d).setZone(tz).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toJSDate();
+}
+
 export function fmt(d: Date | string, tz: string, withDate = true): string {
   const dt = DateTime.fromJSDate(typeof d === "string" ? new Date(d) : d).setZone(tz);
   return withDate ? dt.toFormat("ccc d LLL, HH:mm") : dt.toFormat("HH:mm");
