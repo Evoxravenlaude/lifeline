@@ -9,6 +9,20 @@ const parse = (s: string) => parseByRules(s) ?? parseLoose(s, NOW);
 
 /** One ordinary sentence per action. If an action is added without a sentence here, this test fails. */
 const SENTENCES: Record<string, string[]> = {
+  "image.draw": ["draw a lion in agbada", "draw me a sunset over Lagos", "make a picture of a cat in sunglasses", "generate an image of Pip as an astronaut"],
+  "web.search": ["search who won the match last night", "google the price of a PS5", "look up opening hours for Shoprite Lekki"],
+  "speech.settings": ["voice replies always", "voice replies off", "text only", "use a calm voice", "talk to me"],
+  "speech.say": ["read that to me", "say that out loud"],
+  "email.me": ["email me my shopping list", "email me my brief", "mail me the todo list"],
+  "settings.verify_email": ["verify 482913", "code 482913"],
+  "email.send": ["email ada@example.com saying I'll be ten minutes late"],
+  "game.play": ["play a game", "i'm bored", "quiz me", "trivia about football", "give me a riddle", "would you rather"],
+  "fun.decide": ["flip a coin", "heads or tails?", "pick for me: jollof or fried rice", "pizza or suya, pick for me"],
+  "fun.roll": ["roll a dice", "roll", "darts", "slots"],
+  "fun.eightball": ["8 ball will I pass my exam", "magic 8 ball"],
+  "fun.roast": ["roast me", "roast me about my spending"],
+  "fun.hype": ["hype me up", "hype me up for my interview"],
+  "fun.wrapped": ["my week wrapped", "how was my week", "wrapped"],
   "cycle.start": ["my period started today", "my period started yesterday", "started my period", "my period started on monday"],
   "cycle.end": ["my period ended", "period's over", "my period ended yesterday"],
   "cycle.log": ["cramps today", "heavy flow", "spotting", "headache and bloating", "took my pill", "took a pregnancy test: negative"],

@@ -58,11 +58,11 @@ Day one for each friend: `/start` on Telegram → `timezone Europe/London` → `
 
 | Channel | In | Out | Buttons | Notes |
 |---|---|---|---|---|
-| Telegram | text, voice, .ics, Business messages | inline keyboards | tap | auto-creates allow-listed users; `/persona`, `/link`, `/usage` |
-| Web | chat box | chat + live sidebar (pending, reminders, calendar, meds, lists, ledger, trips/dates, memory, spend) | click | Telegram Login Widget or link code; sessions 30 days |
-| SMS | Twilio webhook | Twilio REST | `1) Confirm 2) Cancel`, reply with the number | links by texting `link <code>`; unlinked numbers get one instruction |
-| iMessage | BlueBubbles / Sendblue webhook | relay REST | same as SMS | identity = phone or Apple ID email |
-| Email | — | send-only fallback | — | last hop if every channel fails |
+| Telegram | text, voice notes, video notes, photos, .ics, Business messages | text, voice notes, pictures, animated dice, inline keyboards, Copy buttons | tap | `/everything`, `/play`, `/voice`, `/persona`, `/link`, `/doctor` |
+| Web | chat box, mic, photos | chat, voice replies, pictures + live sidebar | click | sign in through the bot or a link code; sessions 30 days |
+| SMS | Android gateway or Twilio webhook | gateway or Twilio REST | `1) Yes 2) No`, reply with the number | links by texting `link <code>`; strangers get silence unless they mention lifeline |
+| iMessage | BlueBubbles / Sendblue webhook | relay REST | same as SMS | see docs/IMESSAGE.md |
+| Email | Resend inbound webhook (signed, SPF/DKIM checked) | Gmail SMTP or Resend | same as SMS | forward bookings and invites; see docs/EMAIL.md |
 
 Outbound pushes go to the user's preferred channel and fall back down the chain (Telegram → iMessage → SMS → web → email). Every channel calls the same `handleMessage`/`handleCallback`, so a confirmation started on Telegram can be finished by texting `1`.
 
@@ -71,6 +71,12 @@ Outbound pushes go to the user's preferred channel and fall back down the chain 
 | Area | Say | Behaviour |
 |---|---|---|
 | Chat | anything | With a model key: free conversation, any topic, opinions, the voice you picked (`/persona` or `voice <describe it>`) |
+| Voice | send a voice note · `voice replies always` · `use a calm voice` · `read that to me` | Heard with Groq Whisper (or OpenAI/Gemini), answered like text; talks back with Gemini TTS as a real voice note |
+| Photos | send a receipt, flyer, medicine box or screenshot, optionally with "log this" or a question | Says what's in it, answers the caption, searches "where can I buy these", offers to keep the spend/event/doses |
+| Drawing | `draw a lion in agbada` · `draw yourself as an astronaut` | Cloudflare Workers AI (free), Gemini image if billed, Pollinations fallback |
+| Search | `search who won last night` · or just ask something current | Gemini with Google Search grounding, sources linked |
+| Email | `email me my shopping list` · `email ada@x.com saying I'll be late` | To yourself straight away; to others after a yes |
+| Fun | `/play` · `quiz me on football` · `riddle` · `would you rather` · `roll a dice` · `jollof or fried rice, pick for me` · `roast me` · `hype me up for my exam` · `my week wrapped` | Scores and streaks kept; hype comes as a voice note; the week wrapped is in Sunday's brief |
 | Reminders | `remind me to call Ada tomorrow 9am` · `… every weekday at 7` | Done / Snooze |
 | Calendar | `add dentist on friday 3pm` · `what's on this week` · send `.ics` | 30-min alert, overlap warning |
 | Medications | `med Vitamin D at 8am and 8pm` | Taken / Skip, 90-min nudge, adherence, supply countdown. Reminds, never prescribes |

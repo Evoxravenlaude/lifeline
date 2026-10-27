@@ -13,7 +13,7 @@ export type Sender = (externalId: string, reply: Reply) => Promise<void>;
 const senders = new Map<Channel, Sender>();
 export function registerSender(channel: Channel, s: Sender) { senders.set(channel, s); }
 
-const ORDER: Channel[] = ["telegram", "imessage", "sms", "web"];
+const ORDER: Channel[] = ["telegram", "imessage", "sms", "web", "email"];
 
 export async function dispatch(db: Db, user: User, reply: Reply): Promise<boolean> {
   const ids = await identitiesOf(db, user.id);
@@ -25,6 +25,7 @@ export async function dispatch(db: Db, user: User, reply: Reply): Promise<boolea
     try { await s(id, reply); return true; }
     catch (e: any) { log.warn({ channel: ch, user: user.id, err: e?.message }, "send failed, falling back"); }
   }
-  if (user.email && (await sendEmail(user.email, "lifeline", reply.text))) return true;
+  const verified = typeof user.prefs?.emailVerified === "string" ? (user.prefs.emailVerified as string) : null;
+  if (verified && (await sendEmail(verified, "lifeline", reply.text))) return true;
   return false;
 }

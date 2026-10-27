@@ -9,12 +9,13 @@
 import { config } from "../core/config.js";
 import { registerSender } from "../core/dispatch.js";
 import { buttonsAsText } from "../core/handler.js";
+import { rememberButtons } from "./sms.js";
 
 export async function sendIMessage(to: string, text: string): Promise<void> {
   if (config.imessageProvider === "bluebubbles") {
     const r = await fetch(`${config.bluebubblesUrl}/api/v1/message/text?password=${encodeURIComponent(config.bluebubblesPassword)}`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chatGuid: `iMessage;-;${to}`, message: text, method: "private-api", tempGuid: `lifeline-${Date.now()}` }),
+      body: JSON.stringify({ chatGuid: `iMessage;-;${to}`, message: text, method: config.bluebubblesMethod, tempGuid: `lifeline-${Date.now()}` }),
     });
     if (!r.ok) throw new Error(`bluebubbles ${r.status}`);
     return;
@@ -32,7 +33,7 @@ export async function sendIMessage(to: string, text: string): Promise<void> {
 
 export function registerIMessage() {
   if (!config.imessageProvider) return;
-  registerSender("imessage", async (to, reply) => sendIMessage(to, buttonsAsText(reply)));
+  registerSender("imessage", async (to, reply) => { rememberButtons(to, reply.buttons); await sendIMessage(to, buttonsAsText(reply)); });
 }
 
 /** Normalise the two providers' inbound webhook payloads to {from, text}. */

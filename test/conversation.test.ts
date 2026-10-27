@@ -95,7 +95,7 @@ describe("the bot explains itself", () => {
     const h = helpIndex();
     expect(h).not.toMatch(/[—•]/);
     expect(h).toContain("Your day");
-    expect(h.split("\n").length).toBeLessThan(40);
+    expect(h.split("\n").length).toBeLessThan(60);
     for (const c of CAPABILITIES) { expect(c.say.length).toBeGreaterThan(0); expect(c.what).not.toMatch(/[—]/); }
     expect(overview()).not.toContain("/help");
   });

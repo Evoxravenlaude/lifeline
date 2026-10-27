@@ -302,13 +302,14 @@ window.App = (function () {
     const main = $("#main");
     main.innerHTML = `<div class="wrap page"><div class="page-head"><h2>Chat</h2><p>Say it the way you'd say it to a person. This is the same conversation as Telegram.</p></div>
       <div class="convo"><div><div class="thread" id="log" aria-live="polite"></div>
-        <div class="composer"><div class="chips" id="chips"></div><form id="chatForm"><textarea id="t" rows="1" placeholder="Say it plainly" aria-label="Message"></textarea><button class="btn primary" type="submit">Send</button></form></div></div>
+        <div class="composer"><div class="chips" id="chips"></div><form id="chatForm"><button class="icon-btn tool" type="button" id="attach" aria-label="Send a photo" title="Send a photo">${ico("camera")}</button><input type="file" id="photoIn" accept="image/*" hidden><textarea id="t" rows="1" placeholder="Say it plainly" aria-label="Message"></textarea><button class="icon-btn tool" type="button" id="mic" aria-label="Record a voice note" title="Tap to talk, tap again to send" hidden>${ico("mic")}</button><button class="btn primary" type="submit">Send</button></form><div class="rec" id="rec" hidden><span class="dot"></span><span id="recT">0:00</span> Listening. Tap the mic again to send.</div></div></div>
         <aside class="stack"><div class="card k-trip"><div class="card-body" style="padding:16px 18px 12px"><div id="pipChat" style="max-width:150px;margin:0 auto"></div></div></div>${pendingCards()}<div class="card k-list">${cardHead("shell", "Things you can ask")}<div class="card-body" id="askList" style="display:grid;gap:8px"></div></div></aside></div></div>`;
     mountPip($("#pipChat"));
     const t = $("#t");
     t.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
     t.addEventListener("input", () => { t.style.height = "auto"; t.style.height = Math.min(180, t.scrollHeight) + "px"; });
     $("#chatForm").addEventListener("submit", (e) => { e.preventDefault(); send(); });
+    wireMedia();
     $("#chips").innerHTML = ["what's on today", "remind me to call mum on sunday at 5", "my period started today", "slept 7 hours"].map((s) => `<button class="chip" data-fill="${esc(s)}">${esc(s)}</button>`).join("");
     $$("[data-fill]").forEach((b) => b.addEventListener("click", () => { t.value = b.dataset.fill; t.focus(); t.dispatchEvent(new Event("input")); }));
     wireButtons(main);
@@ -318,14 +319,94 @@ window.App = (function () {
     lastMsgId = 0; await loadMessages(); t.focus();
     const pre = sessionStorage.getItem("ll_prefill"); if (pre) { sessionStorage.removeItem("ll_prefill"); t.value = pre; t.dispatchEvent(new Event("input")); }
   }
-  function addMsg(role, text, buttons, at) {
+  /** A drawn picture, a voice reply, or the number a dice landed on. */
+  function media(x) {
+    if (!x) return "";
+    let h = "";
+    const b64 = (v) => (/^[A-Za-z0-9+/=]+$/.test(String(v || "")) ? String(v) : "");
+    if (x.image && b64(x.image.data)) {
+      const mime = /^image\/(png|jpeg|webp)$/.test(x.image.mime) ? x.image.mime : "image/jpeg";
+      h += `<figure class="gen"><img src="data:${mime};base64,${b64(x.image.data)}" alt="A picture I drew"><a class="btn sm" download="lifeline.${mime.split("/")[1]}" href="data:${mime};base64,${b64(x.image.data)}">${ico("out", "sm")}Save</a></figure>`;
+    }
+    if (b64(x.audio)) h += `<audio class="say" controls ${x.autoplay ? "autoplay" : ""} src="data:audio/wav;base64,${b64(x.audio)}"></audio>`;
+    return h;
+  }
+  /* Photos and voice notes from the composer. */
+  function wireMedia() {
+    $("#attach").addEventListener("click", () => $("#photoIn").click());
+    $("#photoIn").addEventListener("change", async (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) sendPhoto(f); });
+    const mic = $("#mic");
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) return;
+    mic.hidden = false;
+    let rec = null, chunks = [], started = 0, tick = null;
+    mic.addEventListener("click", async () => {
+      if (rec) { rec.stop(); return; }
+      let stream;
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch { return toast("I need the microphone for that. Allow it in your browser and try again."); }
+      const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined); chunks = [];
+      rec.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop()); clearInterval(tick); $("#rec").hidden = true; mic.classList.remove("on"); mic.setAttribute("aria-label", "Record a voice note");
+        const blob = new Blob(chunks, { type: rec.mimeType || type || "audio/webm" }); rec = null;
+        if (Date.now() - started < 700) return toast("That was too quick to hear. Tap, talk, then tap again.");
+        sendVoice(blob);
+      };
+      rec.start(); started = Date.now(); mic.classList.add("on"); mic.setAttribute("aria-label", "Stop and send"); $("#rec").hidden = false;
+      tick = setInterval(() => { const s = Math.floor((Date.now() - started) / 1000); $("#recT").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; if (s >= 180 && rec) rec.stop(); }, 250);
+    });
+  }
+  const thinking = (label) => { if ($("#log .empty")) $("#log").innerHTML = ""; const th = document.createElement("div"); th.className = "msg bot thinking"; th.innerHTML = `<div class="av"><svg viewBox="0 0 32 32"><use href="#mark"/></svg></div><div class="tx">${esc(label)}</div>`; $("#log").appendChild(th); th.scrollIntoView({ block: "end" }); return th; };
+  async function raw(path, body, type, headers = {}) {
+    try {
+      const r = await fetch(path, { method: "POST", body, headers: { "content-type": type, ...headers }, credentials: "same-origin" });
+      if (!(r.headers.get("content-type") || "").includes("application/json")) return { error: "unreachable", text: "I can't reach lifeline right now. Try again in a minute." };
+      return await r.json();
+    } catch { return { error: "offline", text: "You look to be offline. Check your connection and try again." }; }
+  }
+  async function sendVoice(blob) {
+    const me = document.createElement("div"); me.className = "msg me voice"; me.innerHTML = `${ico("mic", "sm")} Voice note`; $("#log").appendChild(me);
+    const th = thinking("Listening properly"); pip && pip.set("thinking", "Listening.");
+    const r = await raw("/api/voice", blob, blob.type || "audio/webm");
+    th.remove();
+    if (r.error) { me.remove(); addMsg("assistant", r.text); return; }
+    me.innerHTML = `${ico("mic", "sm")} <i>${esc(r.heard)}</i>`;
+    addMsg("assistant", r.text, r.buttons, null, { ...r, autoplay: true });
+    state = await api("/api/state"); pip && pip.set("done");
+  }
+  /** Phones take huge photos; shrink to 1600px before sending. */
+  async function shrink(file) {
+    try {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+      const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+      cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+      return await new Promise((res) => cv.toBlob((b) => res(b || file), "image/jpeg", 0.85));
+    } catch { return file; }
+  }
+  async function sendPhoto(file) {
+    const caption = $("#t").value.trim(); $("#t").value = ""; $("#t").style.height = "auto";
+    const img = await shrink(file);
+    const url = URL.createObjectURL(img);
+    const me = document.createElement("div"); me.className = "msg me photo"; me.innerHTML = `<img src="${url}" alt="Your photo">${caption ? `<span>${esc(caption)}</span>` : ""}`;
+    if ($("#log .empty")) $("#log").innerHTML = "";
+    $("#log").appendChild(me);
+    const th = thinking("Looking at it"); pip && pip.set("thinking", "Looking closely.");
+    const r = await raw("/api/photo", img, img.type || "image/jpeg", { "x-caption": encodeURIComponent(caption) });
+    th.remove();
+    if (r.error) { addMsg("assistant", r.text); return; }
+    addMsg("assistant", r.text, r.buttons, null, r);
+    state = await api("/api/state"); pip && pip.set("done");
+  }
+  function addMsg(role, text, buttons, at, extra) {
     const log = $("#log"); if (!log) return;
     const holds = buttons && buttons.some((b) => /^confirm:/.test(b.data));
     const d = document.createElement("div");
     if (role === "user") { d.className = "msg me"; d.innerHTML = esc(text) + (at ? `<span class="at">${esc(when(at))}</span>` : ""); }
-    else { d.className = "msg bot" + (holds ? " hold" : ""); d.innerHTML = `<div class="av" aria-hidden="true"><svg viewBox="0 0 32 32"><use href="#mark"/></svg></div><div><div class="tx">${linkify(text)}</div>${buttons && buttons.length ? `<div class="btns">${buttons.map((b) => `<button class="btn sm ${/^confirm:/.test(b.data) ? "metal" : ""}" data-btn="${esc(b.data)}">${esc(b.label)}</button>`).join("")}</div>` : ""}${at ? `<span class="at">${esc(when(at))}</span>` : ""}</div>`; }
+    else { d.className = "msg bot" + (holds ? " hold" : ""); d.innerHTML = `<div class="av" aria-hidden="true"><svg viewBox="0 0 32 32"><use href="#mark"/></svg></div><div><div class="tx">${linkify(text)}</div>${media(extra)}${buttons && buttons.length ? `<div class="btns">${buttons.map((b) => `<button class="btn sm ${/^confirm:/.test(b.data) ? "metal" : ""}" data-btn="${esc(b.data)}">${esc(b.label)}</button>`).join("")}</div>` : ""}${at ? `<span class="at">${esc(when(at))}</span>` : ""}</div>`; }
     log.appendChild(d);
-    $$("[data-btn]", d).forEach((b) => b.addEventListener("click", async () => { $$("[data-btn]", d).forEach((x) => (x.disabled = true)); const r = await api("/api/button", { data: b.dataset.btn }); addMsg("assistant", r.text, r.buttons); pip && pip.set("done", r.text.length < 80 ? r.text : undefined); state = await api("/api/state"); }));
+    $$("[data-btn]", d).forEach((b) => b.addEventListener("click", async () => { $$("[data-btn]", d).forEach((x) => (x.disabled = true)); const r = await api("/api/button", { data: b.dataset.btn }); if (r.error) { addMsg("assistant", r.text); return; } addMsg("assistant", r.text, r.buttons, null, r); pip && pip.set("done", r.text.length < 80 ? r.text : undefined); state = await api("/api/state"); }));
     d.scrollIntoView({ block: "end", behavior: "smooth" });
     return d;
   }
@@ -344,8 +425,8 @@ window.App = (function () {
     pip && pip.set("thinking", "Reading that properly.");
     const r = await api("/api/chat", { text: msg });
     th.remove();
-    if (r.error || typeof r.text !== "string") { addMsg("assistant", "I couldn't reach the server just now, so that wasn't kept. Once more in a moment?"); pip && pip.set("error", "That one slipped."); return; }
-    addMsg("assistant", r.text, r.buttons);
+    if (r.error || typeof r.text !== "string") { addMsg("assistant", r.text || "I couldn't reach the server just now, so that wasn't kept. Once more in a moment?"); pip && pip.set("error", "That one slipped."); return; }
+    addMsg("assistant", r.text, r.buttons, null, r);
     const waits = r.buttons && r.buttons.some((b) => /^confirm:/.test(b.data));
     state = await api("/api/state");
     pip && pip.set(waits ? "pending" : "done", waits ? "I won't move on that until you say." : undefined);
@@ -600,11 +681,13 @@ window.App = (function () {
   }
 
   /* ---------- Landing: the whole catalogue, grouped ---------- */
-  const GROUP_KIND = { "Your day": "event", "Body and health": "dose", "Money": "money", "Work and growth": "scout", "Me": "list" };
+  const GROUP_KIND = { "Your day": "event", "Body and health": "dose", "Money": "money", "Voice, photos and search": "class", "Fun": "hack", "Work and growth": "scout", "Me": "list" };
   const GROUP_LINE = {
     "Your day": "Plans, lists and the dates that matter, brought back at the right moment.",
     "Body and health": "Doses, your period and cycle, sleep, weight, mood and habits, kept privately.",
     "Money": "What you spend in any currency, and bills paid only after your yes.",
+    "Voice, photos and search": "Talk instead of typing, send a photo of a receipt or a flyer, ask for a picture, search the web, send an email.",
+    "Fun": "Trivia with a running score, riddles, would you rather, dice, decisions, roasts and your week wrapped.",
     "Work and growth": "If you want it: jobs, companies and people in any field, hackathons, and crypto if you hold it.",
     "Me": "Small tools, the voice it talks in, where it reaches you, and what it never does.",
   };
@@ -626,6 +709,7 @@ window.App = (function () {
       ["Body and health", [["I take vitamin D at 8 and 8pm", "Vitamin D at 08:00 and 20:00. I'll ring you at each; tell me when it's taken.", "dose"], ["cramps and bloating today", "Noted for today, day two. I'll keep it with this cycle so you can see the pattern.", "dose"], ["slept 6 hours", "Sleep 6 hours, logged. That's an hour under your week's average.", "event"], ["did gym", "Gym, done. That's four days in a row.", "rem"]]],
       ["Money", [["paid 20 dollars for lunch", "$20 on lunch, logged.", "money"], ["how much did I spend this week", "₦38,400 this week. Food is the biggest share, then transport.", "money"], ["pay 2000 airtime to 0801 234 5678", "₦2,000 airtime to 0801 234 5678. That spends money, so it waits for you: yes to send, no to drop it.", "money"]]],
       ["Work", [["who's building fintech in Lagos", "Six young fintech companies in Lagos, with who runs each one and where to find them. Want a first message drafted to any of them?", "scout"], ["any hackathons for ai this month", "Three open this month that fit AI, the nearest closing on the 14th. Want them in your brief?", "hack"], ["what's eth right now", "ETH is at $3,412, up 2% today.", "hack"]]],
+      ["Photos, voice and fun", [["(a photo of a receipt) log this", "Shoprite, ₦12,450, mostly groceries. Logged under food.", "money"], ["(a voice note) remind me to call the landlord at 5", "Call the landlord, today at 17:00. And I said it back to you, since you spoke.", "rem"], ["draw yourself as an astronaut", "Here's me in a space suit, spectacles and all. Say again for another take.", "class"], ["quiz me on football", "Which club has won the most Champions League titles? A. AC Milan  B. Real Madrid  C. Liverpool  D. Bayern", "hack"]]],
       ["Trips and dates", [["I'm going to Accra on the 20th", "Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"], ["Ada's birthday is march 14", "Ada, 14 March. I'll remind you the day before.", "rem"], ["packed charger", "Charger, packed. Four things left on the Accra list.", "trip"]]],
     ];
     const showSet = (n) => {

@@ -9,10 +9,11 @@ export function webAddress(): string {
 }
 const smsOn = () => Boolean((config.twilioSid && config.twilioToken && config.twilioFrom) || config.smsGatewayKey);
 const imessageOn = () => Boolean(config.imessageProvider);
+const emailOn = () => Boolean(config.resendKey && config.resendWebhookSecret && config.inboundEmail);
 
 /** Where people can reach lifeline right now, as a phrase: "Telegram, the website and text messages". */
 export function activePlaces(): string {
-  const p = ["Telegram", "the website", ...(smsOn() ? ["text messages"] : []), ...(imessageOn() ? ["iMessage"] : [])];
+  const p = ["Telegram", "the website", ...(smsOn() ? ["text messages"] : []), ...(imessageOn() ? ["iMessage"] : []), ...(emailOn() ? ["email"] : [])];
   return p.length > 1 ? `${p.slice(0, -1).join(", ")} and ${p[p.length - 1]}` : p[0];
 }
 
@@ -28,6 +29,7 @@ export function waysIn(code?: string): string {
     imessageOn()
       ? config.imessageAddress ? `On iMessage: send ${c} to ${config.imessageAddress} from your iPhone.` : `On iMessage: send ${c} to the lifeline iMessage address from your iPhone.`
       : "On iMessage: not switched on yet. Apple has no public way in, so it needs a Mac relay set up by whoever runs lifeline.",
+    ...(emailOn() ? [`By email: send ${c} to ${config.inboundEmail}, from the address you'll use. After that, email or forward me anything.`] : []),
   ];
   return lines.join("\n");
 }

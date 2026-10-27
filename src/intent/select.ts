@@ -36,6 +36,12 @@ const CUES: Record<string, string[]> = {
   persona: ["voice", "persona", "talk like", "sound like", "tone", "personality", "be more"],
   settings: ["timezone", "digest", "quiet", "email", "country", "my name"],
   digest: ["digest", "brief", "rundown", "my day", "morning"],
+  image: ["draw", "picture", "image", "illustrat", "paint", "sketch", "generate", "wallpaper", "logo", "sticker", "artwork", "poster", "avatar", "pfp"],
+  web: ["search", "google", "look up", "lookup", "latest", "news", "who won", "current", "score", "online", "find out", "reviews", "release date", "open now"],
+  speech: ["voice note", "voice replies", "voice reply", "talk to me", "out loud", "read it", "read that", "read this", "say it", "speak", "voice message", "your voice", "sound like"],
+  email: ["email", "mail me", "inbox", "e-mail"],
+  game: ["play", "game", "trivia", "quiz", "riddle", "would you rather", "bored", "fun"],
+  fun: ["roast", "hype", "decide", "pick for me", "choose for me", "coin", "flip", "dice", "roll", "8 ball", "8-ball", "magic", "wrapped", "fortune", "compliment", "joke"],
   list: ["todo", "to-do", "shopping", "list", "buy", "need to", "have to", "done", "finished", "bought", "task"],
 };
 

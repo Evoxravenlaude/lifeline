@@ -31,13 +31,15 @@ describe("shared handler across channels", () => {
     const d = await handleMessage(db, u, `delete event #${ev!.id}`, { channel: "web" });
     expect(d.buttons?.map((b) => b.label)).toEqual(["Yes, go ahead", "No"]);
     // confirm from SMS by number
-    const sms = await handleTextChannel(db, "sms", "+2348012345678", "1"); // "1" = confirm latest pending on a text channel
+    const sms = await handleTextChannel(db, "sms", "+2348012345678", "yes"); // a plain yes confirms the latest pending, from any channel
     expect(sms).toContain("Deleted");
     expect((await db.one<any>(`SELECT deleted FROM events WHERE id=$1`, [ev!.id])).deleted).toBe(true);
   });
 
-  it("unlinked phone gets instructions, nothing else", async () => {
-    expect(await handleTextChannel(db, "sms", "+15550000000", "remind me to x")).toContain("isn't linked");
+  it("unlinked numbers get silence, unless they're trying to reach lifeline", async () => {
+    expect(await handleTextChannel(db, "sms", "+15550000000", "remind me to x")).toBe("");
+    expect(await handleTextChannel(db, "sms", "+15550000000", "hi lifeline")).toContain("isn't linked");
+    expect(await handleTextChannel(db, "email", "someone@example.com", "how does lifeline work?")).toContain("This address isn't linked");
     expect(await db.query(`SELECT * FROM reminders`)).toHaveLength(0);
   });
 

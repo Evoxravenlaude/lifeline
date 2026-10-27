@@ -76,7 +76,7 @@ const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   [/^contact\s+(\S+)$/i, (m) => ({ action: "launch.contact", args: { github_login: m[1].replace(/^@/, "") } })],
   [/^billers\s+(.+)$/i, (m) => ({ action: "bill.billers", args: { category: m[1] } })],
   [/^(?:pay|top ?up)\s+(\d[\d,]*)\s*(?:naira|ngn)?\s+(?:to\s+)?(\S+)\s+(?:for\s+)?(\S+)$/i, (m) => ({ action: "bill.pay", args: { amount: Number(m[1].replace(/,/g, "")), biller_code: m[2], customer: m[3] } })],
-  [/^(?:persona|voice)\s+(.+)$/i, (m) => ({ action: "persona.set", args: m[1].length > 12 && !/^[a-z]+$/i.test(m[1]) ? { custom: m[1] } : { preset: m[1] } })],
+  [/^(?:persona|voice)\s+(?!(?:replies|reply|notes?|messages?)\b)(.+)$/i, (m) => ({ action: "persona.set", args: m[1].length > 12 && !/^[a-z]+$/i.test(m[1]) ? { custom: m[1] } : { preset: m[1] } })],
 
   // lists / dates / weather / fx / summarize / scout
   [/^(?:add )?(?:to )?(todo|shopping)(?: list)?:?\s+(.+)$/i, (m) => ({ action: "list.add", args: { list: m[1].toLowerCase(), items: m[2].split(/\s*,\s*/) } })],
@@ -98,6 +98,33 @@ const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   [/^(?:digest at|set digest)\s+(\d{1,2})/i, (m) => ({ action: "settings.update", args: { digest_hour: Number(m[1]) } })],
   [/^(?:my )?country\s+([a-z]{2})$/i, (m) => ({ action: "settings.update", args: { country: m[1] } })],
   [/^(?:my )?email\s+(\S+@\S+)$/i, (m) => ({ action: "settings.update", args: { email: m[1] } })],
+  // Fun.
+  [/^\/(?:play|games?)$|^(?:let'?s )?play(?: a)?(?: game)?$|^i'?m (?:so )?bored$|^(?:entertain me|surprise me)$/i, () => ({ action: "game.play", args: {} })],
+  [/^(?:trivia|quiz me|(?:give me |a )?(?:a )?(?:trivia|quiz)(?: question)?)(?: (?:on|about) (.+))?$/i, (m) => ({ action: "game.play", args: { kind: "trivia", topic: m[1] } })],
+  [/^(?:give me |tell me )?(?:a )?riddle(?: (?:on|about) (.+))?$/i, (m) => ({ action: "game.play", args: { kind: "riddle", topic: m[1] } })],
+  [/^would you rather(?: (?:on|about) (.+))?$/i, (m) => ({ action: "game.play", args: { kind: "wyr", topic: m[1] } })],
+  [/^(?:flip a coin|coin ?flip|heads or tails)\??$/i, () => ({ action: "fun.decide", args: {} })],
+  [/^(?:pick|choose|decide)(?: for me)?[:,]?\s+(.+?)\s+or\s+(.+?)\??$/i, (m) => ({ action: "fun.decide", args: { options: [...m[1].split(/,\s*/), m[2]] } })],
+  [/^(.+?)\s+or\s+(.+?)[?,]?\s+(?:pick|choose|decide)(?: for me)?\??$/i, (m) => ({ action: "fun.decide", args: { options: [...m[1].split(/,\s*/), m[2]] } })],
+  [/^roll(?: a| the)?(?: dice| die)?$/i, () => ({ action: "fun.roll", args: { kind: "dice" } })],
+  [/^(?:throw|play|shoot)?\s*(darts|basketball|football|bowling|slots)$/i, (m) => ({ action: "fun.roll", args: { kind: m[1].toLowerCase() } })],
+  [/^(?:magic )?8[ -]?ball[:,]?\s*(.*)$/i, (m) => ({ action: "fun.eightball", args: { question: m[1] || undefined } })],
+  [/^roast me(?: (?:about|on|for) (.+))?$/i, (m) => ({ action: "fun.roast", args: { about: m[1] } })],
+  [/^hype me(?: up)?(?: (?:for|before) (.+))?$/i, (m) => ({ action: "fun.hype", args: { about: m[1] } })],
+  [/^(?:my )?(?:week )?wrapped$|^my week in numbers$|^how was my week$/i, () => ({ action: "fun.wrapped", args: {} })],
+  [/^(?:verify|code|confirm)\s*:?\s*(\d{6})$/i, (m) => ({ action: "settings.verify_email", args: { code: m[1] } })],
+  // Email.
+  [/^(?:e-?mail|mail) me (.{2,})$/i, (m) => ({ action: "email.me", args: { body: m[1] } })],
+  [/^(?:e-?mail|mail) (\S+@\S+?)[,:]? (?:saying|that|to say|and say|telling (?:them|him|her))[:,]? (.{2,})$/i, (m) => ({ action: "email.send", args: { to: m[1], subject: m[2].split(/[.!?]/)[0].slice(0, 60), body: m[2].charAt(0).toUpperCase() + m[2].slice(1) } })],
+  // Pictures, search, voice.
+  [/^(?:please\s+)?(?:draw|sketch|paint|illustrate)(?: me)?\s+(.{2,})$/i, (m) => ({ action: "image.draw", args: { prompt: m[1] } })],
+  [/^(?:please\s+)?(?:make|generate|create)(?: me)? (?:an? )?(?:picture|image|illustration|drawing|wallpaper|sticker|pfp|avatar)(?: of)?\s+(.{2,})$/i, (m) => ({ action: "image.draw", args: { prompt: m[1] } })],
+  [/^(?:search|google|look up|search for|search the web for)\s+(.{2,})$/i, (m) => ({ action: "web.search", args: { query: m[1] } })],
+  [/^(?:voice replies|voice notes?|talk back)\s+(on|off|always)$/i, (m) => ({ action: "speech.settings", args: { replies: m[1].toLowerCase() === "on" ? "mirror" : m[1].toLowerCase() } })],
+  [/^(?:text only|no voice(?: notes| replies)?|stop (?:talking|the voice notes))$/i, () => ({ action: "speech.settings", args: { replies: "off" } })],
+  [/^(?:talk to me|reply (?:with|in) voice(?: notes?)?|always (?:talk|reply in voice))$/i, () => ({ action: "speech.settings", args: { replies: "always" } })],
+  [/^(?:use|switch to|change to)? ?(?:an? |the )?(warm|upbeat|calm|deep|lively|gentle|bright|easy) voice$/i, (m) => ({ action: "speech.settings", args: { voice: m[1].toLowerCase() } })],
+  [/^(?:say|read) (?:that|it|this) (?:out loud|aloud|to me)|^read (?:that|it) to me$/i, () => ({ action: "speech.say", args: {} })],
 ];
 
 function norm(s?: string) {

@@ -132,7 +132,7 @@ export const CAPABILITIES: Capability[] = [
     then: "Level alerts ring once and reset. Wallet watches tell you about inflows and outflows.",
   },
   {
-    key: "trading", name: "Copy-trading, shadow only",
+    key: "trading", name: "Copy-trading (shadow only)",
     cues: ["copy", "copytrade", "copy-trade", "follow trader", "polymarket", "pump.fun", "pumpfun", "launchpad", "trader", "shadow"],
     what: "If you trade, I follow traders you name on Polymarket or pump.fun and show you what copying them would have made or lost, without placing anything.",
     say: ["follow 0xabc... on polymarket max 10 per trade 50 a day", "shadow report", "stop following 0xabc"],
@@ -169,7 +169,57 @@ export const CAPABILITIES: Capability[] = [
     then: "Straight answers, no setup.",
   },
   {
-    key: "voice", name: "Voice",
+    key: "talk", name: "Voice notes",
+    cues: ["voice note", "voice notes", "voice message", "talk to you", "speak", "out loud", "read it", "audio", "listen", "talk back", "voice command"],
+    what: "Send me a voice note in any language and I'll act on it like a typed message. I talk back with a voice note of my own when you speak to me, or always, or never, your call.",
+    say: ["(hold the mic and talk)", "voice replies always", "use a calm voice", "read that to me"],
+    then: "Voices: warm, upbeat, calm, deep, lively, gentle, bright, easy. On the website there's a mic button too.",
+  },
+  {
+    key: "pictures", name: "Photos",
+    cues: ["photo", "picture", "image", "screenshot", "receipt", "scan", "what is this", "look at", "camera", "flyer", "read this"],
+    what: "Send me a photo and I'll tell you what's in it and keep what matters: a receipt becomes a spend, a flyer becomes an event, a medicine box becomes doses, a screenshot becomes text.",
+    say: ["(send a receipt) log this", "(send a flyer) add it", "(send a plant) what is this?", "(send shoes) where can I buy these?"],
+    then: "Ask a question under the photo and I answer it; ask where to buy it or what it costs and I search for you.",
+  },
+  {
+    key: "drawing", name: "Drawing",
+    cues: ["draw", "generate an image", "make an image", "make a picture", "illustration", "wallpaper", "sticker", "logo", "art", "paint"],
+    what: "I draw what you describe: wallpapers, stickers, birthday cards, ideas, or Pip in any outfit.",
+    say: ["draw a lion in agbada, oil painting", "make a wallpaper of Lagos at night", "draw yourself as an astronaut"],
+    then: "Say again for another take, or tell me what to change.",
+    limits: "A handful a day each, and nothing explicit.",
+  },
+  {
+    key: "search", name: "Web search",
+    cues: ["search", "google", "look up", "news", "latest", "who won", "online", "internet", "current"],
+    what: "I search the web for anything current: news, scores, prices, opening hours, release dates, how-tos, and give you the answer with sources.",
+    say: ["search who won the Champions League last night", "look up the price of a PS5 in Lagos", "what's the latest on the fuel price"],
+    then: "Short answer first, links underneath.",
+  },
+  {
+    key: "email", name: "Email",
+    cues: ["email", "mail", "inbox", "forward"],
+    what: "I can email things to you (a list, a note, your brief) or write and send an email to someone else after you've seen it. Forward me an email and I'll pull out what matters, like the flight in a booking or the date in an invite.",
+    say: ["email me my shopping list", "email ada@example.com that I'll be late", "my email is you@example.com"],
+    then: "Emails to other people always show you the full text and wait for your yes.",
+  },
+  {
+    key: "games", name: "Games",
+    cues: ["game", "play", "trivia", "quiz", "riddle", "would you rather", "bored"],
+    what: "Quick games when you're bored: trivia with a running score, would you rather, and riddles you answer by typing.",
+    say: ["play a game", "quiz me on football", "give me a riddle", "would you rather"],
+    then: "Tap an answer, or type it. Your streak is kept.",
+  },
+  {
+    key: "fun", name: "Small fun",
+    cues: ["roast", "hype", "decide", "pick for me", "coin", "dice", "roll", "8 ball", "wrapped", "fun"],
+    what: "Decide for you, flip a coin, roll dice, ask the 8 ball, roast your week, hype you up before something big (out loud), or wrap up your week in numbers.",
+    say: ["jollof or fried rice, pick for me", "roll a dice", "roast me", "hype me up for my exam", "my week wrapped"],
+    then: "Your week also comes wrapped in the Sunday morning brief.",
+  },
+  {
+    key: "voice", name: "Personality",
     cues: ["voice", "persona", "personality", "tone", "talk like", "sound like", "be more", "pidgin"],
     what: "You choose how I talk: plain, dry, hype, coach, butler, degen, mentor, Naija pidgin, or describe your own.",
     say: ["talk like a tired pirate", "be more blunt", "voice: butler"],
@@ -293,9 +343,33 @@ export const HELP_GROUPS: [string, string[]][] = [
   ["Your day", ["reminders", "calendar", "lists", "dates", "trips", "classes", "notes", "brief"]],
   ["Body and health", ["medications", "cycle", "measures", "habits"]],
   ["Money", ["money", "bills"]],
+  ["Voice, photos and search", ["talk", "pictures", "drawing", "search", "email"]],
+  ["Fun", ["games", "fun"]],
   ["Work and growth", ["jobs", "scout", "hackathons", "markets", "trading"]],
-  ["Me", ["tools", "voice", "channels", "safety"]],
+  ["Me", ["voice", "tools", "channels", "safety"]],
 ];
+
+/** "(send a receipt) log this" → Try: send a receipt with "log this". */
+export function tryLine(say: string): string {
+  const m = /^\(([^)]+)\)\s*(.*)$/.exec(say);
+  if (!m) return `Try: "${say}"`;
+  return m[2] ? `Try: ${m[1]} with "${m[2]}"` : `Try: ${m[1]}`;
+}
+
+/** /everything: one line per drawer, so the whole of it fits on a phone screen. */
+export function everythingIndex(): string {
+  const by = Object.fromEntries(CAPABILITIES.map((c) => [c.key, c]));
+  return ["Everything I can do. Ask about any of it in your own words, or open a drawer below.", "", ...HELP_GROUPS.map(([title, keys]) => `**${title}**\n${keys.map((k) => by[k]?.name.replace(/^[A-Z](?=[a-z])/, (m) => m.toLowerCase())).filter(Boolean).join(", ")}\n`)].join("\n").trim();
+}
+
+/** One drawer: each thing, what it does in a line, and a sentence to try. */
+export function everythingGroup(i: number): string | null {
+  const g = HELP_GROUPS[i];
+  if (!g) return null;
+  const by = Object.fromEntries(CAPABILITIES.map((c) => [c.key, c]));
+  const first = (t: string) => (t.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? t);
+  return [`**${g[0]}**`, ...g[1].map((k) => by[k]).filter(Boolean).map((c) => `\n**${c.name}**\n${first(c.what)}\n${tryLine(c.say[0])}`)].join("\n");
+}
 
 export function helpIndex(): string {
   const groups = HELP_GROUPS;

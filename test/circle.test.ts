@@ -40,7 +40,7 @@ describe("the circle", () => {
     config.maxUsers = 15;
     const web = createWeb(db, "lifeline_bot");
     const caps = await (await web.request("/api/capabilities")).json();
-    expect(caps.groups.map((g: [string]) => g[0])).toEqual(["Your day", "Body and health", "Money", "Work and growth", "Me"]);
+    expect(caps.groups.map((g: [string]) => g[0])).toEqual(["Your day", "Body and health", "Money", "Voice, photos and search", "Fun", "Work and growth", "Me"]);
     expect(caps.capabilities.length).toBeGreaterThan(15);
     const pub = await (await web.request("/api/public")).json();
     expect(pub.places).toEqual({ taken: 3, max: 15 });

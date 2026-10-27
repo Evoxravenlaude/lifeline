@@ -9,6 +9,11 @@
  *   4. intent: rules, model, loose language, small talk
  * Every reply passes through the voice pass before it leaves.
  */
+import { everythingIndex } from "../intent/capabilities.js";
+import { parseByRules } from "../intent/rules.js";
+import { parseLoose } from "../intent/loose.js";
+import { allow, mediaAbilities, search, see } from "./media.js";
+import { answerGame, gameAnswer } from "../modules/fun.js";
 import { log } from "./log.js";
 import { BROKE } from "./humanize.js";
 import { waysIn } from "./ways.js";
@@ -18,7 +23,7 @@ import type { Db } from "./db.js";
 import { config } from "./config.js";
 import { schedule } from "./scheduler.js";
 import { polish, personaOf } from "./voice.js";
-import type { Ctx, Thread, User } from "../policy/types.js";
+import type { Attachment, Ctx, Thread, User } from "../policy/types.js";
 import { getAction } from "../policy/registry.js";
 import { cancelPending, confirmPending, latestPending, propose, undo, type Decision } from "../policy/engine.js";
 import { resolveIntent } from "../intent/index.js";
@@ -28,9 +33,9 @@ import { parseRange, parseWhen, parseMoney } from "./time.js";
 import { markDone, snooze } from "../modules/reminders.js";
 import { resolveLog } from "../modules/medications.js";
 
-export type Channel = "telegram" | "web" | "sms" | "imessage";
+export type Channel = "telegram" | "web" | "sms" | "imessage" | "email";
 
-export interface Reply {
+export interface Reply extends Attachment {
   text: string;
   buttons?: { label: string; data: string }[];
 }
@@ -91,7 +96,7 @@ export function renderDecision(d: Decision): Reply {
     case "pending":
       return { text: `${d.echo}\n\nGo ahead? This waits ten minutes for a yes.`, buttons: [{ label: "Yes, go ahead", data: `confirm:${d.pendingId}` }, { label: "No", data: `cancel:${d.pendingId}` }] };
     case "ran":
-      return d.undoId ? { text: d.reply, buttons: [{ label: "Undo", data: `undo:${d.undoId}` }] } : { text: d.reply };
+      return d.undoId ? { ...d.extra, text: d.reply, buttons: [...(d.extra?.buttons ?? []), { label: "Undo", data: `undo:${d.undoId}` }] } : { ...d.extra, text: d.reply };
     default:
       return { text: d.reply };
   }
@@ -148,6 +153,13 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
     const answered = await answerThread(ctx, thread, t);
     if (answered) return finish(db, user, answered);
   }
+
+  // 2a. The whole menu, from any channel.
+  if (/^\/?(?:everything|all features|features|menu)$/i.test(t)) return finish(db, user, { text: everythingIndex().replace(", or open a drawer below", "") });
+
+  // 2b. An answer to a riddle or quiz that's still open.
+  const played = opts.forwarded ? null : await gameAnswer(db, user, t);
+  if (played) return finish(db, user, played);
 
   // 3. "Can you track meds?"
   if (!opts.forwarded && isCapabilityQuestion(t)) {
@@ -235,6 +247,14 @@ async function answerButton(db: Db, user: User, data: string, now: Date): Promis
       else await db.query(`DELETE FROM memories WHERE id=$1 AND user_id=$2`, [Number(b), user.id]);
       return say(a === "keep" ? "Kept." : "Dropped.");
     case "persona": { const r = renderDecision(await propose(ctx, "persona.set", { preset: a })); return say(r.text, r.buttons); }
+    case "g": { const r = await answerGame(db, user, data.slice(2)); return finish(db, user, r); }
+    case "photo": {
+      const list = (Array.isArray(user.prefs.photoSuggestions) ? user.prefs.photoSuggestions : []) as PhotoOffer[];
+      const sug = list.find((p) => p.id === a);
+      if (!sug || Date.now() - sug.at > 24 * 3_600_000) return say("That picture's moved on. Send it again if you want me to keep something from it.");
+      await db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [user.id, JSON.stringify({ photoSuggestions: list.filter((p) => p.id !== a) })]);
+      return finish(db, user, await keepFromPhoto(ctx, sug.text));
+    }
     default: return say("That button doesn't do anything any more.");
   }
 }
@@ -244,4 +264,61 @@ export function buttonsAsText(r: Reply): string {
   const text = toPlain(r.text);
   if (!r.buttons?.length) return text;
   return `${text}\n${r.buttons.map((b, i) => `${i + 1}) ${b.label}`).join("  ")}`;
+}
+
+
+/**
+ * A picture someone sent, with whatever they wrote under it. I say what I see, answer their question,
+ * search when they ask where to buy or what it costs, and offer to keep anything useful in it.
+ */
+export async function handlePhoto(db: Db, user: User, image: Buffer, mime: string, caption: string, channel: Channel): Promise<Reply> {
+  try {
+    const cap = caption.trim();
+    await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, `[picture]${cap ? ` ${cap}` : ""}`]);
+    if (!mediaAbilities().see) return finish(db, user, { text: "I can't look at pictures on this server yet. It needs a Gemini or Groq key." });
+    if (!allow("see", user.id)) return finish(db, user, { text: "That's a lot of pictures for one day; I'll be able to look again tomorrow." });
+    const seen = await see(image, mime, cap);
+    if (!seen) return finish(db, user, { text: "I couldn't make that picture out just now. Try again in a minute, or tell me what's in it." });
+    let text = seen.reply;
+    if (cap && /\b(?:where (?:can|do|to)|buy|price|cost|how much|search|look (?:it )?up|find (?:it|this|me)|similar|who (?:makes|made|sells))\b/i.test(cap) && mediaAbilities().search && allow("search", user.id)) {
+      const f = await search(`${cap}. The picture shows: ${seen.reply.slice(0, 400)}`, user.tz);
+      if (f) text += `\n\n${f.answer}${f.sources.length ? `\n\nSources: ${f.sources.map((x) => `[${(x.title ?? new URL(x.uri).hostname).replace(/[[\]]/g, "")}](${x.uri})`).join(", ")}` : ""}`;
+    }
+    if (seen.suggestion && /^(?:please )?(?:log|add|save|keep|track|remind|put|note|set)\b/i.test(cap)) {
+      const done = await keepFromPhoto({ db, user, now: new Date(), sourceMessage: `[${channel} picture]` }, seen.suggestion);
+      return finish(db, user, { ...done, text: `${text}\n\n${done.text}` });
+    }
+    if (seen.suggestion) {
+      const id = Date.now().toString(36);
+      const list = ((Array.isArray(user.prefs.photoSuggestions) ? user.prefs.photoSuggestions : []) as PhotoOffer[]).slice(-4);
+      await db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [user.id, JSON.stringify({ photoSuggestions: [...list, { id, text: seen.suggestion, at: Date.now() }] })]);
+      return finish(db, user, { text, buttons: [{ label: seen.label ?? "Keep it", data: `photo:${id}` }] });
+    }
+    return finish(db, user, { text });
+  } catch (e: any) {
+    log.error({ err: e?.message, user: user.id }, "photo failed");
+    return { text: BROKE };
+  }
+}
+
+interface PhotoOffer { id: string; text: string; at: number }
+
+/** What a photo may turn into on its own: things that only add to your own records. Never settings, email, money or a yes. */
+const FROM_PHOTO = /^(?:spend\.log|calendar\.add|medication\.add|list\.add|note\.add|reminder\.create|date\.add|trip\.(?:create|add_item)|assignment\.add|class\.add|measure\.log|habit\.checkin|cycle\.log)$/;
+
+/**
+ * Keep the useful thing a picture showed. The sentence came from a model reading the image, so it is
+ * treated like forwarded text: no yes/no/undo/link shortcuts, and only actions that add to your own records.
+ */
+async function keepFromPhoto(ctx: Ctx, suggestion: string): Promise<Reply> {
+  let intent = parseByRules(suggestion) ?? parseLoose(suggestion, ctx.now);
+  if (!intent) {
+    const r = await resolveIntent(suggestion, ctx, { forwarded: true });
+    intent = r.kind === "action" ? r.intent : null;
+  }
+  if (!intent || !FROM_PHOTO.test(intent.action) || getAction(intent.action)?.tier !== 1) {
+    return { text: `I'd keep it as: "${suggestion}". Say that, or your own version, and I'll do it.` };
+  }
+  const r = await decide(ctx, intent.action, intent.args);
+  return { ...r, text: r.text };
 }

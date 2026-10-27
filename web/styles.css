@@ -289,6 +289,20 @@ main { min-height: 60vh; }
 .msg.bot .tx { white-space: pre-wrap; line-height: 1.62; padding-top: 4px; }
 .msg.bot .tx a { color: var(--accent); }
 /* Tap-to-copy: codes and addresses inline, drafted messages as a block with its own button. */
+/* Composer tools, recording, pictures and voice in the thread. */
+#chatForm { align-items: end; }
+#chatForm .tool { flex: none; width: 42px; height: 42px; }
+#chatForm .tool.on { background: var(--k-hack); border-color: var(--ink); animation: breathe 1.2s ease-in-out infinite; }
+.rec { display: flex; align-items: center; gap: 8px; font-size: var(--t-13); color: var(--ink-2); padding: 8px 2px 0; }
+.rec .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--k-hack); border: 1px solid var(--ink); animation: breathe 1.2s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: .45; } }
+.gen { margin: 10px 0 4px; display: grid; gap: 8px; justify-items: start; }
+.gen img { width: min(100%, 420px); border: var(--edge); border-radius: var(--r); box-shadow: 4px 4px 0 0 var(--metal), 4px 4px 0 var(--edge-w) var(--ink); }
+audio.say { display: block; margin-top: 10px; width: min(100%, 320px); height: 36px; }
+.msg.me.photo { display: grid; gap: 6px; justify-items: end; }
+.msg.me.photo img { max-width: min(240px, 70vw); border: var(--edge); border-radius: var(--r); }
+.msg.me.voice { display: inline-flex; gap: 6px; align-items: center; }
+@media (prefers-reduced-motion: reduce) { #chatForm .tool.on, .rec .dot { animation: none; } }
 code.cp { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .86em; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--sunk); cursor: copy; overflow-wrap: anywhere; transition: background var(--fill), border-color var(--fill); }
 code.cp:hover, code.cp:focus-visible { border-color: var(--ink); }
 code.cp.copied { background: var(--k-dose); border-color: var(--ink); }

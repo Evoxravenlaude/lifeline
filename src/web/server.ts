@@ -15,10 +15,12 @@ import path from "node:path";
 import { config } from "../core/config.js";
 import { log } from "../core/log.js";
 import type { Db } from "../core/db.js";
-import { ensureUser, getUserById, handleCallback, handleMessage, redeemLinkCode, identitiesOf } from "../core/handler.js";
+import { ensureUser, getUserById, handleCallback, handleMessage, handlePhoto, redeemLinkCode, identitiesOf, type Reply } from "../core/handler.js";
+import { allow, mediaAbilities, speak, transcribe, wantsVoice } from "../core/media.js";
 import { registerSender } from "../core/dispatch.js";
 import { handleGatewayWebhook, handleTextChannel, verifyTwilio } from "../channels/sms.js";
 import { parseInbound } from "../channels/imessage.js";
+import { handleInboundEmail } from "../channels/email.js";
 import { buildDigest } from "../modules/digest.js";
 import { rankedForUser } from "../modules/hackathons.js";
 import { scout } from "../modules/scout.js";
@@ -32,6 +34,7 @@ import { providerName } from "../intent/providers.js";
 import { draftReply } from "../intent/model.js";
 import { DateTime } from "luxon";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import type { User } from "../policy/types.js";
 import { CAPABILITIES, HELP_GROUPS } from "../intent/capabilities.js";
 import { pipLine, PIP_BIO, type PipState } from "../core/pip.js";
@@ -43,6 +46,11 @@ const PUBLIC_DIR = path.relative(process.cwd(), path.join(path.dirname(fileURLTo
 
 export function createWeb(db: Db, botUsername: string) {
   const app = new Hono<{ Variables: { user: User } }>();
+  /** Size limits before any body is read: recordings and photos may be big, nothing else should be. */
+  const tooBig = (c: any) => c.json({ error: "too big", text: "That's bigger than I can take. Something smaller?" }, 413);
+  const bigBody = bodyLimit({ maxSize: 20 * 1024 * 1024, onError: tooBig });
+  const smallBody = bodyLimit({ maxSize: 1024 * 1024, onError: tooBig });
+  app.use("*", (c, next) => (c.req.method === "GET" || c.req.method === "HEAD" ? next() : (c.req.path === "/api/voice" || c.req.path === "/api/photo" ? bigBody : smallBody)(c, next)));
   /** Anything that breaks still answers in a sentence, never a bare 500 page. */
   app.onError((err, c) => {
     log.error({ err: err?.message, path: c.req.path }, "web error");
@@ -129,6 +137,12 @@ export function createWeb(db: Db, botUsername: string) {
     await next();
   });
   const user = (c: any): User => c.get("user") as User;
+  /** Add a spoken version of the reply when the action asks for it or the person's setting says so. */
+  const withVoice = async (u: User, r: Reply, spoken: boolean): Promise<Reply & { audio?: string }> => {
+    if (!wantsVoice(u.prefs, r, spoken) || !mediaAbilities().speak || !allow("speak", u.id)) return r;
+    const sp = await speak(typeof r.speak === "string" ? r.speak : r.text, { voice: u.prefs.ttsVoice as string | undefined, persona: personaOf(u.prefs), ogg: false }).catch(() => null);
+    return sp ? { ...r, audio: sp.wav.toString("base64") } : r;
+  };
 
   /* ---- app data ---- */
   app.get("/api/me", async (c) => {
@@ -140,7 +154,40 @@ export function createWeb(db: Db, botUsername: string) {
     const { text } = await c.req.json();
     if (!text || !String(text).trim()) return c.json({ error: "empty", text: "There was nothing in that message." }, 400);
     if (String(text).length > 4000) return c.json({ error: "too long", text: "That's longer than I can take in one message. Try it in two parts." }, 400);
-    return c.json(await handleMessage(db, user(c), String(text), { channel: "web" }));
+    const u = user(c);
+    return c.json(await withVoice(u, await handleMessage(db, u, String(text), { channel: "web" }), false));
+  });
+  /** A recording from the page's mic button: hear it, act on it, and talk back if they like that. */
+  app.post("/api/voice", async (c) => {
+    const u = user(c);
+    if (!mediaAbilities().hear) return c.json({ error: "no hearing", text: "I can't listen on this server yet. Type it for now." }, 400);
+    const buf = Buffer.from(await c.req.arrayBuffer());
+    if (buf.length < 500) return c.json({ error: "empty", text: "That recording was empty. Hold the mic a moment longer?" }, 400);
+    if (buf.length > 20_000_000) return c.json({ error: "too long", text: "That recording's too long for me. Keep it under a few minutes?" }, 400);
+    if (!allow("hear", u.id)) return c.json({ error: "limit", text: "That's a lot of voice notes for one day. Type it for now." }, 429);
+    const mime = (c.req.header("content-type") ?? "audio/webm").split(";")[0];
+    const heard = await transcribe(buf, mime.includes("mp4") ? "voice.mp4" : mime.includes("ogg") ? "voice.ogg" : mime.includes("wav") ? "voice.wav" : "voice.webm", mime);
+    if (!heard) return c.json({ error: "unheard", text: "I couldn't make that out. Try again, a little closer to the mic?" }, 422);
+    return c.json({ heard, ...(await withVoice(u, await handleMessage(db, u, heard, { channel: "web" }), true)) });
+  });
+  /** A photo from the page, with an optional caption in the x-caption header. */
+  app.post("/api/photo", async (c) => {
+    const u = user(c);
+    const buf = Buffer.from(await c.req.arrayBuffer());
+    const mime = (c.req.header("content-type") ?? "").split(";")[0];
+    if (!/^image\/(jpeg|png|webp|heic|heif|gif)$/.test(mime)) return c.json({ error: "type", text: "That doesn't look like a photo. JPEG, PNG or WebP work." }, 400);
+    if (buf.length > 15_000_000) return c.json({ error: "too big", text: "That picture's too big for me. Something under 15 MB?" }, 400);
+    const caption = decodeURIComponent(c.req.header("x-caption") ?? "");
+    return c.json(await handlePhoto(db, u, buf, mime, caption.slice(0, 1000), "web"));
+  });
+  /** Read something aloud on the page. */
+  app.post("/api/speak", async (c) => {
+    const u = user(c);
+    const { text } = await c.req.json().catch(() => ({ text: "" }));
+    if (!text) return c.json({ error: "empty", text: "There's nothing to read." }, 400);
+    if (!mediaAbilities().speak || !allow("speak", u.id)) return c.json({ error: "no voice", text: "I can't speak on this server right now." }, 400);
+    const sp = await speak(String(text).slice(0, 1400), { voice: u.prefs.ttsVoice as string | undefined, persona: personaOf(u.prefs), ogg: false });
+    return sp ? c.json({ audio: sp.wav.toString("base64"), mime: "audio/wav" }) : c.json({ error: "no voice", text: "My voice didn't come through this time. Try again?" }, 502);
   });
   /** A structured action from a web control (tick, add to a list). Same gate, same audit, same voice as a sentence. */
   app.post("/api/do", async (c) => {
@@ -151,7 +198,7 @@ export function createWeb(db: Db, botUsername: string) {
     const r = d.kind === "pending" ? { text: `${d.echo}\n\nGo ahead? This waits ten minutes for a yes.`, buttons: [{ label: "Yes, go ahead", data: `confirm:${d.pendingId}` }, { label: "No", data: `cancel:${d.pendingId}` }] } : d.kind === "ran" && d.undoId ? { text: d.reply, buttons: [{ label: "Undo", data: `undo:${d.undoId}` }] } : { text: "reply" in d ? d.reply : "" };
     return c.json({ ...r, text: polish(r.text, { persona: personaOf(u.prefs) }) });
   });
-  app.post("/api/button", async (c) => c.json(await handleCallback(db, user(c), String((await c.req.json()).data))));
+  app.post("/api/button", async (c) => { const u = user(c); return c.json(await withVoice(u, await handleCallback(db, u, String((await c.req.json()).data)), false)); });
   app.get("/api/state", async (c) => {
     const u = user(c);
     const now = new Date();
@@ -291,7 +338,17 @@ export function createWeb(db: Db, botUsername: string) {
     const form = Object.fromEntries((await c.req.formData()).entries()) as Record<string, string>;
     if (!verifyTwilio(`${config.publicUrl}/webhooks/twilio`, form, c.req.header("x-twilio-signature") ?? "")) return c.text("forbidden", 403);
     const reply = await handleTextChannel(db, "sms", form.From, form.Body ?? "");
-    return c.body(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`, 200, { "content-type": "text/xml" });
+    return c.body(`<?xml version="1.0" encoding="UTF-8"?><Response>${reply ? `<Message>${escapeXml(reply)}</Message>` : ""}</Response>`, 200, { "content-type": "text/xml" });
+  });
+  /** Email in: Resend's email.received webhook (see docs/EMAIL.md). */
+  app.post("/webhooks/email", async (c) => {
+    const raw = await c.req.text();
+    const h = (k: string) => c.req.header(k);
+    // Answer Resend within a few seconds; slow work (a model call, a search) carries on after.
+    const work = handleInboundEmail(db, raw, { "svix-id": h("svix-id"), "svix-timestamp": h("svix-timestamp"), "svix-signature": h("svix-signature") })
+      .catch((e) => { log.error({ err: e?.message }, "inbound email failed"); return { status: 200, body: { error: "failed" } }; });
+    const r = await Promise.race([work, new Promise<{ status: number; body: Record<string, unknown> }>((res) => setTimeout(() => res({ status: 200, body: { accepted: true } }), 8000))]);
+    return c.json(r.body, r.status as any);
   });
   app.post("/webhooks/imessage", async (c) => {
     const secret = c.req.query("secret") ?? c.req.header("x-webhook-secret") ?? "";
@@ -299,6 +356,7 @@ export function createWeb(db: Db, botUsername: string) {
     const inbound = parseInbound(await c.req.json().catch(() => null));
     if (!inbound) return c.json({ ignored: true });
     const reply = await handleTextChannel(db, "imessage", inbound.from, inbound.text);
+    if (!reply) return c.json({ ignored: "not linked" });
     const { sendIMessage } = await import("../channels/imessage.js");
     await sendIMessage(inbound.from, reply).catch((e) => log.warn({ err: e?.message }, "imessage reply failed"));
     return c.json({ ok: true });

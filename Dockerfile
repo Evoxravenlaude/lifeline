@@ -1,4 +1,6 @@
 FROM node:22-slim
+# ffmpeg turns spoken replies into Telegram voice notes (OGG/Opus).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./

@@ -29,7 +29,12 @@ import type { Db } from "../core/db.js";
 
 export type SmsProvider = "twilio" | "httpsms" | "textbee";
 
-const lastButtons = new Map<string, { label: string; data: string }[]>(); // phone → buttons of last message
+const lastButtons = new Map<string, { label: string; data: string }[]>(); // phone, Apple ID or email → buttons of the last message we sent it
+/** Every text channel records what its last message offered, so "1" means what the person was looking at. */
+export function rememberButtons(to: string, buttons: { label: string; data: string }[] | undefined) {
+  lastButtons.set(to, buttons ?? []);
+  if (lastButtons.size > 2000) lastButtons.delete(lastButtons.keys().next().value!);
+}
 
 /** The live SMS route: SMS_PROVIDER if set and configured, else whichever is configured. */
 export function smsProvider(): SmsProvider | null {
@@ -92,7 +97,7 @@ export function registerSms() {
   const p = smsProvider();
   if (!p) return;
   registerSender("sms", async (phone, reply) => {
-    lastButtons.set(phone, reply.buttons ?? []);
+    rememberButtons(phone, reply.buttons);
     await sendSms(phone, buttonsAsText(reply));
   });
 }
@@ -158,22 +163,27 @@ export function parseGatewayInbound(provider: "httpsms" | "textbee", body: any, 
 }
 
 /** Shared by SMS and iMessage: text in → reply text out. */
-export async function handleTextChannel(db: Db, channel: "sms" | "imessage", from: string, text: string): Promise<string> {
+export async function handleTextChannel(db: Db, channel: "sms" | "imessage" | "email", from: string, text: string, opts: { forwarded?: boolean } = {}): Promise<string> {
   const t = text.trim();
-  const link = /^link\s+([a-z0-9]{6})$/i.exec(t);
-  let user = await findUserByIdentity(db, channel, from);
+  const link = /^link\s+([a-z0-9]{6})\b/i.exec(t);
+  const user = await findUserByIdentity(db, channel, from);
+  const thing = channel === "email" ? "address" : "number";
+  const verb = channel === "email" ? "email" : "text";
   if (link) {
     const u = await redeemLinkCode(db, link[1], channel, from);
-    return u ? `Linked. This is the same me${u.name ? `, ${u.name.split(" ")[0]}` : ""}: text me here like you would on Telegram, and reply 1 or 2 where I'd show buttons.` : "That code didn't work; it may have expired, they last fifteen minutes. Say \"link\" on Telegram or the web app for a fresh one.";
+    return u ? `Linked. This is the same me${u.name ? `, ${u.name.split(" ")[0]}` : ""}: ${verb} me here like you would on Telegram, and reply 1 or 2 where I'd show buttons.${channel === "email" ? " You can forward me emails too, and I'll pull out what matters." : ""}` : "That code didn't work; it may have expired, they last fifteen minutes. Say \"link\" on Telegram or the web app for a fresh one.";
   }
-  if (!user) return 'This number isn\'t linked to anyone yet. Say "link" to me on Telegram or the web app, then text me "link" and the code you get.';
+  // Strangers get silence unless they're clearly trying to reach lifeline. The relay may sit on someone's own
+  // phone or Mac, and their friends shouldn't get bot replies.
+  if (!user && !(channel === "email" ? /^\s*link\b|\blifeline\b/i : /\b(?:lifeline|link)\b/i).test(t)) return "";
+  if (!user) return `This ${thing} isn't linked to anyone yet. Say "link" to me on Telegram or the web app, then ${verb} me "link" and the code you get.`;
   const buttons = lastButtons.get(from) ?? [];
   const n = /^\d$/.test(t) ? Number(t) : 0;
   let reply: Reply;
   if (n && buttons[n - 1]) reply = await handleCallback(db, user, buttons[n - 1].data);
-  else if (n === 1 || n === 2) reply = await handleMessage(db, user, n === 1 ? "yes" : "no", { channel }); // no buttons cached (restart): 1 = confirm, 2 = cancel latest pending
-  else reply = await handleMessage(db, user, t, { channel });
-  lastButtons.set(from, reply.buttons ?? []);
+  else if (n) reply = { text: `Those numbers were for an earlier message. Say what you'd like in words, or "yes" or "no" for anything waiting.` };
+  else reply = await handleMessage(db, user, t, { channel, forwarded: opts.forwarded });
+  rememberButtons(from, reply.buttons);
   return buttonsAsText(reply);
 }
 
@@ -191,6 +201,7 @@ export async function handleGatewayWebhook(db: Db, provider: string, rawBody: st
   if (!msg) return { status: 200, body: { ignored: true } };
   if (msg.self) return { status: 200, body: { ignored: "own number" } };
   const reply = await handleTextChannel(db, "sms", msg.from, msg.text);
+  if (!reply) return { status: 200, body: { ignored: "not linked" } };
   try { await sendSms(msg.from, reply, provider); }
   catch (e: any) { log.warn({ err: e?.message, provider }, "sms reply failed"); }
   return { status: 200, body: { ok: true } };

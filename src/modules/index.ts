@@ -16,5 +16,7 @@ import "./scout.js";
 import "./extras.js";
 import "./cycle.js";
 import "./measures.js";
+import "./senses.js";
+import "./fun.js";
 import "../intent/persona.js";
 import "../pollers/hackathons.js";

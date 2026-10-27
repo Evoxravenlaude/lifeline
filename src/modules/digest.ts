@@ -75,6 +75,12 @@ export async function buildDigest(db: Db, user: User, now: Date): Promise<string
     lines.push("", `New since yesterday, ${fresh.length === 1 ? "one hackathon" : `${fresh.length} hackathons`} worth a look:`, ...fresh.map((h) => hackLine(h, user.tz, now)));
     for (const h of fresh) await db.query(`INSERT INTO hackathon_seen (user_id, hackathon_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, h.id]);
   }
+  // Sundays: the week, wrapped.
+  if (DateTime.fromJSDate(now).setZone(user.tz).weekday === 7 && user.prefs?.wrapped !== false) {
+    const { weekStats, wrappedLines } = await import("./fun.js");
+    const w = wrappedLines(await weekStats(db, user, now));
+    if (w.length >= 2) lines.push("", "Your week, wrapped:", ...w.map((l) => `- ${l}`));
+  }
   return lines.join("\n");
 }
 
@@ -121,10 +127,20 @@ const settings = defineAction({
     if (args.tz) {
       try { new Intl.DateTimeFormat("en", { timeZone: args.tz }); } catch { throw new Error(`I don't know a timezone called "${args.tz}". Try the city, like Africa/Lagos or Europe/London.`); }
     }
-    const prefs = { ...ctx.user.prefs, ...(args.country ? { country: args.country.toUpperCase() } : {}) };
+    const prefs: Record<string, unknown> = { ...ctx.user.prefs, ...(args.country ? { country: args.country.toUpperCase() } : {}) };
+    // A new email address is only used once its owner proves it: a six-digit code goes there first.
+    let emailNote = "";
+    if (args.email && args.email.toLowerCase() !== String(prefs.emailVerified ?? "").toLowerCase()) {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      prefs.emailPending = { email: args.email.toLowerCase(), code, at: Date.now() };
+      const { canEmail, sendEmail } = await import("../core/email.js");
+      emailNote = canEmail() && (await sendEmail(args.email, `Your lifeline code: ${code}`, `Your code is ${code}. Send "verify ${code}" to lifeline to confirm this address. If you didn't ask for this, ignore it.`))
+        ? `I've sent a code to ${args.email}. Send me "verify" and the code to confirm it's yours.`
+        : `I'll remember ${args.email}. Email isn't switched on here yet, so I can't confirm it; I won't send anything there until I can.`;
+    }
     await ctx.db.query(
-      `UPDATE users SET tz=COALESCE($2,tz), digest_hour=COALESCE($3,digest_hour), quiet_start=COALESCE($4,quiet_start), quiet_end=COALESCE($5,quiet_end), name=COALESCE($6,name), prefs=$7, email=COALESCE($8,email) WHERE id=$1`,
-      [ctx.user.id, args.tz ?? null, args.digest_hour ?? null, args.quiet_start ?? null, args.quiet_end ?? null, args.name ?? null, JSON.stringify(prefs), args.email ?? null],
+      `UPDATE users SET tz=COALESCE($2,tz), digest_hour=COALESCE($3,digest_hour), quiet_start=COALESCE($4,quiet_start), quiet_end=COALESCE($5,quiet_end), name=COALESCE($6,name), prefs=$7 WHERE id=$1`,
+      [ctx.user.id, args.tz ?? null, args.digest_hour ?? null, args.quiet_start ?? null, args.quiet_end ?? null, args.name ?? null, JSON.stringify(prefs)],
     );
     if (args.tz || args.digest_hour !== undefined) {
       const tz = args.tz ?? ctx.user.tz;
@@ -138,13 +154,31 @@ const settings = defineAction({
     if (args.quiet_start !== undefined || args.quiet_end !== undefined) bits.push(`quiet hours run ${hh(args.quiet_start ?? ctx.user.quiet_start)} to ${hh(args.quiet_end ?? ctx.user.quiet_end)}`);
     if (args.name) bits.push(`I'll call you ${args.name}`);
     if (args.country) bits.push(`your country is ${args.country.toUpperCase()}`);
-    if (args.email) bits.push(`your email is ${args.email}`);
     const said = bits.join(", ");
-    return { reply: bits.length ? `Saved. ${said.charAt(0).toUpperCase()}${said.slice(1)}.` : "Nothing to change there." };
+    const out = [bits.length ? `Saved. ${said.charAt(0).toUpperCase()}${said.slice(1)}.` : "", emailNote].filter(Boolean).join(" ");
+    return { reply: out || "Nothing to change there." };
   },
 });
 
-register(now, settings);
+const verifyEmail = defineAction({
+  name: "settings.verify_email",
+  tier: 1,
+  description: "Confirm the user's email address with the six-digit code that was emailed to it.",
+  schema: z.object({ code: z.string().regex(/^\d{6}$/) }),
+  async run(args, ctx) {
+    const p = ctx.user.prefs.emailPending as { email: string; code: string; at: number; tries?: number } | undefined;
+    if (!p || Date.now() - p.at > 30 * 60_000) return { reply: `There's no code waiting. Say "my email is …" and I'll send a fresh one.` };
+    if (p.code !== args.code) {
+      const tries = (p.tries ?? 0) + 1;
+      await ctx.db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [ctx.user.id, JSON.stringify({ emailPending: tries >= 5 ? null : { ...p, tries } })]);
+      return { reply: tries >= 5 ? `That's too many wrong codes. Say "my email is …" again for a new one.` : "That code doesn't match. Check the email and try again?" };
+    }
+    await ctx.db.query(`UPDATE users SET email=$2, prefs = (prefs - 'emailPending') || $3::jsonb WHERE id=$1`, [ctx.user.id, p.email, JSON.stringify({ emailVerified: p.email })]);
+    return { reply: `Confirmed. ${p.email} is yours; I'll send things there when you ask.` };
+  },
+});
+
+register(now, settings, verifyEmail);
 
 /** Export a small summary for the "what do you know" command. */
 export function weekdayName(i: number) { return DAYS[i]; }

@@ -1,4 +1,5 @@
 import "./modules/index.js";
+import { registerEmail } from "./channels/email.js";
 import { config } from "./core/config.js";
 import { getDb } from "./core/db.js";
 import { log } from "./core/log.js";
@@ -41,6 +42,7 @@ async function main() {
   }
   registerSms();
   registerIMessage();
+  registerEmail();
   startWeb(db, botUsername);
 
   startLoop({ db, getUser: (id) => getUserById(db, id), send: (user, reply) => dispatch(db, user, reply) });

@@ -44,7 +44,19 @@ export interface Ask {
 
 export type Tier = 1 | 2 | 3;
 
-export interface ActionResult {
+/** A picture, a voice note or a Telegram dice that goes with a reply. */
+export interface Attachment {
+  /** base64 image bytes and their type */
+  image?: { data: string; mime: string };
+  /** Read this reply aloud as well (true), or read these words aloud instead (a string). */
+  speak?: boolean | string;
+  /** Telegram's animated dice: 🎲 🎯 🏀 ⚽ 🎳 🎰 */
+  dice?: string;
+  /** Buttons of the action's own (a game's answers, a "log it" offer). callback data stays under 64 bytes. */
+  buttons?: { label: string; data: string }[];
+}
+
+export interface ActionResult extends Attachment {
   reply: string;
   /** If set, the user gets an Undo button valid for `undoTtlSec` (default 300s). */
   undo?: { payload: unknown; label?: string };

@@ -11,7 +11,7 @@
  */
 import { humanError } from "../core/humanize.js";
 import { getAction } from "./registry.js";
-import type { ActionResult, Ctx, Thread, Tier } from "./types.js";
+import type { ActionResult, Attachment, Ctx, Thread, Tier } from "./types.js";
 
 export const CONFIRM_TTL_SEC = 10 * 60;
 export const THREAD_TTL_MS = 10 * 60_000;
@@ -20,7 +20,7 @@ const FIELD_WORDS: Record<string, string> = { when: "a time", text: "what to say
 export const UNDO_TTL_SEC = 5 * 60;
 
 export type Decision =
-  | { kind: "ran"; reply: string; undoId?: number }
+  | { kind: "ran"; reply: string; undoId?: number; extra?: Attachment }
   | { kind: "pending"; pendingId: number; echo: string }
   | { kind: "ask"; reply: string; thread: Thread }
   | { kind: "refused"; reply: string }
@@ -80,7 +80,8 @@ async function runNow(ctx: Ctx, actionName: string, tier: Tier, args: unknown): 
     );
     undoId = row!.id;
   }
-  return { kind: "ran", reply: result.reply, undoId };
+  const extra: Attachment | undefined = result.image || result.speak || result.dice || result.buttons ? { image: result.image, speak: result.speak, dice: result.dice, buttons: result.buttons } : undefined;
+  return { kind: "ran", reply: result.reply, undoId, extra };
 }
 
 /** Confirm a pending Tier-2 action. Only an exact id for this user, not expired, not resolved. */
