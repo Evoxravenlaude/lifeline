@@ -29,6 +29,8 @@ export const config = {
   // web + messaging channels
   port: Number(process.env.PORT ?? 3000),
   publicUrl: (process.env.PUBLIC_URL ?? "").replace(/\/$/, ""),
+  /** Extra origins allowed to call /api and /auth with cookies (a Vercel-hosted web front that does NOT proxy through rewrites). Usually empty: web/vercel.json proxies instead. */
+  webOrigins: (process.env.WEB_ORIGINS ?? "").split(",").map((s) => s.trim().replace(/\/$/, "")).filter(Boolean),
   sessionSecret: process.env.SESSION_SECRET ?? "",
   twilioSid: process.env.TWILIO_ACCOUNT_SID ?? "",
   twilioToken: process.env.TWILIO_AUTH_TOKEN ?? "",

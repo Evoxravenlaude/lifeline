@@ -10,27 +10,30 @@ import type { Db } from "../core/db.js";
 import { ensureUser, handleCallback, handleMessage, renderDecision, type Reply } from "../core/handler.js";
 import { registerSender } from "../core/dispatch.js";
 import { propose } from "../policy/engine.js";
-import { HELP, FULL_HELP } from "../intent/index.js";
+import { FULL_HELP } from "../intent/index.js";
+import { overview } from "../intent/capabilities.js";
 import { diagnostics, providerName } from "../intent/providers.js";
 import { transcribe } from "../core/stt.js";
 import { PERSONAS } from "../intent/persona.js";
 import { spentToday } from "../core/budget.js";
 import { draftReply } from "../intent/model.js";
+import { polish, personaOf } from "../core/voice.js";
+import { pipLine } from "../core/pip.js";
 
-/** Telegram HTML: escape, bold short label lines ("Outcomes:", "☀️ Mon 26 Oct"), keep links clickable. */
+/** Telegram HTML: escape; bold the head line of a multi-line message so lists read at a glance; keep links clickable. */
 export function toHtml(text: string): string {
   const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return text.split("\n").map((line) => {
+  const lines = text.split("\n");
+  return lines.map((line, i) => {
     const e = esc(line);
-    if ((/^[A-Za-z][^:]{1,40}:$/.test(line) || /^(?:☀️|🐢|🏁|💊|📅|✈️|📝|📈|💬|🎓)\s/.test(line)) && line.length < 60) return `<b>${e}</b>`;
-    return e;
+    const isHead = (i === 0 && lines.length >= 3 && line.length < 70 && /[.:!?]$/.test(line)) || (/^[A-Z][^:]{1,40}:$/.test(line) && line.length < 44);
+    return isHead ? `<b>${e}</b>` : e;
   }).join("\n");
 }
 
-const QUICK = new Keyboard().text("☼ Today").text("⚑ Hackathons").text("◎ Scout").row().text("☐ Lists").text("¤ Money").text("🐢 Pip").resized().persistent();
-const QUICK_MAP: Record<string, string> = { "☼ Today": "digest", "⚑ Hackathons": "hackathons", "☐ Lists": "lists", "¤ Money": "spending week" };
-const TZ_CHOICES: [string, string][] = [["Lagos", "Africa/Lagos"], ["Libreville", "Africa/Libreville"], ["Nairobi", "Africa/Nairobi"], ["London", "Europe/London"], ["New York", "America/New_York"], ["Dubai", "Asia/Dubai"]];
-const PIP_QUIPS = ["Steady on. What's next?", "I keep the time so you don't have to.", "Nothing's on fire. Good day to plan something.", "Say the thing. I'll hold it.", "Slow is smooth. Smooth is fast."];
+const QUICK = new Keyboard().text("Today").text("Hackathons").text("Scout").row().text("Lists").text("Money").text("Pip").resized().persistent();
+const QUICK_MAP: Record<string, string> = { Today: "today", Hackathons: "any hackathons for me", Lists: "my lists", Money: "how much did I spend this week" };
+const TZ_CHOICES: [string, string][] = [["Lagos", "Africa/Lagos"], ["Libreville", "Africa/Libreville"], ["Accra", "Africa/Accra"], ["Nairobi", "Africa/Nairobi"], ["London", "Europe/London"], ["New York", "America/New_York"], ["Dubai", "Asia/Dubai"], ["Lisbon", "Europe/Lisbon"], ["Singapore", "Asia/Singapore"]];
 
 export { getUserById } from "../core/handler.js";
 
@@ -45,8 +48,11 @@ export function createBot(db: Db): Bot {
   const bot = new Bot(config.telegramToken);
 
   registerSender("telegram", async (externalId, reply) => {
-    for (const part of chunks(reply.text)) {
-      await bot.api.sendMessage(Number(externalId), part, { reply_markup: kb(reply), link_preview_options: { is_disabled: true } });
+    const parts = chunks(reply.text);
+    for (let i = 0; i < parts.length; i++) {
+      const markup = i === parts.length - 1 ? kb(reply) : undefined;
+      await bot.api.sendMessage(Number(externalId), toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } })
+        .catch(() => bot.api.sendMessage(Number(externalId), parts[i], { reply_markup: markup }));
     }
   });
 
@@ -54,7 +60,7 @@ export function createBot(db: Db): Bot {
     const id = ctx.from?.id;
     if (!id) return;
     if (config.allowedUserIds.length && !config.allowedUserIds.includes(id)) {
-      if (ctx.message) await ctx.reply("This bot is private.");
+      if (ctx.message) await ctx.reply("This one's a private bot for a small circle. If you were meant to be in it, ask whoever runs it to add your Telegram id.");
       return;
     }
     await next();
@@ -68,57 +74,68 @@ export function createBot(db: Db): Bot {
       await c.reply(toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } }).catch(() => c.reply(parts[i], { reply_markup: markup }));
     }
   };
+  const say = async (c: Context, text: string, extra: Record<string, unknown> = {}) => {
+    const u = await userOf(c);
+    const t = polish(text, { persona: personaOf(u.prefs) });
+    await c.reply(toHtml(t), { parse_mode: "HTML", link_preview_options: { is_disabled: true }, ...extra }).catch(() => c.reply(t, extra as any));
+  };
 
   bot.command("start", async (c) => {
     const u = await userOf(c);
+    const first = u.name ? u.name.split(" ")[0] : null;
     if (!u.prefs.onboarded) {
       const k = new InlineKeyboard();
       TZ_CHOICES.forEach(([l, z], i) => { k.text(l, `ob:tz:${z}`); if (i % 3 === 2) k.row(); });
-      await c.reply(`🐢 I'm Pip. I keep your day: reminders, calendar, meds, classes, trips, lists — and your deadlines, launches and the people behind them. Nothing that moves money or reaches someone else happens without your yes.\n\nFirst: where are you? (This sets your clock.)`, { reply_markup: k });
+      await say(c, [
+        `${first ? `${first}, hello` : "Hello"}. I'm lifeline. I keep your day and your deadlines so they don't live in your head: reminders, calendar, medication, classes, trips, lists; hackathons ranked to your taste and chased to payout; new projects and the people behind them; prices and wallets.`,
+        `You talk to me the way you'd text a sharp friend. No commands to learn. Anything that moves money, deletes, or reaches someone else waits for your yes.`,
+        `One thing first: where are you? That sets your clock, so "tomorrow at 9" means your 9.`,
+      ].join("\n\n"), { reply_markup: k });
       return;
     }
-    await c.reply(`🐢 Welcome back${u.name ? `, ${u.name.split(" ")[0]}` : ""}. ${HELP}`, { reply_markup: QUICK });
+    await say(c, `Welcome back${first ? `, ${first}` : ""}. ${pipLine("return", u)}`, { reply_markup: QUICK });
   });
+  bot.command("help", async (c) => say(c, FULL_HELP));
+  bot.command("what", async (c) => { const u = await userOf(c); await say(c, overview(u.name)); });
   bot.command("pip", async (c) => {
     const u = await userOf(c);
-    const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise mascot with spectacles who keeps the user's day. One short line (max 14 words) in the user's chosen voice. Output the line only.");
-    await c.reply(`🐢 ${line ?? PIP_QUIPS[Math.floor(Math.random() * PIP_QUIPS.length)]}`);
+    const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise with spectacles who keeps the user's day. One line (max 16 words) in the user's chosen voice: a dry, warm remark about keeping time, carrying things, or the day. No emoji. Output the line only.");
+    await say(c, line ?? pipLine("idle", u));
   });
-  bot.command("help", (c) => c.reply(FULL_HELP));
   bot.command("doctor", async (c) => {
     const p = providerName();
     const age = (t: number | null) => (t ? `${Math.round((Date.now() - t) / 1000)}s ago` : "never");
-    await c.reply([`provider: ${p ?? "none (rules + loose NL only)"}`, `last model success: ${age(diagnostics.lastOkAt)}`, `last model error: ${age(diagnostics.lastErrorAt)}${diagnostics.lastError ? `\n  ${diagnostics.lastError}` : ""}`, `gemini key for scout: ${config.geminiKey ? "yes" : "no"}`, `stt: ${config.openaiKey ? "yes" : "no"} · email: ${config.smtpUrl ? "yes" : "no"} · public url: ${config.publicUrl || "unset"}`].join("\n"));
+    await c.reply([`provider: ${p ?? "none (rules + loose NL only)"}`, `last model success: ${age(diagnostics.lastOkAt)}`, `last model error: ${age(diagnostics.lastErrorAt)}${diagnostics.lastError ? `\n  ${diagnostics.lastError}` : ""}`, `gemini key for scout: ${config.geminiKey ? "yes" : "no"}`, `stt: ${config.openaiKey ? "yes" : "no"}, email: ${config.smtpUrl ? "yes" : "no"}, public url: ${config.publicUrl || "unset"}`].join("\n"));
   });
   bot.command("persona", async (c) => {
     const u = await userOf(c);
     const k = new InlineKeyboard();
     Object.entries(PERSONAS).forEach(([key, v], i) => { k.text(v.label, `persona:${key}`); if (i % 2 === 1) k.row(); });
-    const cur = (u.prefs.personaCustom as string) ? "custom" : (u.prefs.persona as string) ?? "plain";
-    await c.reply(`Current voice: ${cur}. Pick one, or type "voice <describe it>" for your own.`, { reply_markup: k });
+    const cur = (u.prefs.personaCustom as string) ? "your own" : PERSONAS[(u.prefs.persona as string) ?? "plain"]?.label ?? "Plain";
+    await say(c, `Right now I talk ${cur}. Pick another, or describe one in your words, like "talk like a tired pirate".`, { reply_markup: k });
   });
   bot.command("usage", async (c) => {
     const u = await userOf(c);
-    await c.reply(`Model spend last 24h: $${(await spentToday(db, u.id)).toFixed(3)} of $${config.dailyModelBudgetUsd}.`);
+    await say(c, `Model spend in the last day: $${(await spentToday(db, u.id)).toFixed(3)} of $${config.dailyModelBudgetUsd}.`);
   });
-  for (const [cmd, text] of [["pending", "pending"], ["undo", "undo"], ["memory", "/memory"], ["audit", "/audit"], ["link", "link"]] as const) {
+  for (const [cmd, text] of [["pending", "pending"], ["undo", "undo"], ["memory", "what do you know about me"], ["audit", "/audit"], ["link", "link"], ["today", "today"]] as const) {
     bot.command(cmd, async (c) => send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram" })));
   }
 
   bot.on(["message:voice", "message:audio"], async (c) => {
-    if (!config.openaiKey) return c.reply("Voice notes need OPENAI_API_KEY on the server (about $0.003/min). Type it for now.");
+    if (!config.openaiKey) return say(c, "Voice notes need a transcription key on the server, and this one doesn't have it yet. Type it for now.");
     const f = await c.getFile();
     const r = await fetch(`https://api.telegram.org/file/bot${config.telegramToken}/${f.file_path}`);
     const text = await transcribe(Buffer.from(await r.arrayBuffer())).catch(() => null);
-    if (!text) return c.reply("Couldn't make out that voice note.");
-    await c.reply(`🎙 "${text}"`);
+    if (!text) return say(c, "I couldn't make out that voice note. Once more, or type it?");
+    await say(c, `Heard: "${text}"`);
     await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram" }));
   });
 
   bot.on("message:document", async (c) => {
     const doc = c.message.document;
-    if (!/\.ics$/i.test(doc.file_name ?? "")) return c.reply("I can import .ics calendar files. Other documents aren't supported yet.");
-    if ((doc.file_size ?? 0) > 2_000_000) return c.reply("That file is too big (2 MB max).");
+    if (!/\.ics$/i.test(doc.file_name ?? "")) return say(c, "I can read calendar files (.ics) and put the events in your calendar. Other files I can't do anything with yet.");
+    if ((doc.file_size ?? 0) > 2_000_000) return say(c, "That file's over 2 MB, which is more calendar than I can take in one go.");
     const u = await userOf(c);
     const f = await c.getFile();
     const ics = await (await fetch(`https://api.telegram.org/file/bot${config.telegramToken}/${f.file_path}`)).text();
@@ -127,12 +144,12 @@ export function createBot(db: Db): Bot {
 
   bot.on("message:text", async (c) => {
     const raw = c.message.text.trim();
-    if (raw === "🐢 Pip") {
+    if (raw === "Pip") {
       const u = await userOf(c);
-      const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise mascot with spectacles who keeps the user's day. One short line (max 14 words) in the user's chosen voice. Output the line only.");
-      return c.reply(`🐢 ${line ?? PIP_QUIPS[Math.floor(Math.random() * PIP_QUIPS.length)]}`);
+      const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise with spectacles who keeps the user's day. One line (max 16 words) in the user's chosen voice: a dry, warm remark about keeping time, carrying things, or the day. No emoji. Output the line only.");
+      return say(c, line ?? pipLine("idle", u));
     }
-    if (raw === "◎ Scout") return c.reply("Which niche, and what for? e.g. <i>scout payments on base for partnerships</i> or <i>find ai agent startups to apply to</i>", { parse_mode: "HTML", reply_markup: { force_reply: true, input_field_placeholder: "scout <niche> for <objective>" } });
+    if (raw === "Scout") return say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } });
     const text = QUICK_MAP[raw] ?? raw;
     const forwarded = Boolean((c.message as any).forward_origin || (c.message as any).forward_date);
     await c.replyWithChatAction("typing").catch(() => {});
@@ -150,12 +167,16 @@ export function createBot(db: Db): Bot {
         await propose({ db, user: u, now: new Date(), sourceMessage: "[onboarding tz]" }, "settings.update", { tz: value });
         const k = new InlineKeyboard();
         Object.entries(PERSONAS).forEach(([key, v], i) => { k.text(v.label, `ob:persona:${key}`); if (i % 2 === 1) k.row(); });
-        return c.reply(`Clock set to ${value}. Now, how should I talk?`, { reply_markup: k });
+        return say(c, `${value.split("/")[1].replace(/_/g, " ")} time it is. Now, how should I talk? You can change this any time, or describe your own voice later.`, { reply_markup: k });
       }
       if (step === "persona") {
         await propose({ db, user: u, now: new Date(), sourceMessage: "[onboarding persona]" }, "persona.set", { preset: value });
         await db.query(`UPDATE users SET prefs = prefs || '{"onboarded":true}'::jsonb WHERE id=$1`, [u.id]);
-        return c.reply(`${PERSONAS[value]?.label ?? value} it is. That's all the setup. If you ever want hackathons and launches ranked to your taste, tell me what you're into (<i>interests: ai, payments, base, ethereum</i> — any chains, any themes) — no rush. Otherwise, just talk to me.`, { parse_mode: "HTML", reply_markup: QUICK });
+        return say(c, [
+          `${PERSONAS[value]?.label ?? value}. That's the whole setup.`,
+          `Try me with something real: "remind me to call Ada tomorrow at 9", "I'm going to Accra on the 20th", "who's building payments on base". If you want hackathons and launches ranked to your taste, tell me what you're into whenever, like "interests: ai, payments, base". Any chains, any themes.`,
+          `And if you ever wonder whether I can do something, just ask. "Can you track my meds?" gets a straight answer.`,
+        ].join("\n\n"), { reply_markup: QUICK });
       }
       return;
     }
@@ -171,7 +192,7 @@ export function createBot(db: Db): Bot {
     const bc = c.businessConnection;
     const u = await ensureUser(db, "telegram", String(bc.user.id), bc.user.first_name);
     await db.query(`INSERT INTO business_connections (connection_id, user_id, enabled) VALUES ($1,$2,$3) ON CONFLICT (connection_id) DO UPDATE SET enabled=EXCLUDED.enabled, updated_at=now()`, [bc.id, u.id, (bc as any).is_enabled ?? true]);
-    await bot.api.sendMessage(bc.user.id, (bc as any).is_enabled === false ? "Business connection paused." : "Business connection active. I'll draft replies for messages in the chats you chose; you send them.");
+    await bot.api.sendMessage(bc.user.id, (bc as any).is_enabled === false ? "Business connection paused. I'll stop drafting replies." : "Business connection on. When someone writes to you in the chats you chose, I'll draft a reply here for you to send. I never send anything myself.");
   });
   bot.on("business_message", async (c) => {
     const m = c.businessMessage;
@@ -181,7 +202,7 @@ export function createBot(db: Db): Bot {
     if (!owner || m.from?.id === owner.telegram_id) return; // owner's own outgoing message
     const draft = await draftReply(db, owner, `${m.from?.first_name ?? "Someone"}: ${m.text}`);
     if (!draft) return;
-    await bot.api.sendMessage(owner.telegram_id, `💬 ${m.from?.first_name ?? "Someone"} wrote: "${m.text.slice(0, 300)}"\n\nDraft reply (copy and send yourself):\n${draft}`);
+    await bot.api.sendMessage(owner.telegram_id, `${m.from?.first_name ?? "Someone"} wrote: "${m.text.slice(0, 300)}"\n\nA reply you could send:\n${draft}`);
   });
 
   bot.catch((e) => log.error({ err: e.error }, "bot error"));

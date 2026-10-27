@@ -25,28 +25,47 @@ export const POLYMARKET_BLOCKED = new Set(["AU", "BE", "BY", "BI", "CF", "CD", "
 const follow = defineAction({
   name: "trading.follow_wallet",
   tier: 2,
-  description: "Shadow-follow a trader's wallet on 'polymarket' or 'pumpfun': logs what copying would have returned, executes nothing. Caps are per-trade and per-day in USD (polymarket) or SOL (pumpfun). Confirmed once as a standing rule.",
+  description: "Shadow-follow a trader's wallet on 'polymarket' or 'pumpfun': logs what copying would have returned, executes nothing. Caps are per-trade and per-day in USD (polymarket) or SOL (pumpfun). Leave the caps empty if the user gave none; the bot will ask. Confirmed once as a standing rule.",
   schema: z.object({
     venue: z.enum(["polymarket", "pumpfun"]),
     address: z.string().min(20),
     label: z.string().optional(),
-    max_per_trade: z.number().positive(),
-    max_per_day: z.number().positive(),
+    max_per_trade: z.number().positive().optional(),
+    max_per_day: z.number().positive().optional(),
   }),
-  echo: (a) => `Shadow-follow ${a.label ?? a.address.slice(0, 8)} on ${a.venue}: max ${a.max_per_trade}/trade, ${a.max_per_day}/day. Nothing executes.`,
-  async run(args, ctx) {
+  needs(args) {
+    const unit = args.venue === "polymarket" ? "dollars" : "SOL";
+    if (args.max_per_trade === undefined) return { need: "max_per_trade", question: `How much per trade should the paper copy use, in ${unit}? Say a number like 10.` };
+    if (args.max_per_day === undefined) return { need: "max_per_day", question: `And the most per day, in ${unit}?` };
+    return null;
+  },
+  fill(need, answer) {
+    if (need !== "max_per_trade" && need !== "max_per_day") return null;
+    const m = /(\d[\d,]*(?:\.\d+)?)/.exec(answer);
+    if (!m) return null;
+    const n = Number(m[1].replace(/,/g, ""));
+    return n > 0 ? { [need]: n } : null;
+  },
+  echo: (a) => {
+    const unit = a.venue === "polymarket" ? "dollars" : "SOL";
+    const venue = a.venue === "polymarket" ? "Polymarket" : "pump.fun";
+    return `I'll mirror ${a.label ?? a.address.slice(0, 8)} on ${venue} on paper, up to ${a.max_per_trade} ${unit} a trade and ${a.max_per_day} ${unit} a day. Nothing is ever placed; this only shows what copying would have done.`;
+  },
+  async run(a, ctx) {
+    const args = { ...a, max_per_trade: a.max_per_trade!, max_per_day: a.max_per_day! };
     const country = String(ctx.user.prefs?.country ?? "").toUpperCase();
     if (args.venue === "polymarket" && country && POLYMARKET_BLOCKED.has(country)) {
-      return { reply: `Polymarket blocks order placement from ${country}, so I won't set up a follow that could ever execute there.` };
+      return { reply: `Polymarket doesn't take orders from ${country}, so I won't set up a follow that could ever turn live there.` };
     }
-    if (args.max_per_day < args.max_per_trade) throw new Error("max_per_day must be ≥ max_per_trade");
+    if (args.max_per_day < args.max_per_trade) throw new Error(`The daily cap (${args.max_per_day}) has to be at least the per-trade cap (${args.max_per_trade}). Give me the two numbers again?`);
     await ctx.db.query(
       `INSERT INTO followed_wallets (user_id, venue, address, label, max_per_trade, max_per_day, mode)
        VALUES ($1,$2,$3,$4,$5,$6,'shadow') ON CONFLICT (user_id, venue, address) DO UPDATE SET label=EXCLUDED.label, max_per_trade=EXCLUDED.max_per_trade, max_per_day=EXCLUDED.max_per_day, active=true`,
       [ctx.user.id, args.venue, args.address, args.label ?? null, args.max_per_trade, args.max_per_day],
     );
     const flag = args.venue === "polymarket" ? config.enablePolymarketShadow : config.enablePumpfunShadow;
-    return { reply: `Following in shadow mode.${flag ? "" : ` (The ${args.venue} watcher is off on this server — set ENABLE_${args.venue.toUpperCase()}_SHADOW=true.)`} I'll report what copying would have done after two weeks; promote nothing before that.` };
+    const venue = args.venue === "polymarket" ? "Polymarket" : "pump.fun";
+    return { reply: `Following ${args.label ?? args.address.slice(0, 8)} on ${venue}, on paper.${flag ? "" : ` The ${venue} watcher is switched off on this server, so nothing will be logged until it's on.`} Say "shadow report" any time; two weeks of it is enough to judge whether copying them is worth anything.` };
   },
 });
 
@@ -57,7 +76,7 @@ const unfollow = defineAction({
   schema: z.object({ match: z.string().min(1) }),
   async run(args, ctx) {
     const r = await ctx.db.query(`UPDATE followed_wallets SET active=false WHERE user_id=$1 AND active AND (address ILIKE $2 OR label ILIKE $2) RETURNING id`, [ctx.user.id, `%${args.match}%`]);
-    return { reply: r.length ? "Unfollowed." : "No active follow matched." };
+    return { reply: r.length ? `Stopped following ${args.match}.` : `I'm not following anyone matching "${args.match}". Say "shadow report" to see who's on the list.` };
   },
 });
 
@@ -75,12 +94,10 @@ const report = defineAction({
        WHERE w.user_id=$1 AND w.active GROUP BY w.id ORDER BY w.venue, who`,
       [ctx.user.id],
     );
-    if (!rows.length) return { reply: "Not following any wallets." };
-    return {
-      reply: rows
-        .map((r) => `${r.venue} ${r.who} [${r.mode}] — ${r.trades} trades/14d${r.p50_latency ? `, p50 latency ${Math.round(r.p50_latency)}ms` : ""}${r.slip != null ? `, slippage proxy ${(Number(r.slip) * 100).toFixed(2)}%` : ""}`)
-        .join("\n") + "\n\nExecution isn't built; this is the evidence you'd use to decide whether it should be.",
-    };
+    if (!rows.length) return { reply: "I'm not following anyone yet. Say \"follow <wallet> on polymarket\" and I'll mirror them on paper." };
+    const venue = (v: string) => (v === "polymarket" ? "Polymarket" : "pump.fun");
+    const lines = rows.map((r) => `${r.who} on ${venue(r.venue)}: ${r.trades} trade${r.trades === 1 ? "" : "s"} in the last two weeks${r.p50_latency ? `, I'd have seen each about ${Math.round(r.p50_latency / 1000)}s after them` : ""}${r.slip != null ? `, roughly ${(Number(r.slip) * 100).toFixed(2)}% worse fills` : ""}.`);
+    return { reply: [`Paper results for the ${rows.length === 1 ? "wallet" : `${rows.length} wallets`} you follow.`, ...lines, "", "None of this was placed. It's the evidence for deciding whether copying them is worth building for real."].join("\n") };
   },
 });
 

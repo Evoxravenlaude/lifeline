@@ -60,9 +60,9 @@ describe("policy engine", () => {
     const d = await propose(ctx(), "calendar.delete", { id });
     expect(d.kind).toBe("pending");
     if (d.kind !== "pending") return;
-    expect(d.echo).toBe(`Delete event #${id}`);
+    expect(d.echo).toContain(`(${id})`);
     expect((await db.one(`SELECT deleted FROM events WHERE id=$1`, [id]))!.deleted).toBe(false);
-    expect(await cancelPending(ctx(), d.pendingId)).toBe("Cancelled.");
+    expect(await cancelPending(ctx(), d.pendingId)).toBe("Cancelled. Nothing happened.");
     expect(await confirmPending(ctx(), d.pendingId)).toMatchObject({ kind: "error" });
 
     const d2 = await propose(ctx(), "calendar.delete", { id });
@@ -102,7 +102,7 @@ describe("scheduler", () => {
     await db.query(`UPDATE jobs SET run_at=$2 WHERE id=$1`, [job.id, NOW]);
     const n = await runDue(deps, NOW);
     expect(n).toBeGreaterThanOrEqual(1);
-    expect(sent.some((s) => s.includes("water plants"))).toBe(true);
+    expect(sent.some((s) => /water plants/i.test(s))).toBe(true);
     const after = await db.one<any>(`SELECT active, run_at FROM jobs WHERE id=$1`, [job.id]);
     expect(after.active).toBe(true);
     expect(new Date(after.run_at) > NOW).toBe(true);
@@ -114,7 +114,7 @@ describe("scheduler", () => {
     expect(d.kind).toBe("ran");
     await db.query(`UPDATE jobs SET run_at=$1 WHERE kind='med_slot'`, [NOW]);
     await runDue(deps, NOW);
-    expect(sent.filter((s) => s.startsWith("💊 Vitamin D")).length).toBe(2);
+    expect(sent.filter((s) => s.startsWith("Time for Vitamin D")).length).toBe(2);
     expect(await db.query(`SELECT * FROM medication_logs WHERE status='pending'`)).toHaveLength(2);
     expect(sent[0]).toContain("supply left");
   });
@@ -146,9 +146,9 @@ describe("modules", () => {
     expect(t.kind).toBe("ran");
     await propose(ctx(), "trip.add_item", { kind: "flight", title: "LOS→ACC", at: "dec 20 7am", cost: 180 });
     const tick = await propose(ctx(), "trip.tick", { match: "charger" });
-    expect(tick.kind === "ran" && tick.reply).toContain("✅");
+    expect(tick.kind === "ran" && tick.reply).toContain("ticked");
     const show = await propose(ctx(), "trip.show", {});
-    expect(show.kind === "ran" && show.reply).toContain("Budget 600 USD, planned 180");
+    expect(show.kind === "ran" && show.reply).toContain("Budget 600 USD, 180 USD planned");
     const alerts = await db.query(`SELECT * FROM jobs WHERE kind='trip_alert' AND active AND payload->>'tripId' <> '0'`);
     expect(alerts).toHaveLength(2);
   });
@@ -163,7 +163,7 @@ describe("modules", () => {
     await propose(ctx(), "habit.add", { name: "gym", target_per_week: 4 });
     await propose(ctx(), "habit.checkin", { name: "gym", day: "yesterday" });
     const c = await propose(ctx(), "habit.checkin", { name: "gym" });
-    expect(c.kind === "ran" && c.reply).toContain("2-day streak");
+    expect(c.kind === "ran" && c.reply).toContain("2 days running");
     await propose(ctx(), "spend.log", { amount: 4500, currency: "ngn", category: "data" });
     await propose(ctx(), "spend.log", { amount: 12000, currency: "NGN", category: "food" });
     const s = await propose(ctx(), "spend.summary", { range: "week" });
@@ -211,13 +211,13 @@ describe("hackathons", () => {
     await propose(ctx(), "hackathon.update", { match: "Frontier", status: "won", prize: "5000 USDC" });
     expect(await db.query(`SELECT * FROM jobs WHERE kind='hack_payout' AND active`)).toHaveLength(2);
     const l = await propose(ctx(), "hackathon.ledger", {});
-    expect(l.kind === "ran" && l.reply).toContain("1 won / 1 decided (100%)");
+    expect(l.kind === "ran" && l.reply).toContain("1 won out of 1, 100%");
   });
 
   it("digest assembles the day", async () => {
     const text = await buildDigest(db, user, NOW);
-    expect(text).toContain("💊 Vitamin D 08:00/20:00");
-    expect(text).toContain("✈️ Accra in");
+    expect(text).toContain("Meds: Vitamin D at 08:00 and 20:00");
+    expect(text).toContain("Accra");
   });
 });
 
@@ -226,9 +226,9 @@ describe("trading guardrails", () => {
     const d = await propose(ctx(), "trading.follow_wallet", { venue: "polymarket", address: "0x1234567890abcdef1234567890abcdef12345678", max_per_trade: 10, max_per_day: 50 });
     expect(d.kind).toBe("pending");
     if (d.kind !== "pending") return;
-    expect(d.echo).toContain("Nothing executes");
+    expect(d.echo).toContain("Nothing is ever placed");
     const r = await confirmPending(ctx(), d.pendingId);
-    expect(r.kind === "ran" && r.reply).toContain("shadow mode");
+    expect(r.kind === "ran" && r.reply).toContain("on paper");
     expect((await db.one<any>(`SELECT mode FROM followed_wallets`)).mode).toBe("shadow");
 
     await db.query(`UPDATE users SET prefs='{"country":"GB"}' WHERE id=$1`, [user.id]);
@@ -236,7 +236,7 @@ describe("trading guardrails", () => {
     const d2 = await propose({ ...ctx(), user: u2 }, "trading.follow_wallet", { venue: "polymarket", address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd", max_per_trade: 10, max_per_day: 50 });
     if (d2.kind !== "pending") throw new Error();
     const r2 = await confirmPending({ ...ctx(), user: u2 }, d2.pendingId);
-    expect(r2.kind === "ran" && r2.reply).toContain("blocks order placement from GB");
+    expect(r2.kind === "ran" && r2.reply).toContain("doesn't take orders from");
   });
 });
 
@@ -293,9 +293,9 @@ describe("round two: personas, budget, prices, jobs, launches, bills", () => {
     const d = await propose(ctx(), "bill.pay", { biller_code: "BIL099", customer: "08012345678", amount: 2000, label: "MTN airtime" });
     expect(d.kind).toBe("pending");
     if (d.kind !== "pending") return;
-    expect(d.echo).toBe("Pay ₦2,000 to MTN airtime for 08012345678. Money leaves the funded balance.");
+    expect(d.echo).toBe("This sends 2,000 naira to MTN airtime for 08012345678. It comes out of the funded balance and can't be pulled back.");
     const r = await confirmPending(ctx(), d.pendingId);
-    expect(r.kind === "error" && r.reply).toContain("FLUTTERWAVE_SECRET_KEY");
+    expect(r.kind === "error" && r.reply).toContain("Flutterwave key");
     expect((await db.one<any>(`SELECT status FROM bill_payments`)).status).toBe("failed");
   });
 

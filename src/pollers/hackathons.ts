@@ -127,7 +127,7 @@ export async function pollSuperteam(): Promise<HackRow[]> {
     .map((l) => ({
       source: "superteam",
       external_id: String(l.id ?? l.slug),
-      title: `${l.title}${l.sponsor?.name ? ` — ${l.sponsor.name}` : ""}`,
+      title: `${l.title}${l.sponsor?.name ? ` by ${l.sponsor.name}` : ""}`,
       url: `https://earn.superteam.fun/listing/${l.slug}`,
       deadline: date(l.deadline),
       prize_usd: num(l.usdValue ?? l.rewardAmount),

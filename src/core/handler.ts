@@ -1,14 +1,26 @@
 /**
  * Channel-agnostic brain. Telegram, web, SMS and iMessage all call these two
  * functions; they differ only in how they render buttons.
+ *
+ * Order of reading a message:
+ *   1. yes / no / undo / link, which are about the last thing we said
+ *   2. an open follow-up ("When are you going?"): the message is the answer first
+ *   3. a question about what the bot can do
+ *   4. intent: rules, model, loose language, small talk
+ * Every reply passes through the voice pass before it leaves.
  */
 import { randomBytes } from "node:crypto";
 import type { Db } from "./db.js";
 import { config } from "./config.js";
 import { schedule } from "./scheduler.js";
-import type { Ctx, User } from "../policy/types.js";
+import { polish, personaOf } from "./voice.js";
+import type { Ctx, Thread, User } from "../policy/types.js";
+import { getAction } from "../policy/registry.js";
 import { cancelPending, confirmPending, latestPending, propose, undo, type Decision } from "../policy/engine.js";
 import { resolveIntent } from "../intent/index.js";
+import { answerCapability, isCapabilityQuestion } from "../intent/capabilities.js";
+import { openThread, setThread, SKIP } from "../intent/thread.js";
+import { parseRange, parseWhen, parseMoney } from "./time.js";
 import { markDone, snooze } from "../modules/reminders.js";
 import { resolveLog } from "../modules/medications.js";
 
@@ -73,7 +85,7 @@ export async function redeemLinkCode(db: Db, code: string, channel: Channel, ext
 export function renderDecision(d: Decision): Reply {
   switch (d.kind) {
     case "pending":
-      return { text: `${d.echo}\n\nConfirm? (expires in 10 min)`, buttons: [{ label: "✅ Confirm", data: `confirm:${d.pendingId}` }, { label: "✖ Cancel", data: `cancel:${d.pendingId}` }] };
+      return { text: `${d.echo}\n\nGo ahead? This waits ten minutes for a yes.`, buttons: [{ label: "Yes, go ahead", data: `confirm:${d.pendingId}` }, { label: "No", data: `cancel:${d.pendingId}` }] };
     case "ran":
       return d.undoId ? { text: d.reply, buttons: [{ label: "Undo", data: `undo:${d.undoId}` }] } : { text: d.reply };
     default:
@@ -81,64 +93,124 @@ export function renderDecision(d: Decision): Reply {
   }
 }
 
+const YES = /^(?:yes|y|yes please|yep|yeah|yup|confirm|go ahead|go|do it|sure|ok go|okay go|send it|pay it)[.!]*$/i;
+const NO = /^(?:no|n|nope|nah|cancel|never ?mind|don'?t|stop|forget it|leave it)[.!]*$/i;
+
 export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date }): Promise<Reply> {
-  const ctx: Ctx = { db, user, now: opts.now ?? new Date(), sourceMessage: `[${opts.channel}] ${text}` };
+  const now = opts.now ?? new Date();
+  const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}` };
+  const t = text.trim();
   await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, text]);
 
-  // Link code typed on a secondary channel is handled by the channel before reaching here.
-  if (/^(yes|y|confirm|ok|okay|do it)$/i.test(text.trim())) {
+  // 1. About the last thing we said.
+  if (YES.test(t)) {
     const pid = await latestPending(ctx);
     if (pid) return finish(db, user, renderDecision(await confirmPending(ctx, pid)));
   }
-  if (/^(no|cancel|nevermind|never mind)$/i.test(text.trim())) {
+  if (NO.test(t)) {
     const pid = await latestPending(ctx);
     if (pid) return finish(db, user, { text: await cancelPending(ctx, pid) });
+    if (openThread(user, now)) { await setThread(db, user, null); return finish(db, user, { text: "Dropped it." }); }
   }
-  if (/^undo$/i.test(text.trim())) {
+  if (/^undo$/i.test(t)) {
     const row = await db.one<{ id: number }>(`SELECT id FROM undo_stack WHERE user_id=$1 AND NOT used ORDER BY id DESC LIMIT 1`, [user.id]);
-    return finish(db, user, { text: row ? await undo(ctx, row.id) : "Nothing to undo." });
+    return finish(db, user, { text: row ? await undo(ctx, row.id) : "There's nothing to undo." });
   }
-  if (/^link$/i.test(text.trim())) {
+  if (/^link$/i.test(t)) {
     const code = await createLinkCode(db, user.id);
-    return finish(db, user, { text: `Link code: ${code}\nSend "link ${code}" from the other channel (web, SMS or iMessage) within 15 minutes.` });
+    return finish(db, user, { text: `Your link code is ${code}. From the other place (the web app, SMS or iMessage) send "link ${code}" in the next fifteen minutes and it becomes the same me.` });
   }
 
-  const intent = await resolveIntent(text, ctx, { forwarded: opts.forwarded });
-  const reply = intent.kind === "reply" ? { text: intent.text } : renderDecision(await propose(ctx, intent.intent.action, intent.intent.args));
-  return finish(db, user, reply);
+  // 2. An open follow-up: read the message as the answer first.
+  const thread = opts.forwarded ? null : openThread(user, now);
+  if (thread) {
+    const answered = await answerThread(ctx, thread, t);
+    if (answered) return finish(db, user, answered);
+  }
+
+  // 3. "Can you track meds?"
+  if (!opts.forwarded && isCapabilityQuestion(t)) {
+    const a = answerCapability(t, user.name);
+    if (a) { if (thread) await setThread(db, user, null); return finish(db, user, { text: a }); }
+  }
+
+  // 4. Intent.
+  const intent = await resolveIntent(text, { ...ctx, thread }, { forwarded: opts.forwarded });
+  if (intent.kind === "reply") {
+    // Still waiting on the follow-up and the user said something unrelated and unparseable: ask once more, briefly.
+    if (thread && intent.source !== "model" && !intent.clearThread) return finish(db, user, { text: `${intent.text}\n\n(Still waiting on: ${thread.question.toLowerCase()} Say skip to carry on without it.)` });
+    if (thread) await setThread(db, user, null);
+    return finish(db, user, { text: intent.text });
+  }
+  if (thread) await setThread(db, user, null);
+  return finish(db, user, await decide(ctx, intent.intent.action, intent.intent.args));
+}
+
+/** Propose, and if the action asks a question, remember it. */
+async function decide(ctx: Ctx, action: string, args: unknown): Promise<Reply> {
+  const d = await propose(ctx, action, args);
+  if (d.kind === "ask") { await setThread(ctx.db, ctx.user, d.thread); return { text: d.reply }; }
+  return renderDecision(d);
+}
+
+/** Try to read `text` as the answer to an open follow-up. Null means: not an answer, read it fresh. */
+async function answerThread(ctx: Ctx, thread: Thread, text: string): Promise<Reply | null> {
+  const action = getAction(thread.action);
+  if (!action) { await setThread(ctx.db, ctx.user, null); return null; }
+  if (SKIP.test(text)) {
+    await setThread(ctx.db, ctx.user, null);
+    return decide({ ...ctx, skipAsk: true }, thread.action, thread.args);
+  }
+  const filled = action.fill ? action.fill(thread.need, text, thread.args as any, ctx) : defaultFill(thread.need, text, ctx);
+  if (!filled) return null;
+  await setThread(ctx.db, ctx.user, null);
+  return decide(ctx, thread.action, { ...thread.args, ...filled });
+}
+
+/** Generic slot filling for the common slot names. */
+function defaultFill(need: string, text: string, ctx: Ctx): Record<string, unknown> | null {
+  switch (need) {
+    case "when": return parseWhen(text, ctx.user.tz, ctx.now) ? { when: text } : null;
+    case "dates": { const r = parseRange(text, ctx.user.tz, ctx.now); return r ? { start: r.start.toISOString(), end: r.end?.toISOString() } : null; }
+    case "budget": { const m = parseMoney(text); return m ? { budget: m.amount, currency: m.currency } : null; }
+    case "amount": { const m = parseMoney(text) ?? (/^\d/.test(text) ? { amount: Number(text.replace(/[^\d.]/g, "")), currency: undefined } : null); return m ? { amount: m.amount, ...(m.currency ? { currency: m.currency } : {}) } : null; }
+    default: return text.length < 200 ? { [need]: text } : null;
+  }
 }
 
 async function finish(db: Db, user: User, r: Reply): Promise<Reply> {
-  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'assistant',$2)`, [user.id, r.text.slice(0, 2000)]);
-  return r;
+  const out = { ...r, text: polish(r.text, { persona: personaOf(user.prefs) }) };
+  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'assistant',$2)`, [user.id, out.text.slice(0, 2000)]);
+  return out;
 }
 
 /** Button presses (Telegram callback_data, web button, or "1"/"2" on SMS). */
 export async function handleCallback(db: Db, user: User, data: string, now = new Date()): Promise<Reply> {
   const ctx: Ctx = { db, user, now, sourceMessage: `[button ${data}]` };
   const [kind, a, b] = data.split(":");
+  const say = (text: string, buttons?: Reply["buttons"]): Reply => ({ text: polish(text, { persona: personaOf(user.prefs) }), buttons });
   switch (kind) {
-    case "confirm": return renderDecision(await confirmPending(ctx, Number(a)));
-    case "cancel": return { text: await cancelPending(ctx, Number(a)) };
-    case "undo": return { text: await undo(ctx, Number(a)) };
+    case "confirm": { const r = renderDecision(await confirmPending(ctx, Number(a))); return say(r.text, r.buttons); }
+    case "cancel": return say(await cancelPending(ctx, Number(a)));
+    case "undo": return say(await undo(ctx, Number(a)));
     case "rem":
-      if (a === "done") { await markDone(db, user.id, Number(b)); return { text: "Done ✅" }; }
-      await snooze(db, user.id, Number(b)); return { text: "Snoozed 1h." };
+      if (a === "done") { await markDone(db, user.id, Number(b)); return say("Done. Off the list."); }
+      await snooze(db, user.id, Number(b)); return say("Snoozed. I'll bring it back in an hour.");
     case "med": {
       const ok = await resolveLog(db, user.id, Number(b), a === "taken" ? "taken" : "skipped");
-      return { text: ok ? (a === "taken" ? "Logged as taken ✅" : "Skipped.") : "Couldn't find that dose." };
+      return say(ok ? (a === "taken" ? "Logged as taken." : "Logged as skipped.") : "I couldn't find that dose any more.");
     }
     case "mem":
       if (a === "keep") await db.query(`UPDATE memories SET confirmed=true WHERE id=$1 AND user_id=$2`, [Number(b), user.id]);
       else await db.query(`DELETE FROM memories WHERE id=$1 AND user_id=$2`, [Number(b), user.id]);
-      return { text: a === "keep" ? "Kept." : "Dropped." };
-    case "persona": return renderDecision(await propose(ctx, "persona.set", { preset: a }));
-    default: return { text: "Unknown button." };
+      return say(a === "keep" ? "Kept." : "Dropped.");
+    case "persona": { const r = renderDecision(await propose(ctx, "persona.set", { preset: a })); return say(r.text, r.buttons); }
+    default: return say("That button doesn't do anything any more.");
   }
 }
 
 /** For text-only channels: map "1"/"2" replies to the last message's buttons. */
 export function buttonsAsText(r: Reply): string {
   if (!r.buttons?.length) return r.text;
-  return `${r.text}\n${r.buttons.map((b, i) => `${i + 1}) ${b.label.replace(/^[✅✖]\s*/, "")}`).join("  ")}`;
+  return `${r.text}\n${r.buttons.map((b, i) => `${i + 1}) ${b.label}`).join("  ")}`;
 }

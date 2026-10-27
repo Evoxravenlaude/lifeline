@@ -12,14 +12,14 @@ src/
   pollers/    HackathonRadar · Devpost · Superteam Earn · ETHGlobal · Colosseum · Hack Club
   telegram/   grammY: text, voice, .ics, buttons, /persona, Business connection drafts
   channels/   sms (Twilio) · imessage (BlueBubbles / Sendblue)
-  web/        Hono server + single-page app + webhooks
+  web/        Hono server + webhooks (the web app itself lives in web/ at the repo root, also a Vercel project)
 test/         192 tests on a real Postgres engine: gate, modules, channels, web, NL coverage (150 sentences), load
 ```
 
 ## Running it on Railway (with Doppler + Supabase)
 
 1. **Supabase** → New project → Project Settings → Database → copy the **Session pooler** URI (port 5432). That's `DATABASE_URL`. Tables are created on first boot (`npm run schema` prints the SQL if you'd rather run it in the SQL editor first; it's also in `supabase/migrations.sql`).
-2. **Telegram** → @BotFather `/newbot` → `TELEGRAM_BOT_TOKEN`. Friends message @userinfobot once → `ALLOWED_USER_IDS`. In BotFather `/setdomain` → your Railway domain, so the web app's Telegram login works.
+2. **Telegram** → @BotFather `/newbot` → `TELEGRAM_BOT_TOKEN`. Friends message @userinfobot once → `ALLOWED_USER_IDS`. In BotFather `/setdomain` → the web app's domain (your Vercel domain, or the Railway one), so the web app's Telegram login works.
 3. **Doppler** → `doppler setup` (project `lifeline`, config `prd`) → paste every secret from `.env.example` → Doppler dashboard → Integrations → Railway → sync to your service. Railway's env then stays empty of secrets.
 4. **Railway** → New project → Deploy from repo (this folder; `railway.json` picks the Dockerfile) → Settings → Networking → Generate domain → put it in `PUBLIC_URL`. Health check is `/health`. Railway sets `PORT`.
 5. **Model** → `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY`. Gemini also powers the grounded scout. `DAILY_MODEL_BUDGET_USD` caps each friend.
@@ -42,11 +42,13 @@ Day one for each friend: `/start` on Telegram → `timezone Europe/London` → `
 
 ## The product surface
 
-**Web app** (`src/web/public`): a real multi-view product, no build step. Chat · Today (timeline, stats, habits) · Hackathons (ranked feed + ledger with status select) · Scout (niche + objective → projects, socials, people, outreach) · Lists · Money (spend, alerts, wallets, shadow follows, bills) · Trips · Settings (theme, voice, rhythm, channels, model budget). The right rail is always live: pending confirmations, up next, meds, deadlines, memory.
+**Web app** (`web/`, served by Railway at `/` and deployable to Vercel on its own domain; see `web/README.md`): a real multi-view product, no build step. Chat · Today (timeline, stats, habits) · Hackathons (ranked feed + ledger with status select) · Scout (niche + objective → projects, socials, people, outreach) · Lists · Money (spend, alerts, wallets, shadow follows, bills) · Trips · Settings (theme, voice, rhythm, channels, model budget). The right rail is always live: pending confirmations, up next, meds, deadlines, memory.
 
 **Themes** — four old-money palettes, switchable at will in Settings and remembered per account and per device: **Manor** (cream · camel · oxblood · forest, light), **Library** (espresso · parchment · brass · moss, dark), **Riviera** (ivory · navy · coral, light), **Tobacco** (leather · cognac · burgundy, dark). Type is Cormorant Garamond for display, Inter for body.
 
-**Pip, the mascot** — a tortoise with spectacles and a pocket watch: steady, keeps time, never rushes you. Original SVG, no image assets. On the web he breathes, blinks, follows your cursor, thinks while a message is in flight, celebrates a logged action, raises an eyebrow when something is waiting for your yes, and sleeps in quiet hours. Click him for a line in your chosen voice (model-written when a key is set, local quips otherwise). On Telegram he runs onboarding (`/start`: clock → voice → interests), signs the digest, answers `/pip` and the 🐢 Pip quick button.
+**How it talks** is a design decision, written down in `docs/VOICE.md` and enforced in code: every reply passes through `src/core/voice.ts` (no emoji, no em dashes, no ids, no robotic residue), every module is written in that voice, and a persona changes register only. The bot can explain itself: ask "can you track my meds?" or "what can you do" and `src/intent/capabilities.ts` answers with what, an example sentence, and what happens next; the same catalogue feeds the model's prompt and the web app's "What I do" page. When something essential is missing, an action asks one question and remembers it (`needs`/`fill` hooks, `src/intent/thread.ts`): "plan a trip to Accra" gets "When are you going?", and the next message is read as the answer, "skip" carries on without it.
+
+**Pip, the mascot** is a tortoise with spectacles and a pocket watch (`src/core/pip.ts`, `web/mascot.js`). Slow on purpose: he reads everything before he moves, never puts down what he carries, and is still there in the morning. Every state he shows is a real state of your day: thinking while a message is with the brain, sitting up with the watch out when something waits on your yes, a nod when you tick something, lids half down in quiet hours, straight at you when nothing is kept yet. His lines come from a book of lines per state, or from the model in your voice. Original SVG, no image assets.
 
 **Telegram** — HTML formatting (bold section labels, clickable links), a persistent quick keyboard (☼ Today · ⚑ Hackathons · ◎ Scout · ☐ Lists · ¤ Money · 🐢 Pip), typing indicator, and the same inline Confirm/Cancel/Undo buttons as before.
 

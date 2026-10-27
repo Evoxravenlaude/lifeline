@@ -163,7 +163,7 @@ describe("tool selection and smalltalk", () => {
     const { smalltalk } = await import("../src/intent/smalltalk.js");
     expect(smalltalk("can we talk about this later")).toMatch(/ready|rush|say the word/i);
     expect(smalltalk("thanks!")).toBeTruthy();
-    expect(smalltalk("how far", { persona: "pidgin" })).toBeNull(); // not a greeting rule we claim; model handles
+    expect(smalltalk("how far", { persona: "pidgin" })).toMatch(/How far/);
     expect(smalltalk("hey", { persona: "pidgin" })).toMatch(/How far/);
     expect(smalltalk("remind me to call Ada")).toBeNull();
   });

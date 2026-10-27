@@ -11,7 +11,7 @@ export interface Intent {
 const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   // reminders
   [/^remind me (?:to )?(.+?)\s+(?:at|on|in|tomorrow|tonight|next)\s+(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1], when: m[0].slice(m[0].indexOf(m[1]) + m[1].length).trim() } })],
-  [/^remind me (?:to )?(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1], when: "in 1 hour" } })],
+  [/^remind me (?:to )?(.+)$/i, (m) => ({ action: "reminder.create", args: { text: m[1] } })],
   [/^(?:list|show|my) reminders$/i, () => ({ action: "reminder.list", args: {} })],
   [/^(?:delete|remove|cancel) reminder (?:#?(\d+)|(.+))$/i, (m) => ({ action: "reminder.delete", args: m[1] ? { id: Number(m[1]) } : { match: m[2] } })],
 
@@ -39,6 +39,7 @@ const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
 
   // habits / spend / notes / memory
   [/^track habit (.+?)(?:\s+(\d)x?(?:\/| per )week)?$/i, (m) => ({ action: "habit.add", args: { name: m[1], target_per_week: m[2] ? Number(m[2]) : undefined } })],
+  [/^(?:done|finished) with (.+)$/i, (m) => ({ action: "list.done", args: { match: m[1] } })],
   [/^(?:did|done)\s+(.+?)(\s+yesterday)?$/i, (m) => ({ action: "habit.checkin", args: { name: m[1], day: m[2] ? "yesterday" : "today" } })],
   [/^(?:my )?habits$/i, () => ({ action: "habit.list", args: {} })],
   [/^spent\s+([\d,.]+)\s*(naira|dollars?|pounds?|cfa|[a-z]{3})?\s*(?:on\s+)?(.+)?$/i, (m) => ({ action: "spend.log", args: { amount: Number(m[1].replace(/,/g, "")), currency: cur(m[2]), category: m[3]?.split(/\s+/)[0], note: m[3] } })],

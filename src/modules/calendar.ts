@@ -13,7 +13,7 @@ onJob("event_alert", async (job, deps) => {
     [job.payload.eventId],
   );
   if (!e || e.deleted) return;
-  await push(deps, user, "reminder", `📅 ${e.title} at ${fmt(e.starts_at, user.tz, false)}${e.location ? ` — ${e.location}` : ""}`, { exempt: true });
+  await push(deps, user, "reminder", `${e.title} at ${fmt(e.starts_at, user.tz, false)}${e.location ? `, ${e.location}` : ""}.`, { exempt: true });
 });
 
 async function scheduleAlert(ctx: any, eventId: number, startsAt: Date, remindMinutes: number) {
@@ -26,18 +26,23 @@ const add = defineAction({
   name: "calendar.add",
   tier: 1,
   description:
-    "Add a calendar event. `when` is natural language ('thursday 3pm', 'nov 2 10:00'). Optional duration in minutes, location, notes, and remind_minutes before start (default 30).",
+    "Add a calendar event. `when` is natural language ('thursday 3pm', 'nov 2 10:00'); leave it empty if the user gave no time and the bot will ask. Optional duration in minutes, location, notes, and remind_minutes before start (default 30).",
   schema: z.object({
     title: z.string().min(1).max(200),
-    when: z.string().min(1),
+    when: z.string().optional(),
     duration_minutes: z.number().int().positive().optional(),
     location: z.string().optional(),
     notes: z.string().optional(),
     remind_minutes: z.number().int().nonnegative().optional(),
   }),
+  needs(args, ctx) {
+    if (args.when && parseWhen(args.when, ctx.user.tz, ctx.now)) return null;
+    if (args.when) return { need: "when", question: `I couldn't read a time in "${args.when}". When is ${args.title}?` };
+    return { need: "when", question: `When is ${args.title}?` };
+  },
   async run(args, ctx) {
-    const start = parseWhen(args.when, ctx.user.tz, ctx.now);
-    if (!start) throw new Error(`I couldn't read a time from "${args.when}"`);
+    const start = args.when ? parseWhen(args.when, ctx.user.tz, ctx.now) : null;
+    if (!start) throw new Error(`I couldn't read a time in that. When is ${args.title}?`);
     const end = args.duration_minutes ? new Date(start.getTime() + args.duration_minutes * 60_000) : null;
     const remind = args.remind_minutes ?? 30;
     const row = await ctx.db.one<{ id: number }>(
@@ -50,14 +55,14 @@ const add = defineAction({
       [ctx.user.id, row!.id, start, end ?? new Date(start.getTime() + 3_600_000)],
     );
     return {
-      reply: `Added "${args.title}" ${fmt(start, ctx.user.tz)}${args.location ? ` at ${args.location}` : ""}, alert ${remind} min before.${clash ? `\n⚠️ Overlaps with "${clash.title}".` : ""}`,
+      reply: `${args.title}, ${fmt(start, ctx.user.tz)}${args.location ? ` at ${args.location}` : ""}. I'll ping you ${remind === 0 ? "when it starts" : `${remind} minutes before`}.${clash ? ` Heads up, that overlaps with ${clash.title}.` : ""}`,
       undo: { payload: { eventId: row!.id, jobId } },
     };
   },
   async undo(p, ctx) {
     await ctx.db.query(`UPDATE events SET deleted=true WHERE id=$1 AND user_id=$2`, [p.eventId, ctx.user.id]);
     if (p.jobId) await cancelJob(ctx.db, p.jobId);
-    return "Event removed.";
+    return "Taken off the calendar.";
   },
 });
 
@@ -72,20 +77,25 @@ const list = defineAction({
       `SELECT id, title, starts_at, location FROM events WHERE user_id=$1 AND NOT deleted AND starts_at >= $2 AND starts_at < $3 ORDER BY starts_at LIMIT 40`,
       [ctx.user.id, from, to],
     );
-    if (!rows.length) return { reply: `Nothing on the calendar for ${args.range ?? "this week"}.` };
-    return { reply: rows.map((r) => `#${r.id} ${fmt(r.starts_at, ctx.user.tz)} — ${r.title}${r.location ? ` (${r.location})` : ""}`).join("\n") };
+    const label = { today: "today", tomorrow: "tomorrow", week: "this week", month: "this month" }[args.range ?? "week"];
+    if (!rows.length) return { reply: `Nothing on the calendar ${label}. Say "dentist friday 3pm" and I'll keep it.` };
+    const head = rows.length === 1 ? `One thing ${label}.` : `${rows.length} things ${label}.`;
+    return { reply: [head, ...rows.map((r) => `${fmt(r.starts_at, ctx.user.tz)}: ${r.title}${r.location ? `, ${r.location}` : ""}`)].join("\n") };
   },
 });
 
 const remove = defineAction({
   name: "calendar.delete",
   tier: 2,
-  description: "Delete a calendar event by id. Deleting is irreversible so it is confirmed first.",
-  schema: z.object({ id: z.number().int() }),
-  echo: (a) => `Delete event #${a.id}`,
+  description: "Delete a calendar event by id, or by `match` on its title. Deleting is irreversible so it is confirmed first.",
+  schema: z.object({ id: z.number().int().optional(), match: z.string().optional() }),
+  echo: (a) => (a.id ? `This deletes the event you pointed at (${a.id}).` : `This deletes the event called "${a.match}".`),
   async run(args, ctx) {
-    const r = await ctx.db.query(`UPDATE events SET deleted=true WHERE id=$1 AND user_id=$2 RETURNING title`, [args.id, ctx.user.id]);
-    return { reply: r.length ? `Deleted "${r[0].title}".` : "No such event." };
+    const r = args.id
+      ? await ctx.db.query(`UPDATE events SET deleted=true WHERE id=$1 AND user_id=$2 AND NOT deleted RETURNING title, starts_at`, [args.id, ctx.user.id])
+      : await ctx.db.query(`UPDATE events SET deleted=true WHERE id=(SELECT id FROM events WHERE user_id=$1 AND NOT deleted AND title ILIKE $2 ORDER BY starts_at LIMIT 1) RETURNING title, starts_at`, [ctx.user.id, `%${args.match ?? ""}%`]);
+    if (!r.length) return { reply: "I couldn't find that event. Say \"what's on this week\" to see what's there." };
+    return { reply: `Deleted ${r[0].title}, ${fmt(r[0].starts_at, ctx.user.tz)}.` };
   },
 });
 
@@ -109,7 +119,7 @@ const importIcs = defineAction({
         n++;
       }
     }
-    return { reply: `Imported ${n} upcoming event${n === 1 ? "" : "s"}.` };
+    return { reply: n === 0 ? "That file had nothing upcoming in it, so nothing changed." : `${n} upcoming event${n === 1 ? "" : "s"} in from that file. Ask "what's on this week" to see them.` };
   },
 });
 

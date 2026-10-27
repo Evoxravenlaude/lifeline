@@ -44,19 +44,33 @@ async function nativeBalance(chain: string, address: string): Promise<number> {
 const alert = defineAction({
   name: "price.alert",
   tier: 1,
-  description: "Alert when a coin crosses a USD price ('sol above 250', 'btc below 60000') or moves by a percent within a window ('eth moves 10% in 24h' → op 'move', target 10, pct_window 24).",
-  schema: z.object({ coin: z.string(), op: z.enum(["above", "below", "move"]), target: z.number().positive(), pct_window: z.number().int().positive().max(168).optional() }),
+  description: "Alert when a coin crosses a USD price ('eth above 4000', 'btc below 60000') or moves by a percent within a window ('eth moves 10% in 24h' is op 'move', target 10, pct_window 24). Leave target empty if the user gave no level; the bot will ask.",
+  schema: z.object({ coin: z.string(), op: z.enum(["above", "below", "move"]), target: z.number().positive().optional(), pct_window: z.number().int().positive().max(168).optional() }),
+  needs(args) {
+    if (args.target === undefined) return { need: "target", question: args.op === "move" ? `How big a move in ${args.coin} should I watch for? A percent, like 10.` : `What level for ${args.coin}? A dollar price, like ${args.op === "above" ? "4000" : "3000"}.` };
+    return null;
+  },
+  fill(need, answer) {
+    if (need !== "target") return null;
+    const m = /(\d[\d,]*(?:\.\d+)?)\s*(k|m)?/i.exec(answer);
+    if (!m) return null;
+    let n = Number(m[1].replace(/,/g, ""));
+    if (m[2]?.toLowerCase() === "k") n *= 1000;
+    if (m[2]?.toLowerCase() === "m") n *= 1_000_000;
+    return n > 0 ? { target: n } : null;
+  },
   async run(args, ctx) {
     const id = coinId(args.coin);
     const px = await fetchPrices([id]);
-    if (px[id] === undefined) throw new Error(`I don't know a coin called "${args.coin}" (try the CoinGecko id)`);
-    const r = await ctx.db.one<{ id: number }>(`INSERT INTO price_alerts (user_id, coin, op, target, pct_window) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [ctx.user.id, id, args.op, args.target, args.op === "move" ? args.pct_window ?? 24 : null]);
-    const desc = args.op === "move" ? `moves ${args.target}% within ${args.pct_window ?? 24}h` : `${args.op} $${args.target.toLocaleString()}`;
-    return { reply: `Alert set: ${id} ${desc} (now $${px[id].toLocaleString()}).`, undo: { payload: { id: r!.id } } };
+    if (px[id] === undefined) throw new Error(`I don't know a coin called "${args.coin}". Try its full name, or the CoinGecko id.`);
+    const target = args.target!;
+    const r = await ctx.db.one<{ id: number }>(`INSERT INTO price_alerts (user_id, coin, op, target, pct_window) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [ctx.user.id, id, args.op, target, args.op === "move" ? args.pct_window ?? 24 : null]);
+    const desc = args.op === "move" ? `moves ${target}% in ${args.pct_window ?? 24} hours` : `goes ${args.op} $${target.toLocaleString()}`;
+    return { reply: `I'll tell you when ${id} ${desc}. It's $${px[id].toLocaleString()} right now.${args.op === "move" ? " This one keeps watching after it fires." : " It rings once, then it's done."}`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM price_alerts WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
-    return "Alert removed.";
+    return "Alert dropped.";
   },
 });
 
@@ -68,7 +82,8 @@ const price = defineAction({
   async run(args) {
     const ids = args.coins.map(coinId);
     const px = await fetchPrices(ids);
-    return { reply: ids.map((i) => `${i}: ${px[i] !== undefined ? `$${px[i].toLocaleString()}` : "unknown"}`).join("\n") };
+    const lines = ids.map((i) => (px[i] !== undefined ? `${i} is $${px[i].toLocaleString()}` : `I don't know ${i}; try its full name`));
+    return { reply: lines.length === 1 ? `${lines[0]}.` : lines.join("\n") };
   },
 });
 
@@ -78,13 +93,13 @@ const walletAdd = defineAction({
   description: `Add a public address to the read-only portfolio. Chains: ${Object.keys(RPC).join(", ")}. Never ask for private keys.`,
   schema: z.object({ chain: z.enum(Object.keys(RPC) as [string, ...string[]]), address: z.string().min(20), label: z.string().optional() }),
   async run(args, ctx) {
-    if (/^[0-9a-f]{64}$/i.test(args.address) || args.address.split(" ").length >= 12) throw new Error("That looks like a private key or seed phrase. I only take public addresses — and you should rotate that one.");
+    if (/^[0-9a-f]{64}$/i.test(args.address) || args.address.split(" ").length >= 12) throw new Error("That looks like a private key or seed phrase, so I haven't kept it. I only take public addresses, and you should move whatever is on that one.");
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO wallets (user_id, chain, address, label) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id, chain, address) DO UPDATE SET label=EXCLUDED.label RETURNING id`, [ctx.user.id, args.chain, args.address, args.label ?? null]);
-    return { reply: `Watching ${args.label ?? args.address.slice(0, 8)} on ${args.chain}.`, undo: { payload: { id: r!.id } } };
+    return { reply: `Watching ${args.label ?? args.address.slice(0, 8)} on ${args.chain}. Say "portfolio" any time for the balances.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM wallets WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
-    return "Wallet removed.";
+    return "Stopped watching that wallet.";
   },
 });
 
@@ -95,7 +110,7 @@ const portfolio = defineAction({
   schema: z.object({}),
   async run(_a, ctx) {
     const ws = await ctx.db.query<{ chain: string; address: string; label: string | null }>(`SELECT chain, address, label FROM wallets WHERE user_id=$1 ORDER BY chain`, [ctx.user.id]);
-    if (!ws.length) return { reply: "No wallets watched. Say 'watch wallet <address> on solana'." };
+    if (!ws.length) return { reply: "I'm not watching any wallets yet. Say \"watch wallet <address> on base\" (or ethereum, arbitrum, polygon, bsc, solana) and I'll keep an eye on it." };
     const px = await fetchPrices(ws.map((w) => RPC[w.chain].native));
     let total = 0;
     const lines: string[] = [];
@@ -104,12 +119,12 @@ const portfolio = defineAction({
         const bal = await nativeBalance(w.chain, w.address);
         const usd = bal * (px[RPC[w.chain].native] ?? 0);
         total += usd;
-        lines.push(`${w.label ?? w.address.slice(0, 8)} (${w.chain}): ${bal.toFixed(4)} ≈ $${usd.toFixed(2)}`);
+        lines.push(`${w.label ?? w.address.slice(0, 8)} on ${w.chain}: ${bal.toFixed(4)}, about $${usd.toFixed(2)}`);
       } catch (e: any) {
-        lines.push(`${w.label ?? w.address.slice(0, 8)} (${w.chain}): rpc error`);
+        lines.push(`${w.label ?? w.address.slice(0, 8)} on ${w.chain}: couldn't reach the chain just now`);
       }
     }
-    lines.push(`Total native ≈ $${total.toFixed(2)} (tokens not yet counted)`);
+    lines.push(`About $${total.toFixed(2)} in native coins all together. Tokens aren't counted yet.`);
     return { reply: lines.join("\n") };
   },
 });
@@ -125,19 +140,19 @@ onJob("poll_prices", async (_job, deps) => {
     const now = px[a.coin];
     if (now === undefined) continue;
     let fire = false, msg = "";
-    if (a.op === "above" && now >= Number(a.target)) { fire = true; msg = `${a.coin} is $${now.toLocaleString()} (above $${Number(a.target).toLocaleString()})`; }
-    if (a.op === "below" && now <= Number(a.target)) { fire = true; msg = `${a.coin} is $${now.toLocaleString()} (below $${Number(a.target).toLocaleString()})`; }
+    if (a.op === "above" && now >= Number(a.target)) { fire = true; msg = `${a.coin} just went above $${Number(a.target).toLocaleString()}. It's $${now.toLocaleString()} now.`; }
+    if (a.op === "below" && now <= Number(a.target)) { fire = true; msg = `${a.coin} just dropped below $${Number(a.target).toLocaleString()}. It's $${now.toLocaleString()} now.`; }
     if (a.op === "move") {
       const past = await deps.db.one<{ usd: string }>(`SELECT usd FROM price_history WHERE coin=$1 AND at <= now() - ($2 || ' hours')::interval ORDER BY at DESC LIMIT 1`, [a.coin, String(a.pct_window)]);
       if (past) {
         const chg = ((now - Number(past.usd)) / Number(past.usd)) * 100;
-        if (Math.abs(chg) >= Number(a.target)) { fire = true; msg = `${a.coin} ${chg > 0 ? "+" : ""}${chg.toFixed(1)}% in ${a.pct_window}h → $${now.toLocaleString()}`; }
+        if (Math.abs(chg) >= Number(a.target)) { fire = true; msg = `${a.coin} is ${chg > 0 ? "up" : "down"} ${Math.abs(chg).toFixed(1)}% in the last ${a.pct_window} hours, now $${now.toLocaleString()}.`; }
       }
     }
     if (!fire) continue;
     const user = await deps.getUser(a.user_id);
     if (!user) continue;
-    await push(deps, user, "reminder", `📈 ${msg}`, { exempt: true });
+    await push(deps, user, "reminder", msg, { exempt: true });
     // price-cross alerts fire once; move alerts re-arm after the window
     if (a.op === "move") await deps.db.query(`UPDATE price_alerts SET fired_at=now() WHERE id=$1`, [a.id]);
     else await deps.db.query(`UPDATE price_alerts SET active=false, fired_at=now() WHERE id=$1`, [a.id]);

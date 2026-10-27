@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en" data-theme="manor">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>lifeline</title>
+<meta name="description" content="Your day, kept. A private assistant for a small circle: reminders, calendar, medication, trips, hackathons, scouting, prices. Nothing moves without your yes.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%232E4A3B'/%3E%3Cpath d='M8 22 C 7 13, 12 8, 16 8 C 21 8, 25 13, 24 22 Z' fill='%23D2B76F'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css">
+<script>try{document.documentElement.dataset.theme=localStorage.getItem('ll_theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'library':'manor')}catch(e){}</script>
+</head>
+<body>
+
+<!-- LANDING -->
+<div id="login" class="landing" hidden>
+  <div class="left">
+    <div class="wordmark">lifeline<i>.</i></div>
+    <div>
+      <h1>Your day,<br>kept.</h1>
+      <p class="lede" style="margin-top:18px">One assistant for a small circle. It remembers what you tell it, rings when it should, ranks the hackathons worth your weekend, finds the people behind new projects, and never moves money or reaches anyone without your yes.</p>
+    </div>
+    <div class="sample" id="sample">
+      <div class="turn user"><span class="who">you</span><span>remind me to call Ada tomorrow at 9</span></div>
+      <div class="turn bot"><span class="who">lifeline</span><span>Call Ada, tomorrow at 09:00. I'll ping you here.</span></div>
+      <div class="turn user"><span class="who">you</span><span>I'm going to Accra on the 20th</span></div>
+      <div class="turn bot"><span class="who">lifeline</span><span>Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.</span></div>
+      <div class="turn user"><span class="who">you</span><span>can you track my meds?</span></div>
+      <div class="turn bot"><span class="who">lifeline</span><span>Yes. Tell me what you take and when, like "I take vitamin D at 8 and 8pm". I'll ring you at each dose with Taken and Skip and keep the log.</span></div>
+    </div>
+    <ul class="tenets">
+      <li>Same memory on Telegram, here, SMS and iMessage.</li>
+      <li>Anything that moves money, deletes, or reaches someone waits for a yes. Undo for five minutes on the rest.</li>
+      <li>Copy-trading is a mirror on paper, never a hand on the wheel.</li>
+    </ul>
+  </div>
+  <div class="right">
+    <div class="medallion"><div class="engrave"></div><div id="loginMascot"></div></div>
+    <div class="signin">
+      <h2>Come in</h2>
+      <p class="muted">This is Pip. He keeps the door.</p>
+      <div id="tgw"></div>
+      <div class="or">or, from the bot, say <b>link</b> and paste the code</div>
+      <input id="code" placeholder="six-character code" maxlength="6" autocapitalize="characters" autocomplete="off">
+      <button class="btn primary" onclick="App.link()">Link this browser</button>
+      <div id="lerr" class="err small"></div>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" class="app" hidden>
+  <nav class="rail">
+    <div class="wordmark">lifeline<i>.</i></div>
+    <div class="nav" id="nav"></div>
+    <div class="foot">
+      <div id="who"></div>
+      <div id="usage"></div>
+      <button class="btn sm quiet" style="justify-self:start;padding-left:0" onclick="App.logout()">Sign out</button>
+    </div>
+  </nav>
+  <section class="main">
+    <div class="head"><h2 id="viewTitle">Chat</h2><span class="sub" id="viewSub"></span><span class="sp"></span><span id="headActions"></span><button class="btn sm shellbtn" onclick="App.toggleShell()">The shell</button></div>
+    <div class="view" id="view"></div>
+  </section>
+  <aside class="shell" id="side">
+    <div class="pip-dock" id="mascot"></div>
+    <div id="pending"></div>
+    <div><h3>Up next</h3><ul id="upnext"></ul></div>
+    <div><h3>Medication</h3><ul id="meds"></ul></div>
+    <div><h3>Deadlines</h3><ul id="deadlines"></ul></div>
+    <div><h3>What I know about you</h3><ul id="mem"></ul></div>
+  </aside>
+</div>
+<div id="toast" class="toast" role="status"></div>
+<script src="/mascot.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -53,14 +53,14 @@ export async function fromGitHub(niche: string, limit: number): Promise<ScoutHit
         const members: any[] = await getJson(`https://api.github.com/orgs/${r.owner.login}/public_members?per_page=5`, gh());
         for (const m of members.slice(0, 5)) {
           const p: any = await getJson(`https://api.github.com/users/${m.login}`, gh());
-          hit.founders.push({ name: p.name ?? p.login, handle: p.twitter_username ? `@${p.twitter_username}` : `gh:${p.login}`, source: "github-public-member" });
+          hit.founders.push({ name: p.name ?? p.login, handle: p.twitter_username ? `@${p.twitter_username}` : `${p.login} on GitHub`, source: "github-public-member" });
         }
         const org: any = await getJson(`https://api.github.com/orgs/${r.owner.login}`, gh());
         if (org.twitter_username) hit.twitter = `@${org.twitter_username}`;
         if (org.blog && !hit.url) hit.url = org.blog;
       } else {
         const p: any = await getJson(`https://api.github.com/users/${r.owner.login}`, gh());
-        hit.founders.push({ name: p.name ?? p.login, handle: p.twitter_username ? `@${p.twitter_username}` : `gh:${p.login}`, source: "github-profile" });
+        hit.founders.push({ name: p.name ?? p.login, handle: p.twitter_username ? `@${p.twitter_username}` : `${p.login} on GitHub`, source: "github-profile" });
         if (p.twitter_username && !hit.twitter) hit.twitter = `@${p.twitter_username}`;
       }
     } catch { /* partial is fine */ }
@@ -99,7 +99,7 @@ export async function fromDefiLlama(niche: string, limit: number): Promise<Scout
 
 export async function fromShowHN(niche: string, limit: number): Promise<ScoutHit[]> {
   const j: any = await getJson(`https://hn.algolia.com/api/v1/search_by_date?tags=show_hn&query=${encodeURIComponent(niche)}&hitsPerPage=${limit}`);
-  return (j.hits ?? []).map((h: any) => ({ name: h.title.replace(/^Show HN:\s*/i, "").slice(0, 80), url: h.url, founders: [{ handle: `hn:${h.author}`, source: "hn-author" }], objective: null, sources: ["showhn"], raw: { points: h.points, hn: `https://news.ycombinator.com/item?id=${h.objectID}` } }));
+  return (j.hits ?? []).map((h: any) => ({ name: h.title.replace(/^Show HN:\s*/i, "").slice(0, 80), url: h.url, founders: [{ handle: `${h.author} on Hacker News`, source: "hn-author" }], objective: null, sources: ["showhn"], raw: { points: h.points, hn: `https://news.ycombinator.com/item?id=${h.objectID}` } }));
 }
 
 /* ---------- grounded enrichment (Gemini + Google Search) ---------- */
@@ -133,7 +133,7 @@ Return JSON: {"projects":[{"name","url","twitter","telegram","discord","stage","
     for (const p of parsed.data.projects) {
       const h = byName.get(p.name.toLowerCase()) ?? { name: p.name, founders: [], sources: [], raw: {} };
       h.url ||= p.url ?? null; h.twitter ||= handle(p.twitter) ? `@${handle(p.twitter)}` : null; h.telegram ||= p.telegram ?? null; h.discord ||= p.discord ?? null;
-      if (p.stage) h.objective = `${p.stage}${h.objective ? ` · ${h.objective}` : ""}`;
+      if (p.stage) h.objective = `${p.stage}${h.objective ? `: ${h.objective}` : ""}`;
       for (const f of p.founders) if (f.handle || f.name) h.founders.push({ name: f.name, handle: f.handle ? `@${handle(f.handle)}` : undefined, role: f.role, source: "web-grounded" });
       h.sources = [...new Set([...h.sources, "gemini-search", ...cites.slice(0, 3)])];
       byName.set(h.name.toLowerCase(), h);
@@ -174,44 +174,58 @@ export async function scout(db: Db, niche: string, objective?: string, limit = 8
   return enriched;
 }
 
+/** One project as a short paragraph: name and what it is, where to find it, who's behind it. */
 export function fmtHit(h: any): string {
-  const socials = [h.url, h.twitter, h.telegram, h.discord, h.github].filter(Boolean).join(" · ");
+  const socials = [h.url, h.twitter, h.telegram, h.discord, h.github].filter(Boolean).join(", ");
   const founders = (typeof h.founders === "string" ? JSON.parse(h.founders) : h.founders ?? [])
     .filter((f: any, i: number, a: any[]) => a.findIndex((x) => (x.handle ?? x.name) === (f.handle ?? f.name)) === i)
     .slice(0, 4)
-    .map((f: any) => `${f.name ?? ""}${f.handle ? ` ${f.handle}` : ""}${f.role ? ` (${f.role})` : ""}`.trim())
+    .map((f: any) => `${f.name ?? ""}${f.handle ? ` ${String(f.handle).replace(/^gh:/, "")}${/^gh:/.test(String(f.handle)) ? " on GitHub" : ""}` : ""}${f.role ? ` (${f.role})` : ""}`.trim())
     .join(", ");
-  return `• ${h.name}${h.objective ? ` — ${String(h.objective).slice(0, 90)}` : ""}\n  ${socials || "no socials found"}${founders ? `\n  people: ${founders}` : ""}`;
+  const what = h.objective ? `, ${String(h.objective).replace(/\s*·\s*/g, ": ").slice(0, 90)}` : "";
+  return `${h.name}${what}\n${socials || "No socials found yet"}${founders ? `\nPeople: ${founders}` : ""}`;
 }
 
 const find = defineAction({
   name: "scout.find",
   tier: 1,
-  description: "Find new/upcoming projects in a niche (e.g. 'solana perps', 'ai agents', 'fintech africa', 'devtools') with official socials and founders' public handles. `objective` tells the ranking what the user wants (partner, hire, invest, sponsor, apply, learn).",
-  schema: z.object({ niche: z.string().min(2), objective: z.string().optional(), limit: z.number().int().min(1).max(15).optional() }),
-  async run(args, ctx) {
+  description: "Find new/upcoming projects in a niche (e.g. 'payments on base', 'ai agents', 'fintech africa', 'devtools', 'perps on hyperliquid') with official socials and founders' public handles. `objective` tells the ranking what the user wants (partner, hire, invest, sponsor, apply, learn). Leave niche empty if the user didn't name one; the bot will ask.",
+  schema: z.object({ niche: z.string().min(2).optional(), objective: z.string().optional(), limit: z.number().int().min(1).max(15).optional() }),
+  needs(args) {
+    if (!args.niche) return { need: "niche", question: `Which niche should I scout? Something like "payments on base", "ai agents" or "fintech in africa"${args.objective ? `, for ${args.objective}` : ""}.` };
+    return null;
+  },
+  async run(a, ctx) {
+    const args = { ...a, niche: a.niche! };
     const hits = await scout(ctx.db, args.niche, args.objective, args.limit ?? 8);
-    if (!hits.length) return { reply: `Nothing surfaced for "${args.niche}". Try a broader or different phrasing.` };
+    if (!hits.length) return { reply: `I couldn't surface anything for "${args.niche}". Try a broader phrase, or a different angle on it.` };
     const rows = await ctx.db.query<any>(`SELECT * FROM scout_results WHERE niche=$1 AND NOT EXISTS (SELECT 1 FROM scout_seen s WHERE s.user_id=$2 AND s.result_id=scout_results.id) ORDER BY first_seen DESC LIMIT $3`, [args.niche.toLowerCase(), ctx.user.id, args.limit ?? 8]);
     for (const r of rows) await ctx.db.query(`INSERT INTO scout_seen (user_id, result_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ctx.user.id, r.id]);
-    const body = (rows.length ? rows : hits.slice(0, args.limit ?? 8)).map(fmtHit).join("\n");
-    const note = config.geminiKey ? "" : "\n\n(Set GEMINI_API_KEY for web-grounded founder lookup; this run used GitHub, CoinGecko, DefiLlama and Show HN only.)";
-    return { reply: `${args.niche} — ${rows.length || hits.length} projects${args.objective ? ` for: ${args.objective}` : ""}\n${body}${note}\n\nSay "contact <github user>" or "draft outreach to <project>" for a message you send yourself.` };
+    const shown = rows.length ? rows : hits.slice(0, args.limit ?? 8);
+    const body = shown.map(fmtHit).join("\n\n");
+    const note = config.geminiKey ? "" : "\n\nThis run used GitHub, CoinGecko, DefiLlama and Show HN only; with a Gemini key on the server I also search the web for founders' handles.";
+    const head = `${shown.length === 1 ? "One project" : `${shown.length} projects`} in ${args.niche}${args.objective ? `, picked for ${args.objective}` : ""}, newest first.`;
+    return { reply: `${head}\n\n${body}${note}\n\nSay "draft outreach to <project>" and I'll write the first message for you to send.` };
   },
 });
 
 const watch = defineAction({
   name: "scout.watch",
   tier: 1,
-  description: "Keep scouting a niche every 12h and put new projects in the digest.",
-  schema: z.object({ niche: z.string().min(2), objective: z.string().optional() }),
-  async run(args, ctx) {
+  description: "Keep scouting a niche every 12h and put new projects in the digest. Leave niche empty if the user didn't name one; the bot will ask.",
+  schema: z.object({ niche: z.string().min(2).optional(), objective: z.string().optional() }),
+  needs(args) {
+    if (!args.niche) return { need: "niche", question: "Which niche should I keep watching? Something like \"devtools on ethereum\" or \"ai agents\"." };
+    return null;
+  },
+  async run(a, ctx) {
+    const args = { ...a, niche: a.niche! };
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO scout_watches (user_id, niche, objective) VALUES ($1,$2,$3) ON CONFLICT (user_id, niche) DO UPDATE SET objective=EXCLUDED.objective, active=true RETURNING id`, [ctx.user.id, args.niche.toLowerCase(), args.objective ?? null]);
-    return { reply: `Scouting "${args.niche}" every 12h.`, undo: { payload: { id: r!.id } } };
+    return { reply: `I'll keep scouting ${args.niche}${args.objective ? ` for ${args.objective}` : ""} twice a day. New projects land in your morning brief.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`UPDATE scout_watches SET active=false WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
-    return "Scout watch removed.";
+    return "Stopped scouting that niche.";
   },
 });
 
@@ -223,10 +237,10 @@ const outreach = defineAction({
   async run(args, ctx) {
     const row = await ctx.db.one<any>(`SELECT * FROM scout_results WHERE name ILIKE $1 ORDER BY first_seen DESC LIMIT 1`, [`%${args.project}%`]);
     const { draftReply } = await import("../intent/model.js");
-    const who = row ? `${row.name}${row.twitter ? ` (${row.twitter})` : ""}${row.objective ? ` — ${row.objective}` : ""}` : args.project;
-    const draft = await draftReply(ctx.db, ctx.user, `Project: ${who}\nWhat I want: ${args.ask}`, "Write a 3–5 sentence first message: specific, one concrete ask, no flattery, signed with the user's first name. Output the message only.");
-    const route = row?.twitter ? `Send it as a public reply or DM to ${row.twitter}.` : "Send it through their public channel or site contact.";
-    return { reply: `${draft ?? `Hi — I'm ${ctx.user.name ?? "[name]"}. ${args.ask}. [add one specific line about their project]`}\n\n${route} For people in the UK/EU/Nigeria, a personal email needs their consent; a public reply doesn't.` };
+    const who = row ? `${row.name}${row.twitter ? ` (${row.twitter})` : ""}${row.objective ? `, ${row.objective}` : ""}` : args.project;
+    const draft = await draftReply(ctx.db, ctx.user, `Project: ${who}\nWhat I want: ${args.ask}`, "Write a 3 to 5 sentence first message: specific, one concrete ask, no flattery, no em dashes, signed with the user's first name. Output the message only.");
+    const route = row?.twitter ? `Send it as a public reply or a DM to ${row.twitter}.` : "Send it through their public channel or the contact on their site.";
+    return { reply: `Here's a first message for ${row?.name ?? args.project}, edit it before you send:\n\n${draft ?? `Hi, I'm ${ctx.user.name ?? "[name]"}. ${args.ask}. [add one specific line about their project]`}\n\n${route} In the UK, EU and Nigeria a personal email needs their consent first; a public reply doesn't.` };
   },
 });
 

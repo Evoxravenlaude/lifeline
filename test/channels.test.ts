@@ -29,7 +29,7 @@ describe("shared handler across channels", () => {
     expect(r.buttons?.[0].label).toBe("Undo");
     const ev = await db.one<{ id: number }>(`SELECT id FROM events WHERE user_id=$1`, [u.id]);
     const d = await handleMessage(db, u, `delete event #${ev!.id}`, { channel: "web" });
-    expect(d.buttons?.map((b) => b.label)).toEqual(["✅ Confirm", "✖ Cancel"]);
+    expect(d.buttons?.map((b) => b.label)).toEqual(["Yes, go ahead", "No"]);
     // confirm from SMS by number
     const sms = await handleTextChannel(db, "sms", "+2348012345678", "1"); // "1" = confirm latest pending on a text channel
     expect(sms).toContain("Deleted");
@@ -49,7 +49,7 @@ describe("shared handler across channels", () => {
     expect(t).toContain("1) Undo");
     const undo = await handleTextChannel(db, "imessage", "ada@icloud.com", "1");
     expect(undo).toBe("Medication reminder removed.");
-    expect(buttonsAsText({ text: "x", buttons: [{ label: "✅ Confirm", data: "a" }, { label: "✖ Cancel", data: "b" }] })).toBe("x\n1) Confirm  2) Cancel");
+    expect(buttonsAsText({ text: "x", buttons: [{ label: "Yes, go ahead", data: "a" }, { label: "No", data: "b" }] })).toBe("x\n1) Yes, go ahead  2) No");
   });
 
   it("iMessage inbound parsing for both relays, ignores own messages", () => {
@@ -91,9 +91,9 @@ describe("web app", () => {
     const me = await (await a.request("/api/me", { headers: { cookie } })).json();
     expect(me.name).toBe("Web");
     const chat = await (await a.request("/api/chat", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ text: "todo: taxes, call bank" }) })).json();
-    expect(chat.text).toContain("Added to todo");
+    expect(chat.text).toContain("on the todo list");
     const btn = await (await a.request("/api/button", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ data: chat.buttons[0].data }) })).json();
-    expect(btn.text).toBe("Removed.");
+    expect(btn.text).toBe("Taken off the list.");
     const state = await (await a.request("/api/state", { headers: { cookie } })).json();
     expect(state.lists).toHaveLength(0);
     expect((await a.request("/api/messages", { headers: { cookie } })).status).toBe(200);
@@ -124,15 +124,15 @@ describe("extras + scout", () => {
     const ctx = { db, user: u, now: new Date("2026-10-26T10:00:00Z") };
     await propose(ctx, "list.add", { list: "shopping", items: ["milk", "rice"] });
     const done = await propose(ctx, "list.done", { match: "milk" });
-    expect(done.kind === "ran" && done.reply).toContain("✅ milk");
+    expect(done.kind === "ran" && done.reply).toContain("milk, done");
     const show = await propose(ctx, "list.show", {});
-    expect(show.kind === "ran" && show.reply).toBe("SHOPPING\n▫️ rice");
+    expect(show.kind === "ran" && show.reply).toBe("Shopping, one thing:\nrice");
     const b = await propose(ctx, "date.add", { label: "Ada's birthday", on: "march 14" });
-    expect(b.kind === "ran" && b.reply).toContain("(yearly)");
+    expect(b.kind === "ran" && b.reply).toContain("every year");
     const alerts = await db.query(`SELECT * FROM jobs WHERE kind='date_alert' AND user_id=$1`, [u.id]);
     expect(alerts).toHaveLength(3);
     const l = await propose(ctx, "date.list", {});
-    expect(l.kind === "ran" && l.reply).toMatch(/^\d+d — Ada's birthday \(14 Mar\)/);
+    expect(l.kind === "ran" && l.reply).toMatch(/Ada's birthday: in \d+ days, 14 Mar/);
     expect(parseByRules("shopping: eggs, bread")?.args).toEqual({ list: "shopping", items: ["eggs", "bread"] });
     expect(parseByRules("Ada's birthday is march 14")?.args).toEqual({ label: "Ada's birthday", on: "march 14" });
     expect(parseByRules("100 usd to ngn")?.args).toEqual({ amount: 100, from: "usd", to: "ngn" });
@@ -142,9 +142,9 @@ describe("extras + scout", () => {
 
   it("scout result formatting dedupes people and shows sources", () => {
     const line = fmtHit({ name: "Perpz", objective: "beta · perps on solana", url: "https://perpz.xyz", twitter: "@perpz", founders: [{ name: "Jo", handle: "@jo", role: "founder" }, { name: "Jo", handle: "@jo" }, { handle: "gh:bob" }] });
-    expect(line).toContain("• Perpz — beta · perps on solana");
-    expect(line).toContain("https://perpz.xyz · @perpz");
-    expect(line).toContain("people: Jo @jo (founder), gh:bob");
+    expect(line).toContain("Perpz, beta: perps on solana");
+    expect(line).toContain("https://perpz.xyz, @perpz");
+    expect(line).toContain("People: Jo @jo (founder), bob on GitHub");
   });
 
   it("gemini schema cleaner strips unsupported keys", async () => {
@@ -183,7 +183,7 @@ describe("load", () => {
     const t1 = Date.now();
     const replies = await Promise.all(users.map((usr, i) => handleMessage(db, usr, `note: secret ${i}`, { channel: "web" })));
     const ms2 = Date.now() - t1;
-    expect(replies.every((r) => r.text.startsWith("Noted"))).toBe(true);
+    expect(replies.every((r) => r.text.startsWith("Kept"))).toBe(true);
     for (let i = 0; i < 200; i += 37) {
       const notes = await db.query<{ text: string }>(`SELECT text FROM notes WHERE user_id=$1`, [users[i].id]);
       expect(notes).toEqual([{ text: `secret ${i}` }]);
@@ -220,6 +220,7 @@ describe("web static + telegram html", () => {
   });
   it("renders Telegram HTML safely", async () => {
     const { toHtml } = await import("../src/telegram/bot.js");
-    expect(toHtml("Outcomes:\n1 < 2 & more\n🐢 Mon 26 Oct")).toBe("<b>Outcomes:</b>\n1 &lt; 2 &amp; more\n<b>🐢 Mon 26 Oct</b>");
+    expect(toHtml("Outcomes:\n1 < 2 & more\nMon 26 Oct")).toBe("<b>Outcomes:</b>\n1 &lt; 2 &amp; more\nMon 26 Oct");
+    expect(toHtml("Three things today.\n09:00 dentist\n15:00 call Ada")).toBe("<b>Three things today.</b>\n09:00 dentist\n15:00 call Ada");
   });
 });

@@ -22,8 +22,8 @@ onJob("med_slot", async (job, deps) => {
     [med.id],
   );
   const kb = [{ label: "Taken", data: `med:taken:${logRow!.id}` }, { label: "Skip", data: `med:skip:${logRow!.id}` }];
-  const low = med.days_left !== null && med.days_left <= 3 ? ` (about ${med.days_left} day${med.days_left === 1 ? "" : "s"} of supply left)` : "";
-  await push(deps, user, "medication", `💊 ${med.name}${med.dose ? ` — ${med.dose}` : ""}${low}`, { exempt: true, buttons: kb });
+  const low = med.days_left !== null && med.days_left <= 3 ? ` About ${med.days_left} day${med.days_left === 1 ? "" : "s"} of supply left, time to refill.` : "";
+  await push(deps, user, "medication", `Time for ${med.name}${med.dose ? `, ${med.dose}` : ""}.${low}`, { exempt: true, buttons: kb });
   await schedule(deps.db, { userId: user.id, kind: "med_nudge", payload: { logId: logRow!.id }, runAt: new Date(Date.now() + 90 * 60_000) });
 });
 
@@ -35,24 +35,34 @@ onJob("med_nudge", async (job, deps) => {
     [job.payload.logId],
   );
   if (!l || l.status !== "pending") return;
-  await push(deps, user, "medication", `Still pending: ${l.name}. Taken?`, { exempt: true, buttons: [{ label: "Taken", data: `med:taken:${l.id}` }, { label: "Skip", data: `med:skip:${l.id}` }] });
+  await push(deps, user, "medication", `Did you take ${l.name}? I haven't heard back.`, { exempt: true, buttons: [{ label: "Taken", data: `med:taken:${l.id}` }, { label: "Skip", data: `med:skip:${l.id}` }] });
 });
 
 const add = defineAction({
   name: "medication.add",
   tier: 1,
   description:
-    "Add a medication reminder. `times` is a list of clock times like ['08:00','20:00'] or ['9am']. `dose` is the user's own words (e.g. '1 tablet'); never invent it. `days_left` optional supply count for refill nudges.",
+    "Add a medication reminder. `times` is a list of clock times like ['08:00','20:00'] or ['9am']; leave it empty if the user gave no times and the bot will ask. `dose` is the user's own words (e.g. '1 tablet'); never invent it. `days_left` optional supply count for refill nudges.",
   schema: z.object({
     name: z.string().min(1).max(100),
-    times: z.array(z.string()).min(1).max(6),
+    times: z.array(z.string()).max(6).optional(),
     dose: z.string().max(100).optional(),
     days_left: z.number().int().positive().optional(),
   }),
+  needs(args) {
+    if (args.times?.length) return null;
+    return { need: "times", question: `What times do you take ${args.name}? Say "8am and 8pm" or "20:00".` };
+  },
+  fill(need, answer) {
+    if (need !== "times") return null;
+    const times = answer.split(/\s*(?:,|and|&|\/)\s*/).map((t) => t.trim()).filter(Boolean);
+    return times.length && times.every((t) => parseClock(t)) ? { times } : null;
+  },
   async run(args, ctx) {
-    const parsed = args.times.map((t) => [t, parseClock(t)] as const);
+    const parsed = (args.times ?? []).map((t) => [t, parseClock(t)] as const);
+    if (!parsed.length) throw new Error(`What times do you take ${args.name}?`);
     const bad = parsed.find(([, p]) => !p);
-    if (bad) throw new Error(`"${bad[0]}" isn't a time I understand (try 08:00 or 8am)`);
+    if (bad) throw new Error(`I couldn't read "${bad[0]}" as a time. Try 08:00 or 8am.`);
     const times = parsed.map(([, p]) => `${String(p![0]).padStart(2, "0")}:${String(p![1]).padStart(2, "0")}`);
     const row = await ctx.db.one<{ id: number }>(
       `INSERT INTO medications (user_id, name, dose, times, days_left) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
@@ -63,7 +73,7 @@ const add = defineAction({
       jobIds.push(await schedule(ctx.db, { userId: ctx.user.id, kind: "med_slot", payload: { medId: row!.id }, cron: `${m} ${h} * * *`, tz: ctx.user.tz }));
     }
     return {
-      reply: `Added ${args.name}${args.dose ? ` (${args.dose})` : ""} at ${times.join(", ")} daily. I'll ask you to mark each one taken.`,
+      reply: `${args.name}${args.dose ? `, ${args.dose},` : ""} at ${times.join(" and ")} every day. I'll ring you at each one with Taken and Skip, and keep the log.`,
       undo: { payload: { medId: row!.id, jobIds } },
     };
   },
@@ -87,10 +97,11 @@ const list = defineAction({
        FROM medications m WHERE m.user_id=$1 AND m.active ORDER BY m.name`,
       [ctx.user.id],
     );
-    if (!rows.length) return { reply: "No medication reminders set." };
+    if (!rows.length) return { reply: "No medication on the list. Say \"I take vitamin D at 8am and 8pm\" and I'll keep it." };
+    const head = rows.length === 1 ? "One on the list." : `${rows.length} on the list.`;
     return {
-      reply: rows
-        .map((r) => `#${r.id} ${r.name}${r.dose ? ` (${r.dose})` : ""} at ${r.times.join(", ")} — ${r.taken}/${r.total} taken this week${r.days_left !== null ? `, ~${r.days_left}d supply` : ""}`)
+      reply: [head, ...rows
+        .map((r) => `${r.name}${r.dose ? `, ${r.dose},` : ""} at ${r.times.join(" and ")}. ${r.taken} of ${r.total} taken this week${r.days_left !== null ? `, about ${r.days_left} day${r.days_left === 1 ? "" : "s"} of supply left` : ""}.`)]
         .join("\n"),
     };
   },
@@ -99,14 +110,16 @@ const list = defineAction({
 const remove = defineAction({
   name: "medication.delete",
   tier: 2,
-  description: "Stop a medication reminder by id. Confirmed first because a missed medication is costly.",
-  schema: z.object({ id: z.number().int() }),
-  echo: (a) => `Stop medication reminder #${a.id}`,
+  description: "Stop a medication reminder by id, or by `match` on its name. Confirmed first because a missed medication is costly.",
+  schema: z.object({ id: z.number().int().optional(), match: z.string().optional() }),
+  echo: (a) => (a.id ? `This stops the medication reminder you pointed at. No more rings for it.` : `This stops the reminders for ${a.match}. No more rings for it.`),
   async run(args, ctx) {
-    const r = await ctx.db.query(`UPDATE medications SET active=false WHERE id=$1 AND user_id=$2 RETURNING name`, [args.id, ctx.user.id]);
-    if (!r.length) return { reply: "No such medication." };
-    await ctx.db.query(`UPDATE jobs SET active=false WHERE kind='med_slot' AND payload->>'medId'=$1`, [String(args.id)]);
-    return { reply: `Stopped reminders for ${r[0].name}.` };
+    const r = args.id
+      ? await ctx.db.query(`UPDATE medications SET active=false WHERE id=$1 AND user_id=$2 AND active RETURNING id, name`, [args.id, ctx.user.id])
+      : await ctx.db.query(`UPDATE medications SET active=false WHERE id=(SELECT id FROM medications WHERE user_id=$1 AND active AND name ILIKE $2 ORDER BY id LIMIT 1) RETURNING id, name`, [ctx.user.id, `%${args.match ?? ""}%`]);
+    if (!r.length) return { reply: "I couldn't find that one. Say \"my meds\" to see what's set." };
+    await ctx.db.query(`UPDATE jobs SET active=false WHERE kind='med_slot' AND payload->>'medId'=$1`, [String(r[0].id)]);
+    return { reply: `Stopped the reminders for ${r[0].name}. The log stays.` };
   },
 });
 

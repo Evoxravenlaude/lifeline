@@ -5,6 +5,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm install -g tsx
 COPY tsconfig.json ./
 COPY src ./src
+COPY web ./web
+COPY docs ./docs
 # Embedded DB (if DATABASE_URL is empty) lives here; mount a volume at /app/data on Railway.
 RUN mkdir -p /app/data
 EXPOSE 3000

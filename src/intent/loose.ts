@@ -72,7 +72,7 @@ const RULES: Rule[] = [
     build: (_t, m) => ({ action: "calendar.list", args: { range: norm(m[1] ?? m[2] ?? m[3]) } }) },
   { test: /^(?:what|which|any|list|show)\s+(?:are my |my )?reminders|^(?:reminders|what am i supposed to remember)$/i, build: () => ({ action: "reminder.list", args: {} }) },
   { test: /^(?:remind me|nudge me|ping me|don'?t let me forget|make sure i|i (?:need|have) to remember)\s*(?:to|about|that|of)?\s*(.+)/i,
-    build: (_t, m, now) => { const { when, rest } = splitTime(m[1], now); return { action: "reminder.create", args: { text: rest || m[1], when: when ?? "in 1 hour" } }; } },
+    build: (_t, m, now) => { const { when, rest } = splitTime(m[1], now); return { action: "reminder.create", args: { text: rest || m[1], ...(when ? { when } : {}) } }; } },
   { test: /^(?:cancel|delete|remove|scrap|drop)\s+(?:the |my )?reminder\s*(?:to |about |for )?(.*)/i, build: (_t, m) => ({ action: "reminder.delete", args: m[1] ? { match: m[1] } : {} }) },
   { test: /^(?:cancel|delete|remove|scrap)\s+(?:the |my )?(?:event|meeting|appointment)\s*#?(\d+)/i, build: (_t, m) => ({ action: "calendar.delete", args: { id: Number(m[1]) } }) },
 

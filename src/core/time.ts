@@ -50,10 +50,43 @@ export function inQuietHours(now: Date, tz: string, start: number, end: number):
 
 export function humanDelta(from: Date, to: Date | string): string {
   const ms = new Date(to).getTime() - from.getTime();
+  if (ms < 0) return "already past";
   const d = Math.floor(ms / 86_400_000);
   const h = Math.floor((ms % 86_400_000) / 3_600_000);
-  if (ms < 0) return "past";
-  if (d >= 1) return `${d}d ${h}h`;
   const m = Math.floor((ms % 3_600_000) / 60_000);
-  return h >= 1 ? `${h}h ${m}m` : `${m}m`;
+  if (d >= 14) return `${Math.round(d / 7)} weeks`;
+  if (d >= 2) return `${d} days`;
+  if (d === 1) return h >= 12 ? "2 days" : "a day";
+  if (h >= 2) return `${h} hours`;
+  if (h === 1) return m >= 30 ? "2 hours" : "an hour";
+  if (m >= 2) return `${m} minutes`;
+  return "a minute";
+}
+
+/** "dec 20 to dec 27", "20 to 27 december", "from the 3rd until the 9th", "next weekend": a start and maybe an end. */
+export function parseRange(text: string, tz: string, now: Date): { start: Date; end: Date | null } | null {
+  const ref = DateTime.fromJSDate(now).setZone(tz);
+  const cleaned = text.replace(/\b(?:from|between)\b/gi, " ").replace(/\bthe\s+(?=\d)/gi, "").replace(/\b(?:until|till|through|thru|to|and|-|–)\b/gi, " to ");
+  const r = chrono.parse(cleaned, { instant: now, timezone: ref.offset }, { forwardDate: true });
+  if (!r.length) return null;
+  const start = r[0].start.date();
+  let end: Date | null = r[0].end ? r[0].end.date() : r[1] ? r[1].start.date() : null;
+  if (end && end < start) {
+    // "20 to 27 dec" where chrono put the first number in the wrong month
+    end = DateTime.fromJSDate(end).plus({ months: 1 }).toJSDate();
+  }
+  return { start, end };
+}
+
+/** "600 usd", "$600", "600 dollars", "80k naira" -> amount and ISO-ish currency. */
+export function parseMoney(text: string): { amount: number; currency: string } | null {
+  const m = /(?:([$€£₦])\s*)?(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\s*(usd|dollars?|bucks|eur|euros?|gbp|pounds?|ngn|naira|ghs|cedis?|xaf|cfa|kes|zar|usdt|usdc)?/i.exec(text);
+  if (!m || (!m[1] && !m[4])) return null;
+  let amount = Number(m[2].replace(/,/g, ""));
+  if (m[3]?.toLowerCase() === "k") amount *= 1000;
+  if (m[3]?.toLowerCase() === "m") amount *= 1_000_000;
+  const sym: Record<string, string> = { $: "USD", "€": "EUR", "£": "GBP", "₦": "NGN" };
+  const word = (m[4] ?? "").toLowerCase();
+  const cur = m[1] ? sym[m[1]] : /^(usd|dollar|buck)/.test(word) ? "USD" : /^(eur)/.test(word) ? "EUR" : /^(gbp|pound)/.test(word) ? "GBP" : /^(ngn|naira)/.test(word) ? "NGN" : /^(ghs|cedi)/.test(word) ? "GHS" : /^(xaf|cfa)/.test(word) ? "XAF" : /^kes/.test(word) ? "KES" : /^zar/.test(word) ? "ZAR" : word.toUpperCase();
+  return { amount, currency: cur };
 }

@@ -31,7 +31,7 @@ export async function pollGitHub(topics: string[]): Promise<Launch[]> {
   const out: Launch[] = [];
   for (const t of topics) {
     const j: any = await getJson(`https://api.github.com/search/repositories?q=topic:${encodeURIComponent(t)}+created:>${since}&sort=stars&order=desc&per_page=20`, config.githubToken ? { authorization: `Bearer ${config.githubToken}` } : {});
-    for (const r of j.items ?? []) out.push({ source: "github", external_id: String(r.id), title: `${r.full_name}${r.description ? ` — ${r.description.slice(0, 100)}` : ""}`, url: r.html_url, score: r.stargazers_count, tags: [t, ...(r.topics ?? [])], raw: { owner: r.owner?.login, owner_url: r.owner?.html_url, homepage: r.homepage } });
+    for (const r of j.items ?? []) out.push({ source: "github", external_id: String(r.id), title: `${r.full_name}${r.description ? `: ${r.description.slice(0, 100)}` : ""}`, url: r.html_url, score: r.stargazers_count, tags: [t, ...(r.topics ?? [])], raw: { owner: r.owner?.login, owner_url: r.owner?.html_url, homepage: r.homepage } });
   }
   return out;
 }
@@ -55,7 +55,7 @@ export async function pollDexBoosts(): Promise<Launch[]> {
         }
       }
     } catch { /* leave unscanned */ }
-    out.push({ source: "dexboost", external_id: `${t.chainId}:${t.tokenAddress}`, title: `${t.description?.slice(0, 80) ?? t.tokenAddress} [${t.chainId}]`, url: t.url, score: t.totalAmount, risk, tags: ["token", t.chainId], raw: t });
+    out.push({ source: "dexboost", external_id: `${t.chainId}:${t.tokenAddress}`, title: `${t.description?.slice(0, 80) ?? t.tokenAddress} on ${t.chainId}`, url: t.url, score: t.totalAmount, risk, tags: ["token", t.chainId], raw: t });
   }
   return out;
 }
@@ -88,9 +88,18 @@ const discover = defineAction({
        AND NOT EXISTS (SELECT 1 FROM launch_seen s WHERE s.user_id=$1 AND s.launch_id=l.id) ORDER BY l.first_seen DESC, l.score DESC NULLS LAST LIMIT $3`,
       [ctx.user.id, args.source ?? null, args.limit ?? 8],
     );
-    if (!rows.length) return { reply: "Nothing new. The launch poller runs every 3h." };
+    if (!rows.length) return { reply: "Nothing new since you last looked. I check Show HN, GitHub and the token boards every three hours." };
     for (const r of rows) await ctx.db.query(`INSERT INTO launch_seen (user_id, launch_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ctx.user.id, r.id]);
-    return { reply: rows.map((r) => `• [${r.source}${r.score ? ` ${r.score}` : ""}${r.risk ? ` ${r.risk}` : ""}] ${r.title}\n  ${r.url}`).join("\n") };
+    const from: Record<string, string> = { showhn: "Show HN", github: "GitHub", dexboost: "token boards" };
+    const tail = (r: any) => {
+      const bits: string[] = [from[r.source] ?? r.source];
+      if (r.source === "showhn" && r.score) bits.push(`${r.score} points`);
+      if (r.source === "github" && r.score) bits.push(`${r.score} stars this week`);
+      if (r.source === "dexboost") bits.push(r.risk === "clean-scan" ? "scan clean, not a recommendation" : "not scanned");
+      return bits.join(", ");
+    };
+    const head = rows.length === 1 ? "One new launch." : `${rows.length} new launches, newest first.`;
+    return { reply: [head, ...rows.map((r) => `${r.title}. ${tail(r)}.\n${r.url}`)].join("\n") };
   },
 });
 
@@ -101,13 +110,15 @@ const contact = defineAction({
   schema: z.object({ github_login: z.string().min(1), about: z.string().optional() }),
   async run(args) {
     const p: any = await getJson(`https://api.github.com/users/${encodeURIComponent(args.github_login)}`, config.githubToken ? { authorization: `Bearer ${config.githubToken}` } : {});
-    const lines = [`${p.name ?? p.login}${p.bio ? ` — ${p.bio}` : ""}`];
-    if (p.blog) lines.push(`site: ${p.blog}`);
-    if (p.email) lines.push(`public email: ${p.email}`);
-    if (p.twitter_username) lines.push(`x: @${p.twitter_username}`);
-    lines.push(`github: ${p.html_url}`);
-    lines.push("", "Draft (edit before sending):", `Hi ${p.name?.split(" ")[0] ?? p.login} — saw ${args.about ?? "your project"} on GitHub. I build on similar ground and had one concrete question: [your question]. Happy to share what we've learned if useful. — [you]`);
-    lines.push("", "Public reply or the project's own inbox is the lawful route for people in the UK/EU/Nigeria; a personal email needs their consent.");
+    const lines = [`${p.name ?? p.login}${p.bio ? `, ${p.bio}` : ""}.`];
+    const ways: string[] = [];
+    if (p.blog) ways.push(`site ${p.blog}`);
+    if (p.email) ways.push(`public email ${p.email}`);
+    if (p.twitter_username) ways.push(`@${p.twitter_username} on X`);
+    ways.push(`GitHub ${p.html_url}`);
+    lines.push(`Ways in: ${ways.join(", ")}.`);
+    lines.push("", "A first message you could send, edit it first:", `Hi ${p.name?.split(" ")[0] ?? p.login}, saw ${args.about ?? "your project"} on GitHub. I build on similar ground and had one concrete question: [your question]. Happy to share what we've learned if useful. [you]`);
+    lines.push("", "A public reply or the project's own inbox is the safe route in the UK, EU and Nigeria; a personal email needs their consent first.");
     return { reply: lines.join("\n") };
   },
 });

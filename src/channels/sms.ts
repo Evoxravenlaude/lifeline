@@ -46,9 +46,9 @@ export async function handleTextChannel(db: Db, channel: "sms" | "imessage", fro
   let user = await findUserByIdentity(db, channel, from);
   if (link) {
     const u = await redeemLinkCode(db, link[1], channel, from);
-    return u ? `Linked to ${u.name ?? "your account"}. Text me like you would on Telegram.` : "That code is invalid or expired. Get a new one by saying \"link\" on Telegram or the web app.";
+    return u ? `Linked. This is the same me${u.name ? `, ${u.name.split(" ")[0]}` : ""}: text me here like you would on Telegram, and reply 1 or 2 where I'd show buttons.` : "That code didn't work; it may have expired, they last fifteen minutes. Say \"link\" on Telegram or the web app for a fresh one.";
   }
-  if (!user) return 'This number isn\'t linked. Say "link" on Telegram or the web app, then text me "link <code>".';
+  if (!user) return 'This number isn\'t linked to anyone yet. Say "link" to me on Telegram or the web app, then text me "link" and the code you get.';
   const buttons = lastButtons.get(from) ?? [];
   const n = /^\d$/.test(t) ? Number(t) : 0;
   let reply: Reply;

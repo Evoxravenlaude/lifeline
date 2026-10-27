@@ -11,11 +11,12 @@ const habitAdd = defineAction({
   schema: z.object({ name: z.string().min(1).max(80), target_per_week: z.number().int().min(1).max(7).optional() }),
   async run(args, ctx) {
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,$2,$3) RETURNING id`, [ctx.user.id, args.name, args.target_per_week ?? 7]);
-    return { reply: `Tracking "${args.name}" (${args.target_per_week ?? 7}×/week). Say "did ${args.name}" to check in.`, undo: { payload: { id: r!.id } } };
+    const n = args.target_per_week ?? 7;
+    return { reply: `${args.name}, ${n === 7 ? "every day" : `${n} times a week`}. Say "did ${args.name}" whenever you do it and I'll keep the streak.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`UPDATE habits SET active=false WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
-    return "Habit removed.";
+    return "Habit dropped.";
   },
 });
 
@@ -25,8 +26,14 @@ const habitCheck = defineAction({
   description: "Check in a habit for today (or 'yesterday'). Matches by name.",
   schema: z.object({ name: z.string().min(1), day: z.enum(["today", "yesterday"]).optional() }),
   async run(args, ctx) {
-    const h = await ctx.db.one<{ id: number; name: string }>(`SELECT id, name FROM habits WHERE user_id=$1 AND active AND name ILIKE $2 LIMIT 1`, [ctx.user.id, `%${args.name}%`]);
-    if (!h) return { reply: `No habit matching "${args.name}". Add it with "track habit ${args.name}".` };
+    let h = await ctx.db.one<{ id: number; name: string }>(`SELECT id, name FROM habits WHERE user_id=$1 AND active AND name ILIKE $2 LIMIT 1`, [ctx.user.id, `%${args.name}%`]);
+    let first = false;
+    if (!h) {
+      // First time they mention it: start counting from here rather than sending them off to set it up.
+      if (args.name.length > 40 || /\s(?:to|the|a|an|my)\s/.test(` ${args.name} `)) return { reply: `I'm not counting anything like "${args.name}". If it's a habit, say "track ${args.name}" and I'll keep the streak; if it's a task, say "done with ${args.name}".` };
+      h = (await ctx.db.one<{ id: number; name: string }>(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,$2,7) RETURNING id, name`, [ctx.user.id, args.name.toLowerCase()]))!;
+      first = true;
+    }
     const day = localDay(args.day === "yesterday" ? new Date(ctx.now.getTime() - 86_400_000) : ctx.now, ctx.user.tz);
     await ctx.db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [h.id, day]);
     const streak = await ctx.db.one<{ n: string }>(
@@ -34,11 +41,13 @@ const habitCheck = defineAction({
        SELECT count(*)::text AS n FROM (SELECT day, row_number() OVER (ORDER BY day DESC) AS rn FROM d) x WHERE day = $2::date - (rn-1)::int`,
       [h.id, day],
     );
-    return { reply: `${h.name} ✅ (${streak?.n ?? 1}-day streak)`, undo: { payload: { id: h.id, day } } };
+    const n = Number(streak?.n ?? 1);
+    return { reply: `${h.name}, logged. ${first ? "I'll count it from here; say \"did " + h.name + "\" each time and I keep the streak." : n === 1 ? "Day one." : `That's ${n} days running.`}`, undo: { payload: { id: h.id, day, created: first } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM habit_checkins WHERE habit_id=$1 AND day=$2`, [p.id, p.day]);
-    return "Check-in removed.";
+    if (p.created) await ctx.db.query(`UPDATE habits SET active=false WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
+    return p.created ? "Taken back, and I've stopped counting it." : "Check-in taken back.";
   },
 });
 
@@ -53,8 +62,9 @@ const habitList = defineAction({
        FROM habits h WHERE h.user_id=$1 AND h.active ORDER BY h.name`,
       [ctx.user.id, localDay(ctx.now, ctx.user.tz)],
     );
-    if (!rows.length) return { reply: "No habits tracked." };
-    return { reply: rows.map((r) => `${r.name}: ${r.n}/${r.target_per_week} this week`).join("\n") };
+    if (!rows.length) return { reply: "Nothing tracked yet. Say \"track gym\" and then \"did gym\" whenever you go." };
+    const head = rows.length === 1 ? "One habit this week." : `${rows.length} habits this week.`;
+    return { reply: [head, ...rows.map((r) => `${r.name}: ${r.n} of ${r.target_per_week}`)].join("\n") };
   },
 });
 
@@ -65,11 +75,11 @@ const spendLog = defineAction({
   schema: z.object({ amount: z.number().positive(), currency: z.string().min(3).max(3), category: z.string().optional(), note: z.string().optional() }),
   async run(args, ctx) {
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO spend (user_id, amount, currency, category, note) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [ctx.user.id, args.amount, args.currency.toUpperCase(), args.category ?? "other", args.note ?? null]);
-    return { reply: `Logged ${args.amount} ${args.currency.toUpperCase()} (${args.category ?? "other"}).`, undo: { payload: { id: r!.id } } };
+    return { reply: `${args.amount.toLocaleString()} ${args.currency.toUpperCase()} on ${args.category ?? "other"}, logged. Ask "how much did I spend this week" any time.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM spend WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
-    return "Spend entry removed.";
+    return "Spend taken off the log.";
   },
 });
 
@@ -84,8 +94,12 @@ const spendSummary = defineAction({
       `SELECT currency, category, sum(amount)::text AS total FROM spend WHERE user_id=$1 AND spent_at > now() - ($2 || ' days')::interval GROUP BY currency, category ORDER BY currency, sum(amount) DESC`,
       [ctx.user.id, String(days)],
     );
-    if (!rows.length) return { reply: `Nothing logged in the last ${days} days.` };
-    return { reply: rows.map((r) => `${r.category}: ${Number(r.total).toLocaleString()} ${r.currency}`).join("\n") };
+    const label = args.range === "month" ? "this month" : "this week";
+    if (!rows.length) return { reply: `Nothing logged ${label}. Say "I spent 4500 naira on data" and I'll keep count.` };
+    const byCur = new Map<string, number>();
+    for (const r of rows) byCur.set(r.currency, (byCur.get(r.currency) ?? 0) + Number(r.total));
+    const head = `${[...byCur].map(([c, t]) => `${t.toLocaleString()} ${c}`).join(" and ")} ${label}.`;
+    return { reply: [head, ...rows.map((r) => `${r.category}: ${Number(r.total).toLocaleString()} ${r.currency}`)].join("\n") };
   },
 });
 
@@ -96,11 +110,11 @@ const noteAdd = defineAction({
   schema: z.object({ text: z.string().min(1), tags: z.array(z.string()).optional() }),
   async run(args, ctx) {
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO notes (user_id, text, tags) VALUES ($1,$2,$3) RETURNING id`, [ctx.user.id, args.text, args.tags ?? []]);
-    return { reply: `Noted (#${r!.id}).`, undo: { payload: { id: r!.id } } };
+    return { reply: `Kept. Ask "notes about ${args.tags?.[0] ?? args.text.split(/\s+/).slice(0, 2).join(" ")}" to find it again.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM notes WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
-    return "Note deleted.";
+    return "Note dropped.";
   },
 });
 
@@ -111,7 +125,8 @@ const noteSearch = defineAction({
   schema: z.object({ query: z.string().min(1) }),
   async run(args, ctx) {
     const rows = await ctx.db.query<{ id: number; text: string; created_at: string }>(`SELECT id, text, created_at FROM notes WHERE user_id=$1 AND (text ILIKE $2 OR $3 = ANY(tags)) ORDER BY id DESC LIMIT 10`, [ctx.user.id, `%${args.query}%`, args.query]);
-    return { reply: rows.length ? rows.map((r) => `#${r.id} ${r.text}`).join("\n") : "No matching notes." };
+    if (!rows.length) return { reply: `No notes mention "${args.query}".` };
+    return { reply: [rows.length === 1 ? "One note." : `${rows.length} notes.`, ...rows.map((r) => r.text)].join("\n") };
   },
 });
 
@@ -128,7 +143,7 @@ const remember = defineAction({
   async run(args, ctx) {
     const risk = /\b(from now on|always|never|send|pay|transfer|wallet|password|key)\b/i.test(args.fact) ? 2 : 0;
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO memories (user_id, fact, source, confirmed, risk) VALUES ($1,$2,'user',$3,$4) RETURNING id`, [ctx.user.id, args.fact, risk === 0, risk]);
-    return { reply: risk ? `Noted, but I'll ask you to confirm that one in the weekly memory review before it affects anything.` : `Got it: ${args.fact}`, undo: { payload: { id: r!.id } } };
+    return { reply: risk ? `Kept, but held back. That one touches money or standing instructions, so I'll ask you to confirm it on Sunday before it changes anything.` : `Got it, ${args.fact}. I'll keep that in mind.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM memories WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
@@ -143,7 +158,7 @@ const forget = defineAction({
   schema: z.object({ match: z.string().min(1) }),
   async run(args, ctx) {
     const r = await ctx.db.query(`DELETE FROM memories WHERE user_id=$1 AND fact ILIKE $2 RETURNING fact`, [ctx.user.id, `%${args.match}%`]);
-    return { reply: r.length ? `Forgot ${r.length} fact${r.length === 1 ? "" : "s"}.` : "Nothing matched." };
+    return { reply: r.length ? (r.length === 1 ? `Forgotten: ${r[0].fact}` : `Forgotten, all ${r.length} of them.`) : `Nothing I remember mentions "${args.match}".` };
   },
 });
 
@@ -154,7 +169,12 @@ const memList = defineAction({
   schema: z.object({}),
   async run(_a, ctx) {
     const rows = await ctx.db.query<{ fact: string; confirmed: boolean }>(`SELECT fact, confirmed FROM memories WHERE user_id=$1 ORDER BY id`, [ctx.user.id]);
-    return { reply: rows.length ? rows.map((r) => `${r.confirmed ? "•" : "○"} ${r.fact}`).join("\n") + "\n\n○ = not yet confirmed. Say \"forget X\" to drop one." : "I don't remember anything about you yet." };
+    if (!rows.length) return { reply: "Nothing yet. Say \"remember that I'm vegetarian\" and I'll keep it." };
+    const sure = rows.filter((r) => r.confirmed), held = rows.filter((r) => !r.confirmed);
+    const lines = [`${rows.length === 1 ? "One thing" : `${rows.length} things`} I know about you.`, ...sure.map((r) => r.fact)];
+    if (held.length) lines.push("", "Waiting on your yes before I use them:", ...held.map((r) => r.fact));
+    lines.push("", "Say \"forget X\" to drop one.");
+    return { reply: lines.join("\n") };
   },
 });
 

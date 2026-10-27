@@ -26,11 +26,11 @@ const FETCHERS: Record<string, (slug: string) => Promise<Post[]>> = {
   },
   remoteok: async () => {
     const j: any = await getJson("https://remoteok.com/api");
-    return (Array.isArray(j) ? j.slice(1) : []).map((x: any) => ({ external_id: String(x.id), title: `${x.position} — ${x.company}`, url: x.url, location: "remote" }));
+    return (Array.isArray(j) ? j.slice(1) : []).map((x: any) => ({ external_id: String(x.id), title: `${x.position} at ${x.company}`, url: x.url, location: "remote" }));
   },
   remotive: async () => {
     const j: any = await getJson("https://remotive.com/api/remote-jobs?limit=200");
-    return (j.jobs ?? []).map((x: any) => ({ external_id: String(x.id), title: `${x.title} — ${x.company_name}`, url: x.url, location: x.candidate_required_location }));
+    return (j.jobs ?? []).map((x: any) => ({ external_id: String(x.id), title: `${x.title} at ${x.company_name}`, url: x.url, location: x.candidate_required_location }));
   },
 };
 
@@ -43,16 +43,17 @@ async function getJson(url: string) {
 const watch = defineAction({
   name: "jobs.watch",
   tier: 1,
-  description: "Watch a job board. `ats` is greenhouse | lever | ashby | remoteok | remotive; `slug` is the company's board slug (e.g. 'dorahacks' on lever), ignored for remoteok/remotive. `keywords` filter titles (e.g. ['solana','growth','remote']).",
+  description: "Watch a job board. `ats` is greenhouse | lever | ashby | remoteok | remotive; `slug` is the company's board slug (e.g. 'dorahacks' on lever), ignored for remoteok/remotive. `keywords` filter titles (e.g. ['growth','payments','remote']).",
   schema: z.object({ ats: z.enum(["greenhouse", "lever", "ashby", "remoteok", "remotive"]), slug: z.string().optional(), keywords: z.array(z.string()).max(10).optional() }),
   async run(args, ctx) {
     const slug = args.slug ?? "-";
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO job_watches (user_id, ats, slug, keywords) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id, ats, slug) DO UPDATE SET keywords=EXCLUDED.keywords, active=true RETURNING id`, [ctx.user.id, args.ats, slug, args.keywords ?? []]);
-    return { reply: `Watching ${args.ats}${args.slug ? `/${args.slug}` : ""}${args.keywords?.length ? ` for ${args.keywords.join(", ")}` : ""}. New matches land in your digest.`, undo: { payload: { id: r!.id } } };
+    const where = args.slug && !["remoteok", "remotive"].includes(args.ats) ? `${args.slug} on ${args.ats}` : args.ats;
+    return { reply: `Watching ${where}${args.keywords?.length ? ` for ${args.keywords.join(", ")} roles` : ""}. New matches land in your morning brief; say "jobs" to see them sooner.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`UPDATE job_watches SET active=false WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
-    return "Watch removed.";
+    return "Stopped watching that board.";
   },
 });
 
@@ -63,9 +64,10 @@ const list = defineAction({
   schema: z.object({}),
   async run(_a, ctx) {
     const rows = await matchesFor(ctx.db, ctx.user.id, 10);
-    if (!rows.length) return { reply: "No new matches. Add watches with 'watch jobs lever dorahacks for growth'." };
+    if (!rows.length) return { reply: "Nothing new on the boards you watch. Say \"watch jobs at lever dorahacks for growth\" to add one." };
     for (const r of rows) await ctx.db.query(`INSERT INTO job_seen (user_id, post_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ctx.user.id, r.id]);
-    return { reply: rows.map((r: any) => `• ${r.title}${r.location ? ` (${r.location})` : ""}\n  ${r.url}`).join("\n") };
+    const head = rows.length === 1 ? "One new role." : `${rows.length} new roles.`;
+    return { reply: [head, ...rows.map((r: any) => `${r.title}${r.location ? `, ${r.location}` : ""}\n${r.url}`)].join("\n") };
   },
 });
 

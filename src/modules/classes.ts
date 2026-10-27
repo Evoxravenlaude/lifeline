@@ -5,9 +5,10 @@ import { fmt, parseClock, parseWhen } from "../core/time.js";
 import { cancelJob, onJob, push, schedule } from "../core/scheduler.js";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DAYNAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 function weekday(s: string): number {
   const i = DAYS.findIndex((d) => s.toLowerCase().startsWith(d));
-  if (i < 0) throw new Error(`"${s}" isn't a weekday`);
+  if (i < 0) throw new Error(`I couldn't read "${s}" as a day of the week. Which day is it?`);
   return i;
 }
 
@@ -20,7 +21,7 @@ onJob("class_alert", async (job, deps) => {
   );
   if (!c || !c.active) return;
   if (c.term_end && new Date(c.term_end) < new Date()) return;
-  await push(deps, user, "reminder", `🎓 ${c.name} at ${c.start_time}${c.location ? ` — ${c.location}` : ""}`, { exempt: true });
+  await push(deps, user, "reminder", `${c.name} starts at ${c.start_time}${c.location ? `, ${c.location}` : ""}.`, { exempt: true });
 });
 
 onJob("assignment_alert", async (job, deps) => {
@@ -28,7 +29,7 @@ onJob("assignment_alert", async (job, deps) => {
   if (!user) return;
   const a = await deps.db.one<{ title: string; due_at: string; done: boolean }>(`SELECT title, due_at, done FROM assignments WHERE id=$1`, [job.payload.assignmentId]);
   if (!a || a.done) return;
-  await push(deps, user, "reminder", `📝 Due ${fmt(a.due_at, user.tz)}: ${a.title}`, { exempt: true });
+  await push(deps, user, "reminder", `${a.title} is due ${fmt(a.due_at, user.tz)}.`, { exempt: true });
 });
 
 const add = defineAction({
@@ -46,7 +47,7 @@ const add = defineAction({
   async run(args, ctx) {
     const wd = weekday(args.day);
     const s = parseClock(args.start);
-    if (!s) throw new Error(`"${args.start}" isn't a time I understand`);
+    if (!s) throw new Error(`I couldn't read "${args.start}" as a time. Try 10:00 or 2pm.`);
     const termEnd = args.term_end ? parseWhen(args.term_end, ctx.user.tz, ctx.now) : null;
     const start = `${String(s[0]).padStart(2, "0")}:${String(s[1]).padStart(2, "0")}`;
     const row = await ctx.db.one<{ id: number }>(
@@ -58,12 +59,12 @@ const add = defineAction({
     if (m < 0) { m += 60; h -= 1; }
     if (h < 0) { h += 24; d = (d + 6) % 7; }
     const jobId = await schedule(ctx.db, { userId: ctx.user.id, kind: "class_alert", payload: { classId: row!.id }, cron: `${m} ${h} * * ${d}`, tz: ctx.user.tz });
-    return { reply: `Added ${args.name}: ${DAYS[wd]} ${start}${args.end ? `–${args.end}` : ""}${args.location ? ` at ${args.location}` : ""}.`, undo: { payload: { classId: row!.id, jobId } } };
+    return { reply: `${args.name}, ${DAYNAMES[wd]}s at ${start}${args.end ? ` to ${args.end}` : ""}${args.location ? `, ${args.location}` : ""}. I'll ping you fifteen minutes before each one.`, undo: { payload: { classId: row!.id, jobId } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`UPDATE classes SET active=false WHERE id=$1 AND user_id=$2`, [p.classId, ctx.user.id]);
     await cancelJob(ctx.db, p.jobId);
-    return "Class removed.";
+    return "Class taken off the timetable.";
   },
 });
 
@@ -81,20 +82,29 @@ const list = defineAction({
       `SELECT id, title, due_at FROM assignments WHERE user_id=$1 AND NOT done ORDER BY due_at LIMIT 10`,
       [ctx.user.id],
     );
-    const lines = cls.map((c) => `${DAYS[c.weekday]} ${c.start_time}${c.end_time ? `–${c.end_time}` : ""} ${c.name}${c.location ? ` (${c.location})` : ""}`);
-    if (asg.length) lines.push("", "Assignments:", ...asg.map((a) => `#${a.id} ${fmt(a.due_at, ctx.user.tz)} — ${a.title}`));
-    return { reply: lines.length ? lines.join("\n") : "No classes yet." };
+    const lines = cls.length ? [cls.length === 1 ? "One class a week." : `${cls.length} classes a week.`, ...cls.map((c) => `${DAYNAMES[c.weekday]} ${c.start_time}${c.end_time ? ` to ${c.end_time}` : ""}: ${c.name}${c.location ? `, ${c.location}` : ""}`)] : [];
+    if (asg.length) lines.push(...(lines.length ? [""] : []), asg.length === 1 ? "One thing due." : `${asg.length} things due.`, ...asg.map((a) => `${fmt(a.due_at, ctx.user.tz)}: ${a.title}`));
+    return { reply: lines.length ? lines.join("\n") : "No classes or assignments yet. Say \"class Algorithms on tuesday 10 to 12\" and I'll keep it." };
   },
 });
 
 const assignment = defineAction({
   name: "assignment.add",
   tier: 1,
-  description: "Add an assignment or exam with a due date (natural language). Alerts two days before and on the morning of the due date.",
-  schema: z.object({ title: z.string().min(1), due: z.string(), class_name: z.string().optional() }),
+  description: "Add an assignment or exam with a due date (natural language); leave `due` empty if the user gave none and the bot will ask. Alerts two days before and on the morning of the due date.",
+  schema: z.object({ title: z.string().min(1), due: z.string().optional(), class_name: z.string().optional() }),
+  needs(args, ctx) {
+    if (args.due && parseWhen(args.due, ctx.user.tz, ctx.now)) return null;
+    if (args.due) return { need: "due", question: `I couldn't read a date in "${args.due}". When is ${args.title} due?` };
+    return { need: "due", question: `When is ${args.title} due?` };
+  },
+  fill(need, answer, _args, ctx) {
+    if (need !== "due") return null;
+    return parseWhen(answer, ctx.user.tz, ctx.now) ? { due: answer } : null;
+  },
   async run(args, ctx) {
-    const due = parseWhen(args.due, ctx.user.tz, ctx.now);
-    if (!due) throw new Error(`I couldn't read a date from "${args.due}"`);
+    const due = args.due ? parseWhen(args.due, ctx.user.tz, ctx.now) : null;
+    if (!due) throw new Error(`I couldn't read a date in that. When is ${args.title} due?`);
     const cls = args.class_name
       ? await ctx.db.one<{ id: number }>(`SELECT id FROM classes WHERE user_id=$1 AND active AND name ILIKE $2 LIMIT 1`, [ctx.user.id, `%${args.class_name}%`])
       : null;
@@ -107,12 +117,12 @@ const assignment = defineAction({
       const at = new Date(due.getTime() - offsetMs - (offsetMs === 0 ? 10 * 3_600_000 : 0));
       if (at > ctx.now) jobs.push(await schedule(ctx.db, { userId: ctx.user.id, kind: "assignment_alert", payload: { assignmentId: row!.id }, runAt: at }));
     }
-    return { reply: `Noted: "${args.title}" due ${fmt(due, ctx.user.tz)}.`, undo: { payload: { id: row!.id, jobs } } };
+    return { reply: `${args.title}, due ${fmt(due, ctx.user.tz)}. I'll nudge you two days before and on the morning.`, undo: { payload: { id: row!.id, jobs } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM assignments WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
     for (const j of p.jobs) await cancelJob(ctx.db, j);
-    return "Assignment removed.";
+    return "Assignment dropped."
   },
 });
 
@@ -125,8 +135,8 @@ const done = defineAction({
     const r = args.id
       ? await ctx.db.query(`UPDATE assignments SET done=true WHERE id=$1 AND user_id=$2 RETURNING id, title`, [args.id, ctx.user.id])
       : await ctx.db.query(`UPDATE assignments SET done=true WHERE id=(SELECT id FROM assignments WHERE user_id=$1 AND NOT done AND title ILIKE $2 ORDER BY due_at LIMIT 1) RETURNING id, title`, [ctx.user.id, `%${args.match ?? ""}%`]);
-    if (!r.length) return { reply: "Couldn't find that assignment." };
-    return { reply: `Done: ${r[0].title} ✅`, undo: { payload: { id: r[0].id } } };
+    if (!r.length) return { reply: "I couldn't find an open assignment like that. Say \"classes\" to see what's due." };
+    return { reply: `${r[0].title}, done. Off the list.`, undo: { payload: { id: r[0].id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`UPDATE assignments SET done=false WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);

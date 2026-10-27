@@ -29,10 +29,15 @@ import { PERSONAS } from "../intent/persona.js";
 import { providerName } from "../intent/providers.js";
 import { draftReply } from "../intent/model.js";
 import { DateTime } from "luxon";
+import { cors } from "hono/cors";
 import type { User } from "../policy/types.js";
+import { CAPABILITIES } from "../intent/capabilities.js";
+import { pipLine, PIP_BIO, type PipState } from "../core/pip.js";
+import { polish, personaOf } from "../core/voice.js";
 
 const SESSION_DAYS = 30;
-const PUBLIC_DIR = path.relative(process.cwd(), path.join(path.dirname(fileURLToPath(import.meta.url)), "public")) || ".";
+/** The web app lives in web/ at the repo root: Railway serves it here, and the same folder is the Vercel project. */
+const PUBLIC_DIR = path.relative(process.cwd(), path.join(path.dirname(fileURLToPath(import.meta.url)), "../../web")) || ".";
 
 export function createWeb(db: Db, botUsername: string) {
   const app = new Hono<{ Variables: { user: User } }>();
@@ -52,10 +57,14 @@ export function createWeb(db: Db, botUsername: string) {
   const newSession = async (c: any, user: User) => {
     const token = randomBytes(32).toString("hex");
     await db.query(`INSERT INTO sessions (token, user_id, expires_at) VALUES ($1,$2,$3)`, [token, user.id, new Date(Date.now() + SESSION_DAYS * 86_400_000)]);
-    setCookie(c, "ll_session", token, { httpOnly: true, sameSite: "Lax", secure: config.publicUrl.startsWith("https"), path: "/", maxAge: SESSION_DAYS * 86_400 });
+    const cross = config.webOrigins.length > 0;
+    setCookie(c, "ll_session", token, { httpOnly: true, sameSite: cross ? "None" : "Lax", secure: cross || config.publicUrl.startsWith("https"), path: "/", maxAge: SESSION_DAYS * 86_400 });
     await db.query(`INSERT INTO identities (user_id, channel, external_id) VALUES ($1,'web',$2) ON CONFLICT DO NOTHING`, [user.id, `web:${user.id}`]);
   };
   const ctxOf = (u: User, src: string) => ({ db, user: u, now: new Date(), sourceMessage: `[web] ${src}` });
+
+  // A web front on another origin (the Vercel domain) talks to this brain with cookies.
+  if (config.webOrigins.length) app.use("/api/*", cors({ origin: config.webOrigins, credentials: true })) && app.use("/auth/*", cors({ origin: config.webOrigins, credentials: true }));
 
   app.get("/health", (c) => c.json({ ok: true }));
   app.get("/api/public", (c) => c.json({ botUsername }));
@@ -103,8 +112,9 @@ export function createWeb(db: Db, botUsername: string) {
   /* ---- app data ---- */
   app.get("/api/me", async (c) => {
     const u = user(c);
-    return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey) });
+    return c.json({ id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey), pip: pipLine("return", u) });
   });
+  app.get("/api/capabilities", (c) => c.json({ capabilities: CAPABILITIES, pip: PIP_BIO }));
   app.get("/api/messages", async (c) => c.json((await db.query(`SELECT id, role, content, created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 60`, [user(c).id])).reverse()));
   app.post("/api/chat", async (c) => {
     const { text } = await c.req.json();
@@ -189,13 +199,16 @@ export function createWeb(db: Db, botUsername: string) {
     const d = await propose(ctxOf(u, "settings"), "settings.update", body);
     return c.json({ ok: d.kind === "ran", text: d.kind === "pending" ? d.echo : d.reply });
   });
-  /** A line from Pip in the user's voice. Falls back to the client's local quips when no model. */
-  app.get("/api/quip", async (c) => {
+  /** A line from Pip for the moment. With a model, in the user's voice; otherwise from his own book of lines. */
+  const pipRoute = async (c: any) => {
     const u = user(c);
-    const state = c.req.query("state") ?? "idle";
-    const line = await draftReply(db, u, `State: ${state}. Time: ${DateTime.now().setZone(u.tz).toFormat("HH:mm cccc")}.`, "You are Pip, a small tortoise mascot with spectacles who keeps the user's day. Say one short line (max 14 words) in the user's chosen voice. No emoji. Output the line only.");
-    return c.json({ text: line });
-  });
+    const state = (c.req.query("state") ?? "idle") as PipState;
+    const fallback = pipLine(state, u);
+    const line = await draftReply(db, u, `State of the day: ${state}. Time: ${DateTime.now().setZone(u.tz).toFormat("HH:mm cccc")}. Fallback line you may improve on: "${fallback}"`, "You are Pip, a small tortoise with spectacles who keeps the user's day. Slow on purpose, never drops what he carries, dry and warm. Say one line (max 16 words) in the user's chosen voice that fits the state. No emoji, no em dashes. Output the line only.").catch(() => null);
+    return c.json({ text: polish(line ?? fallback, { persona: personaOf(u.prefs) }) });
+  };
+  app.get("/api/pip", pipRoute);
+  app.get("/api/quip", pipRoute);
 
   /* ---- inbound webhooks ---- */
   app.post("/webhooks/twilio", async (c) => {

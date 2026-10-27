@@ -7,12 +7,13 @@
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
-import { fmt, fmtDate, humanDelta } from "../core/time.js";
+import { fmt, humanDelta } from "../core/time.js";
 import { onJob, push } from "../core/scheduler.js";
 import { rangeBounds } from "./calendar.js";
 import { hackLine, rankedForUser } from "./hackathons.js";
 import type { Db } from "../core/db.js";
 import type { User } from "../policy/types.js";
+import { DateTime } from "luxon";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
@@ -28,26 +29,41 @@ export async function buildDigest(db: Db, user: User, now: Date): Promise<string
     db.query<any>(`SELECT destination, starts_on FROM trips WHERE user_id=$1 AND status<>'cancelled' AND starts_on >= current_date ORDER BY starts_on LIMIT 1`, [user.id]),
     db.query<any>(`SELECT title, due_at FROM assignments WHERE user_id=$1 AND NOT done AND due_at < $2::timestamptz + interval '3 days' ORDER BY due_at LIMIT 3`, [user.id, now]),
   ]);
-  const lines: string[] = [`🐢 ${fmtDate(now, user.tz)}`];
+  const first = user.name ? user.name.split(" ")[0] : null;
   const today = [
-    ...events.map((e: any) => `${fmt(e.starts_at, user.tz, false)} ${e.title}${e.location ? ` (${e.location})` : ""}`),
-    ...classes.map((c: any) => `${c.start_time} ${c.name}${c.location ? ` (${c.location})` : ""}`),
-    ...reminders.map((r: any) => `${fmt(r.due_at, user.tz, false)} ⏰ ${r.text}`),
-  ].sort();
-  lines.push(today.length ? today.join("\n") : "Nothing scheduled today.");
-  if (meds.length) lines.push(`💊 ${meds.map((m: any) => `${m.name} ${m.times.join("/")}`).join(", ")}`);
-  if (assignments.length) lines.push(`📝 ${assignments.map((a: any) => `${a.title} (${humanDelta(now, a.due_at)})`).join("; ")}`);
-  if (hacks.length) lines.push(`🏁 ${hacks.map((h: any) => `${h.title} ${humanDelta(now, h.deadline)}`).join("; ")}`);
-  if (trips.length) lines.push(`✈️ ${trips[0].destination} in ${Math.ceil((new Date(trips[0].starts_on).getTime() - now.getTime()) / 86_400_000)}d`);
+    ...events.map((e: any) => ({ t: fmt(e.starts_at, user.tz, false), l: `${e.title}${e.location ? `, ${e.location}` : ""}` })),
+    ...classes.map((c: any) => ({ t: c.start_time, l: `${c.name}${c.location ? `, ${c.location}` : ""}` })),
+    ...reminders.map((r: any) => ({ t: fmt(r.due_at, user.tz, false), l: r.text })),
+  ].sort((a, b) => a.t.localeCompare(b.t));
+  const dayName = DateTime.fromJSDate(now).setZone(user.tz).toFormat("cccc");
+  const tripDays = trips.length ? Math.ceil((new Date(trips[0].starts_on).getTime() - now.getTime()) / 86_400_000) : null;
+
+  // The one thing that matters most goes in the greeting.
+  let lead: string;
+  if (today.length) lead = `${today.length === 1 ? "one thing" : `${today.length} things`} on today, first up ${today[0].l} at ${today[0].t}.`;
+  else if (assignments.length) lead = `nothing booked, but ${assignments[0].title} is due in ${humanDelta(now, assignments[0].due_at)}.`;
+  else if (hacks.length) lead = `a clear day. ${hacks[0].title} closes in ${humanDelta(now, hacks[0].deadline)}.`;
+  else if (tripDays !== null) lead = `a clear day, and ${trips[0].destination} is ${tripDays === 0 ? "today" : tripDays === 1 ? "tomorrow" : `${tripDays} days out`}.`;
+  else lead = "nothing booked. A good day to plan something.";
+  const lines: string[] = [`${dayName}${first ? `, ${first}` : ""}: ${lead}`];
+
+  if (today.length > 1) lines.push("", ...today.map((x) => `${x.t} ${x.l}`));
+  const side: string[] = [];
+  if (meds.length) side.push(`Meds: ${meds.map((m: any) => `${m.name} at ${m.times.join(" and ")}`).join(", ")}.`);
+  if (assignments.length) side.push(`Due soon: ${assignments.map((a: any) => `${a.title} in ${humanDelta(now, a.due_at)}`).join(", ")}.`);
+  if (hacks.length) side.push(`Hackathon deadlines: ${hacks.map((h: any) => `${h.title} in ${humanDelta(now, h.deadline)}`).join(", ")}.`);
+  if (tripDays !== null && !lead.includes(trips[0].destination)) side.push(`${trips[0].destination} in ${tripDays} day${tripDays === 1 ? "" : "s"}.`);
+  if (side.length) lines.push("", ...side);
+
   const { matchesFor } = await import("./jobs.js");
   const jobs = await matchesFor(db, user.id, 3);
   if (jobs.length) {
-    lines.push("", "Job matches:", ...jobs.map((j: any) => `• ${j.title}\n  ${j.url}`));
+    lines.push("", `${jobs.length === 1 ? "A job that fits you" : `${jobs.length} jobs that fit you`}:`, ...jobs.map((j: any) => `${j.title}, ${j.url}`));
     for (const j of jobs) await db.query(`INSERT INTO job_seen (user_id, post_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, j.id]);
   }
   const fresh = await rankedForUser(db, user, now, 3);
   if (fresh.length) {
-    lines.push("", "New hackathons worth a look:", ...fresh.map((h) => hackLine(h, user.tz, now)));
+    lines.push("", `New since yesterday, ${fresh.length === 1 ? "one hackathon" : `${fresh.length} hackathons`} worth a look:`, ...fresh.map((h) => hackLine(h, user.tz, now)));
     for (const h of fresh) await db.query(`INSERT INTO hackathon_seen (user_id, hackathon_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, h.id]);
   }
   return lines.join("\n");
@@ -65,7 +81,7 @@ onJob("memory_review", async (job, deps) => {
   if (!user) return;
   const rows = await deps.db.query<{ id: number; fact: string }>(`SELECT id, fact FROM memories WHERE user_id=$1 AND NOT confirmed ORDER BY id LIMIT 5`, [user.id]);
   for (const r of rows) {
-    await push(deps, user, "memory", `Should I keep remembering this?\n"${r.fact}"`, { exempt: true, buttons: [{ label: "Keep", data: `mem:keep:${r.id}` }, { label: "Drop", data: `mem:drop:${r.id}` }] });
+    await push(deps, user, "memory", `Sunday check. I picked this up and haven't used it yet: "${r.fact}". Keep it?`, { exempt: true, buttons: [{ label: "Keep", data: `mem:keep:${r.id}` }, { label: "Drop", data: `mem:drop:${r.id}` }] });
   }
 });
 
@@ -94,7 +110,7 @@ const settings = defineAction({
   }),
   async run(args, ctx) {
     if (args.tz) {
-      try { new Intl.DateTimeFormat("en", { timeZone: args.tz }); } catch { throw new Error(`"${args.tz}" isn't a timezone I know`); }
+      try { new Intl.DateTimeFormat("en", { timeZone: args.tz }); } catch { throw new Error(`I don't know a timezone called "${args.tz}". Try the city, like Africa/Lagos or Europe/London.`); }
     }
     const prefs = { ...ctx.user.prefs, ...(args.country ? { country: args.country.toUpperCase() } : {}) };
     await ctx.db.query(
@@ -106,7 +122,14 @@ const settings = defineAction({
       const hour = args.digest_hour ?? ctx.user.digest_hour;
       await ctx.db.query(`UPDATE jobs SET cron=$2, tz=$3 WHERE user_id=$1 AND kind='digest'`, [ctx.user.id, `0 ${hour} * * *`, tz]);
     }
-    return { reply: "Settings updated." };
+    const bits: string[] = [];
+    if (args.tz) bits.push(`clock set to ${args.tz}`);
+    if (args.digest_hour !== undefined) bits.push(`morning brief at ${String(args.digest_hour).padStart(2, "0")}:00`);
+    if (args.quiet_start !== undefined || args.quiet_end !== undefined) bits.push(`quiet hours ${args.quiet_start ?? ctx.user.quiet_start}:00 to ${args.quiet_end ?? ctx.user.quiet_end}:00`);
+    if (args.name) bits.push(`I'll call you ${args.name}`);
+    if (args.country) bits.push(`country ${args.country.toUpperCase()}`);
+    if (args.email) bits.push(`email ${args.email}`);
+    return { reply: bits.length ? `Done: ${bits.join(", ")}.` : "Nothing to change there." };
   },
 });
 

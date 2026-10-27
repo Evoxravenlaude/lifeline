@@ -60,38 +60,48 @@ export async function rankedForUser(db: any, user: any, now: Date, limit = 8): P
     .slice(0, limit);
 }
 
+/** Why this one fits, in a phrase: prize, crowd, how long is left, where. */
+function whyFits(h: Hack, now: Date): string {
+  const bits: string[] = [];
+  if (h.prize_usd) bits.push(`$${Number(h.prize_usd).toLocaleString()} in prizes`);
+  if (h.registrations) bits.push(`${h.registrations} signed up`);
+  if (h.deadline) {
+    const days = Math.floor((new Date(h.deadline).getTime() - now.getTime()) / 86_400_000);
+    bits.push(days <= 0 ? "closes today" : days === 1 ? "closes tomorrow" : days <= 21 ? `${days} days to build` : `plenty of time, ${days} days`);
+  }
+  bits.push(h.online === false ? "in person" : "remote");
+  return bits.join(", ");
+}
+
 export function hackLine(h: Hack & { score?: number }, tz: string, now: Date): string {
-  const parts = [h.title];
-  if (h.prize_usd) parts.push(`$${Number(h.prize_usd).toLocaleString()}`);
-  if (h.registrations) parts.push(`${h.registrations} reg`);
-  if (h.deadline) parts.push(`due ${fmt(h.deadline, tz)} (${humanDelta(now, h.deadline)})`);
-  parts.push(h.online === false ? "in person" : "online");
-  return `• ${parts.join(" · ")}\n  ${h.url}`;
+  const when = h.deadline ? `, closes ${fmt(h.deadline, tz)}` : "";
+  return `${h.title}${when}. ${whyFits(h, now)}.\n${h.url}`;
 }
 
 const discover = defineAction({
   name: "hackathon.discover",
   tier: 1,
-  description: "Show the top-ranked open hackathons for this user (prize/registrations, quality, tags, remote). Optional tag filter like 'solana' or 'ai'.",
+  description: "Show the top-ranked open hackathons for this user (prize/registrations, quality, tags, remote). Optional tag filter like 'ai', 'payments' or 'base'.",
   schema: z.object({ tag: z.string().optional(), limit: z.number().int().min(1).max(15).optional() }),
   async run(args, ctx) {
     const u = args.tag ? { ...ctx.user, prefs: { ...ctx.user.prefs, tags: [args.tag] } } : ctx.user;
     const list = await rankedForUser(ctx.db, u, ctx.now, args.limit ?? 8);
-    if (!list.length) return { reply: "Nothing new in the feed. Pollers run every 6h; set HACKATHONRADAR_API_KEY for the wide net." };
+    if (!list.length) return { reply: args.tag ? `Nothing open for ${args.tag} right now. I check the sources every six hours; ask again later or drop the filter.` : "Nothing new that fits right now. I check the sources every six hours, and anything that fits lands in your morning brief." };
     for (const h of list) await ctx.db.query(`INSERT INTO hackathon_seen (user_id, hackathon_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ctx.user.id, h.id]);
-    return { reply: list.map((h) => `[${h.score}] ${hackLine(h, ctx.user.tz, ctx.now)}`).join("\n") };
+    const head = list.length === 1 ? "One worth a look." : `${list.length} worth a look, best fit first.`;
+    return { reply: [head, "", ...list.map((h) => hackLine(h, ctx.user.tz, ctx.now))].join("\n") };
   },
 });
 
 const setTags = defineAction({
   name: "hackathon.set_interests",
   tier: 1,
-  description: "Set the tags used to rank hackathons for this user (e.g. ['ai','payments','base','ethereum'] — any chains or themes) and whether remote-only.",
+  description: "Set the tags used to rank hackathons for this user (e.g. ['ai','payments','base','ethereum'], any chains or themes) and whether remote-only.",
   schema: z.object({ tags: z.array(z.string()).max(12), remote_only: z.boolean().optional() }),
   async run(args, ctx) {
     const prefs = { ...ctx.user.prefs, tags: args.tags, remoteOnly: args.remote_only ?? true };
     await ctx.db.query(`UPDATE users SET prefs=$2 WHERE id=$1`, [ctx.user.id, JSON.stringify(prefs)]);
-    return { reply: `Ranking on: ${args.tags.join(", ") || "(no tags)"}; ${prefs.remoteOnly ? "remote only" : "any location"}.` };
+    return { reply: args.tags.length ? `I'll rank hackathons and launches on ${args.tags.join(", ")}, ${prefs.remoteOnly ? "remote only" : "anywhere"}. The next brief uses it.` : `No interests set, so I'll rank on prize and quality alone, ${prefs.remoteOnly ? "remote only" : "anywhere"}.` };
   },
 });
 
@@ -100,7 +110,8 @@ onJob("hack_deadline", async (job, deps) => {
   if (!user) return;
   const e = await deps.db.one<{ title: string; deadline: string; status: string; url: string | null }>(`SELECT title, deadline, status, url FROM hackathon_entries WHERE id=$1`, [job.payload.entryId]);
   if (!e || ["submitted", "won", "lost", "withdrawn"].includes(e.status)) return;
-  await push(deps, user, "reminder", `🏁 ${e.title} closes ${fmt(e.deadline, user.tz)} (${humanDelta(new Date(), e.deadline)}). Status: ${e.status}.${e.url ? `\n${e.url}` : ""}`, { exempt: true });
+  const left = humanDelta(new Date(), e.deadline);
+  await push(deps, user, "reminder", `${e.title} closes ${fmt(e.deadline, user.tz)}, ${left} from now. You're marked as ${e.status}; say "submitted ${e.title}" once it's in.${e.url ? `\n${e.url}` : ""}`, { exempt: true });
 });
 
 onJob("hack_payout", async (job, deps) => {
@@ -108,15 +119,20 @@ onJob("hack_payout", async (job, deps) => {
   if (!user) return;
   const e = await deps.db.one<{ title: string; payout_received: string | null; prize: string | null }>(`SELECT title, payout_received, prize FROM hackathon_entries WHERE id=$1`, [job.payload.entryId]);
   if (!e || e.payout_received) return;
-  await push(deps, user, "reminder", `💸 ${job.payload.days} days since results for ${e.title} and no payout logged${e.prize ? ` (${e.prize})` : ""}. Worth chasing the organiser.`, { exempt: true });
+  await push(deps, user, "reminder", `${job.payload.days} days since ${e.title} results and no payout logged${e.prize ? ` for the ${e.prize}` : ""}. Worth a message to the organiser. Say "paid for ${e.title}" when it lands.`, { exempt: true });
 });
 
 const track = defineAction({
   name: "hackathon.track",
   tier: 1,
   description: "Add a hackathon to the user's ledger by title (and url/deadline if known). Schedules alerts 3 days, 1 day and 6 hours before the deadline.",
-  schema: z.object({ title: z.string().min(1), url: z.string().url().optional(), deadline: z.string().optional(), notes: z.string().optional() }),
-  async run(args, ctx) {
+  schema: z.object({ title: z.string().min(1).optional(), url: z.string().url().optional(), deadline: z.string().optional(), notes: z.string().optional() }),
+  needs(args) {
+    if (!args.title) return { need: "title", question: "Which hackathon? Give me the name and I'll track it." };
+    return null;
+  },
+  async run(a, ctx) {
+    const args = { ...a, title: a.title! };
     let deadline = args.deadline ? parseWhen(args.deadline, ctx.user.tz, ctx.now) : null;
     let hackId: number | null = null;
     const known = await ctx.db.one<{ id: number; deadline: string | null; url: string }>(`SELECT id, deadline, url FROM hackathons WHERE title ILIKE $1 OR url=$2 ORDER BY first_seen DESC LIMIT 1`, [`%${args.title}%`, args.url ?? ""]);
@@ -132,12 +148,13 @@ const track = defineAction({
         if (at > ctx.now) jobs.push(await schedule(ctx.db, { userId: ctx.user.id, kind: "hack_deadline", payload: { entryId: r!.id }, runAt: at }));
       }
     }
-    return { reply: `Tracking "${args.title}"${deadline ? `, deadline ${fmt(deadline, ctx.user.tz)}` : " (no deadline yet — tell me when you know it)"}. Entry #${r!.id}.`, undo: { payload: { id: r!.id, jobs } } };
+    const when = deadline ? ` It closes ${fmt(deadline, ctx.user.tz)}; I'll nudge you three days, a day and six hours before.` : " No deadline yet; tell me when you know it and I'll set the nudges.";
+    return { reply: `${args.title} is on your ledger.${when} Say "submitted ${args.title}" when it's in.`, undo: { payload: { id: r!.id, jobs } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM hackathon_entries WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
     for (const j of p.jobs) await ctx.db.query(`UPDATE jobs SET active=false WHERE id=$1`, [j]);
-    return "Entry removed.";
+    return "Taken off the ledger.";
   },
 });
 
@@ -160,7 +177,7 @@ const update = defineAction({
     const e = args.id
       ? await ctx.db.one<any>(`SELECT * FROM hackathon_entries WHERE id=$1 AND user_id=$2`, [args.id, ctx.user.id])
       : await ctx.db.one<any>(`SELECT * FROM hackathon_entries WHERE user_id=$1 AND title ILIKE $2 ORDER BY id DESC LIMIT 1`, [ctx.user.id, `%${args.match ?? ""}%`]);
-    if (!e) return { reply: "No matching entry in your ledger." };
+    if (!e) return { reply: `Nothing on your ledger matches${args.match ? ` "${args.match}"` : " that"}. Say "ledger" to see what's there.` };
     const sets: string[] = [];
     const vals: unknown[] = [e.id];
     const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
@@ -176,12 +193,15 @@ const update = defineAction({
     let extra = "";
     if (args.status === "won") {
       for (const days of [30, 45]) await schedule(ctx.db, { userId: ctx.user.id, kind: "hack_payout", payload: { entryId: e.id, days }, runAt: new Date(ctx.now.getTime() + days * 86_400_000) });
-      extra = " I'll nudge you at 30 and 45 days if no payout is logged.";
+      extra = " If no payout is logged in 30 days I'll remind you to chase it, and again at 45.";
     }
     if (args.status === "submitted" && !e.results_expected && !args.results_expected) {
-      extra = " When you know the results date, tell me and I'll track it (Colosseum-scale events lag ~7 weeks).";
+      extra = " When you know the results date, tell me and I'll watch for it. The big ones can take seven weeks.";
     }
-    return { reply: `Updated "${e.title}": ${sets.filter((s) => !s.startsWith("updated_at")).map((s) => s.split("=")[0]).join(", ")}.${extra}` };
+    const changed = sets.filter((s) => !s.startsWith("updated_at")).map((s) => s.split("=")[0]);
+    const said: Record<string, string> = { status: args.status === "won" ? "marked won, well done" : args.status === "submitted" ? "marked submitted" : `now ${args.status}`, submission_url: "submission link saved", prize: `prize ${args.prize}`, notes: "notes saved", deadline: args.deadline ? `deadline ${fmt(parseWhen(args.deadline, ctx.user.tz, ctx.now) ?? ctx.now, ctx.user.tz)}` : "", results_expected: "results date saved", payout_received: "payout logged" };
+    const summary = changed.map((c) => said[c]).filter(Boolean).join(", ") || "nothing changed";
+    return { reply: `${e.title}: ${summary}.${extra}` };
   },
 });
 
@@ -192,15 +212,20 @@ const ledger = defineAction({
   schema: z.object({}),
   async run(_a, ctx) {
     const rows = await ctx.db.query<any>(`SELECT * FROM hackathon_entries WHERE user_id=$1 ORDER BY (status IN ('won','lost','withdrawn')), deadline NULLS LAST, id`, [ctx.user.id]);
-    if (!rows.length) return { reply: "Ledger is empty. Say 'track <hackathon>' to add one." };
+    if (!rows.length) return { reply: "Nothing on the ledger yet. Say \"I'm entering <hackathon>\" and I'll keep it." };
     const open = rows.filter((r: any) => !["won", "lost", "withdrawn"].includes(r.status));
     const closed = rows.filter((r: any) => ["won", "lost", "withdrawn"].includes(r.status));
-    const lines = open.map((r: any) => `#${r.id} ${r.status.padEnd(10)} ${r.deadline ? `${fmt(r.deadline, ctx.user.tz)} (${humanDelta(ctx.now, r.deadline)})` : "no deadline"} — ${r.title}`);
+    const lines: string[] = [];
+    if (open.length) {
+      lines.push(open.length === 1 ? "One in play." : `${open.length} in play.`);
+      for (const r of open) lines.push(`${r.title}, ${r.status}${r.deadline ? `, closes ${fmt(r.deadline, ctx.user.tz)} (${humanDelta(ctx.now, r.deadline)} left)` : ", no deadline yet"}`);
+    }
     if (closed.length) {
       const won = closed.filter((r: any) => r.status === "won").length;
       const decided = closed.filter((r: any) => r.status !== "withdrawn").length;
-      lines.push("", `Outcomes: ${won} won / ${decided} decided (${decided ? Math.round((won / decided) * 100) : 0}%)`);
-      for (const r of closed) lines.push(`#${r.id} ${r.status} — ${r.title}${r.prize ? ` (${r.prize}${r.payout_received ? ", paid" : ", unpaid"})` : ""}`);
+      if (lines.length) lines.push("");
+      lines.push(`Decided so far: ${won} won out of ${decided}${decided ? `, ${Math.round((won / decided) * 100)}%` : ""}.`);
+      for (const r of closed) lines.push(`${r.title}, ${r.status}${r.prize ? `, ${r.prize}${r.payout_received ? ", paid" : ", not paid yet"}` : ""}`);
     }
     return { reply: lines.join("\n") };
   },

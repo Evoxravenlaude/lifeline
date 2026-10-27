@@ -22,7 +22,7 @@ else if (cmd === "digest") console.log(await buildDigest(db, user, new Date()));
 else if (cmd === "scout") console.log((await scout(db, process.argv[3] ?? "solana", process.argv[4])).map(fmtHit).join("\n"));
 else {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  console.log("lifeline cli — type a sentence; 'quit' to exit");
+  console.log("lifeline cli. Type a sentence; 'quit' to exit");
   rl.setPrompt("> ");
   rl.prompt();
   let buttons: { label: string; data: string }[] = [];
