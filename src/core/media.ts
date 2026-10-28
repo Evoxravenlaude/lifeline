@@ -48,7 +48,6 @@ export function abilityLines(): string[] {
   const on = (b: boolean, how: string, off: string) => (b ? `on (${how})` : `off (${off})`);
   return [
     `Hearing voice notes: ${on(Boolean(config.openaiKey || groq || gkey()), config.openaiKey ? "OpenAI" : groq ? `Groq ${config.groqSttModel}` : "Gemini", "needs a Groq, OpenAI or Gemini key")}.`,
-    `Speaking: ${on(Boolean(gkey()), `Gemini ${config.ttsModel}, voice ${config.ttsVoice}`, "needs GEMINI_API_KEY")}.`,
     `Looking at photos: ${on(Boolean(gkey() || groq), gkey() ? "Gemini" : "Groq", "needs a Gemini or Groq key")}.`,
     `Drawing: ${on(mediaAbilities().draw, config.cfAccountId && config.cfApiToken ? "Cloudflare" : config.geminiImageModel ? "Gemini" : "Pollinations, slow", "set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN")}.`,
     `Web search: ${on(Boolean(gkey() || groq), gkey() ? "Gemini with Google Search" : "Groq compound", "needs a Gemini or Groq key")}.`,
@@ -116,37 +115,83 @@ export function wantsVoice(prefs: Record<string, unknown>, r: { text: string; sp
   return r.speak === true || pref === "always" || (pref === "mirror" && spoken);
 }
 
+/** The last speech outcome, for /doctor: which route works, or exactly what each one said. */
+export const voiceDiag: { lastOkAt: number | null; route: string | null; errors: string[] } = { lastOkAt: null, route: null, errors: [] };
+
+type TtsRoute = { kind: "interactions" | "generate"; model: string };
+let workingRoute: TtsRoute | null = null;
+let discovered: string[] | null = null;
+
+/** Every speech model this key can use, newest flash first, from Google's own model list. */
+async function discoverTts(): Promise<string[]> {
+  if (discovered) return discovered;
+  try {
+    const r = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { "x-goog-api-key": gkey() }, signal: AbortSignal.timeout(8000) });
+    const j: any = r.ok ? await r.json() : {};
+    const ids: string[] = (j.models ?? []).map((m: any) => String(m.name).replace(/^models\//, "")).filter((n: string) => /tts/i.test(n));
+    const ver = (n: string) => Number(/(\d+(?:\.\d+)?)/.exec(n)?.[1] ?? 0);
+    discovered = ids.sort((a, b) => Number(/lite|pro/.test(a)) - Number(/lite|pro/.test(b)) || ver(b) - ver(a));
+  } catch { discovered = []; }
+  return discovered;
+}
+
 export async function speak(text: string, opts: { voice?: string; persona?: string; ogg?: boolean } = {}): Promise<Speech | null> {
   if (!gkey()) return null;
   const words = speakable(text).slice(0, 1400);
   if (!words) return null;
   const voice = VOICES[opts.voice ?? ""] ?? opts.voice ?? config.ttsVoice;
   const style = STYLE[opts.persona ?? "plain"] ?? STYLE.plain;
+  // The route that worked last time first; then the configured models both ways; then whatever Google lists.
+  const routes: TtsRoute[] = [
+    ...(workingRoute ? [workingRoute] : []),
+    { kind: "interactions", model: config.ttsModel }, { kind: "generate", model: config.ttsModel },
+    { kind: "generate", model: config.ttsFallbackModel },
+  ];
+  const errors: string[] = [];
   let wav: Buffer | null = null;
-  try { wav = await ttsInteractions(words, voice, style); } catch (e: any) { log.warn({ err: e?.message }, "tts (interactions) failed"); }
-  if (!wav) { try { wav = await ttsGenerate(words, voice, style); } catch (e: any) { log.warn({ err: e?.message }, "tts (generateContent) failed"); } }
-  if (!wav) return null;
-  const seconds = Math.max(1, Math.round((wav.length - 44) / (24000 * 2)));
-  return { wav, ogg: opts.ogg === false ? undefined : (await toOgg(wav)) ?? undefined, seconds };
+  const tryRoute = async (rt: TtsRoute) => {
+    try {
+      wav = rt.kind === "interactions" ? await ttsInteractions(words, voice, style, rt.model) : await ttsGenerate(words, voice, style, rt.model);
+      if (wav) { workingRoute = rt; voiceDiag.route = `${rt.model} (${rt.kind === "interactions" ? "Interactions API" : "generateContent"})`; voiceDiag.lastOkAt = Date.now(); voiceDiag.errors = []; }
+      else errors.push(`${rt.model} via ${rt.kind}: answered without audio`);
+    } catch (e: any) { errors.push(`${rt.model} via ${rt.kind}: ${String(e?.message ?? e).slice(0, 220)}`); }
+  };
+  const seen = new Set<string>();
+  for (const rt of routes) { const k = `${rt.kind}:${rt.model}`; if (seen.has(k)) continue; seen.add(k); await tryRoute(rt); if (wav) break; }
+  if (!wav) for (const m of (await discoverTts()).slice(0, 3)) {
+    for (const kind of ["generate", "interactions"] as const) { const k = `${kind}:${m}`; if (seen.has(k)) continue; seen.add(k); await tryRoute({ kind, model: m }); if (wav) break; }
+    if (wav) break;
+  }
+  if (!wav) { voiceDiag.errors = errors; log.warn({ errors }, "speech failed on every route"); return null; }
+  const w = wav as Buffer;
+  const seconds = Math.max(1, Math.round((w.length - 44) / (24000 * 2)));
+  return { wav: w, ogg: opts.ogg === false ? undefined : (await toOgg(w)) ?? undefined, seconds };
 }
 
-async function ttsInteractions(text: string, voice: string, style: string): Promise<Buffer | null> {
+/** /doctor's live check: say one word and report what happened. */
+export async function probeVoice(): Promise<string> {
+  if (!gkey()) return "Speaking: off (needs GEMINI_API_KEY).";
+  const sp = await speak("Testing.", { ogg: true });
+  if (!sp) return `Speaking: not working right now. What Google said:\n${voiceDiag.errors.map((e) => `  ${e}`).join("\n")}`;
+  return `Speaking: working, via ${voiceDiag.route}. ${sp.ogg ? "Voice bubbles: yes (ffmpeg found)." : "Voice bubbles: no, ffmpeg is missing from the server, so replies come as audio files."}`;
+}
+
+async function ttsInteractions(text: string, voice: string, style: string, model: string): Promise<Buffer | null> {
   const r = await fetch(`${GEMINI}/interactions`, {
     method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": gkey() }, signal: AbortSignal.timeout(45_000),
     body: JSON.stringify({
-      model: config.ttsModel,
+      model,
       input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style }] }] }],
       response_format: { type: "audio" },
       generation_config: { speech_config: [{ voice }] },
     }),
   });
-  if (!r.ok) throw new Error(`interactions ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).replace(/\s+/g, " ").slice(0, 200)}`);
   const data = findAudio(await r.json());
   return data ? asWav(Buffer.from(data, "base64")) : null;
 }
 
-async function ttsGenerate(text: string, voice: string, style: string): Promise<Buffer | null> {
-  const model = config.ttsFallbackModel;
+async function ttsGenerate(text: string, voice: string, style: string, model: string): Promise<Buffer | null> {
   const r = await fetch(`${GEMINI}/models/${model}:generateContent`, {
     method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": gkey() }, signal: AbortSignal.timeout(45_000),
     body: JSON.stringify({
@@ -154,7 +199,7 @@ async function ttsGenerate(text: string, voice: string, style: string): Promise<
       generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
     }),
   });
-  if (!r.ok) throw new Error(`tts ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).replace(/\s+/g, " ").slice(0, 200)}`);
   const data = findAudio(await r.json());
   return data ? asWav(Buffer.from(data, "base64")) : null;
 }

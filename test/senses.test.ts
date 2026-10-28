@@ -71,10 +71,22 @@ describe("hearing, speaking, seeing, drawing, searching", () => {
     const calls = mockFetch([[/\/v1beta\/interactions$/, () => json({ steps: [{ type: "model_output", content: [{ type: "audio", data: asWav(pcm).toString("base64") }] }] })]]);
     const sp = await speak("**Morning**, Ada.", { voice: "calm", persona: "butler" });
     expect(sp?.wav.subarray(0, 4).toString()).toBe("RIFF");
-    expect(sp?.ogg?.subarray(0, 4).toString()).toBe("OggS");
+    // Voice bubbles need ffmpeg; the server image has it, and so does CI. Without it the WAV still goes out as audio.
+    const { execSync } = await import("node:child_process");
+    const hasFfmpeg = (() => { try { execSync("ffmpeg -version", { stdio: "ignore" }); return true; } catch { return false; } })();
+    if (hasFfmpeg) expect(sp?.ogg?.subarray(0, 4).toString()).toBe("OggS");
+    else expect(sp?.ogg).toBeUndefined();
     const sent = JSON.parse(String(calls[0].init!.body));
     expect(sent.generation_config.speech_config[0].voice).toBe("Achernar");
     expect(sent.input[0].content[0].text).toBe("Morning, Ada.");
+  });
+
+  it("reports exactly what Google said when every speech route fails", async () => {
+    Object.assign(config, { geminiKey: "g_test" });
+    const { voiceDiag } = await import("../src/core/media.js");
+    mockFetch([[/\/interactions$/, () => json({ error: { message: "model not found" } }, 404)], [/:generateContent$/, () => json({ error: { message: "quota" } }, 429)], [/\/models\?pageSize/, () => json({ models: [] })]]);
+    expect(await speak("hello")).toBeNull();
+    expect(voiceDiag.errors.join("\n")).toMatch(/404[\s\S]*429/);
   });
 
   it("falls back to the older speech route when the new one fails", async () => {

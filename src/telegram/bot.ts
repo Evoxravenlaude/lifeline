@@ -21,7 +21,7 @@ import { polish, personaOf } from "../core/voice.js";
 import { pipLine } from "../core/pip.js";
 import { admit, circleSummary, FULL_MESSAGE, isOwner } from "../core/circle.js";
 import { copyButton, toPlain, toTelegramHtml } from "../core/format.js";
-import { abilityLines, allow, mediaAbilities, speak, wantsVoice } from "../core/media.js";
+import { abilityLines, allow, mediaAbilities, probeVoice, speak, wantsVoice } from "../core/media.js";
 import { activePlaces, webAddress } from "../core/ways.js";
 import { everythingGroup, everythingIndex, HELP_GROUPS } from "../intent/capabilities.js";
 import { answerWebLogin, webLoginExists } from "../core/weblogin.js";
@@ -90,12 +90,16 @@ export function createBot(db: Db): Bot {
     await db.query(`UPDATE users SET prefs = prefs || '{"kbCleared":true}'::jsonb WHERE id=$1`, [u.id]);
     return { remove_keyboard: true };
   };
-  const sendVoice = async (c: Context, u: { id: number; prefs: Record<string, unknown> }, words: string) => {
-    if (!mediaAbilities().speak || !allow("speak", u.id)) return;
+  /** Speak `words` as a voice note. When someone asked to hear it, a failure is said out loud too (in text). */
+  const sendVoice = async (c: Context, u: { id: number; prefs: Record<string, unknown> }, words: string, asked: boolean) => {
+    if (!mediaAbilities().speak) return asked ? void (await c.reply("I can't speak on this server yet. It needs a Gemini key.").catch(() => {})) : undefined;
+    if (!allow("speak", u.id)) return asked ? void (await c.reply("That's my voice used up for today. Back tomorrow.").catch(() => {})) : undefined;
     await c.replyWithChatAction("record_voice").catch(() => {});
     const sp = await speak(words, { voice: u.prefs.ttsVoice as string | undefined, persona: personaOf(u.prefs) }).catch(() => null);
-    if (sp?.ogg) await c.replyWithVoice(new InputFile(sp.ogg, "lifeline.ogg"), { duration: sp.seconds }).catch((e) => log.warn({ err: e?.message }, "voice send failed"));
-    else if (sp) await c.replyWithDocument(new InputFile(sp.wav, "lifeline.wav")).catch(() => {});
+    let sent = false;
+    if (sp?.ogg) sent = Boolean(await c.replyWithVoice(new InputFile(sp.ogg, "lifeline.ogg"), { duration: sp.seconds }).catch((e) => { log.warn({ err: e?.message }, "voice send failed"); return null; }));
+    if (sp && !sent) sent = Boolean(await c.replyWithAudio(new InputFile(sp.wav, "lifeline.wav"), { title: "lifeline", performer: "Pip" }).catch((e) => { log.warn({ err: e?.message }, "audio send failed"); return null; }));
+    if (!sent && asked) await c.reply("My voice didn't come through this time. /doctor shows what went wrong.").catch(() => {});
   };
   const DICE_SAYS: Record<string, (v: number) => string> = {
     "🎲": (v) => `You rolled a ${v}.`,
@@ -126,7 +130,7 @@ export function createBot(db: Db): Bot {
       const markup = i === parts.length - 1 ? kb(r) ?? remove : undefined;
       await c.reply(toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } }).catch(() => c.reply(toPlain(parts[i]), { reply_markup: markup }));
     }
-    if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : r.text);
+    if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : r.text, Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
   };
   const say = async (c: Context, text: string, extra: Record<string, unknown> = {}) => {
     const u = await userOf(c);
@@ -188,6 +192,7 @@ export function createBot(db: Db): Bot {
     await say(c, line ?? pipLine("idle", u));
   });
   bot.command("doctor", async (c) => {
+    await c.replyWithChatAction("typing").catch(() => {});
     const chain = providerChain();
     const age = (t: number | null) => (t ? (Date.now() - t < 90_000 ? `${Math.round((Date.now() - t) / 1000)}s ago` : `${Math.round((Date.now() - t) / 60_000)} min ago`) : "never");
     const lines = [
@@ -196,6 +201,7 @@ export function createBot(db: Db): Bot {
       ...Object.values(diagnostics.errors).map((e) => `  ${e}`),
       "",
       ...abilityLines(),
+      await probeVoice(),
       "",
       `Places: ${activePlaces()}. Email in: ${config.resendKey && config.resendWebhookSecret ? config.inboundEmail || "on, address not set (INBOUND_EMAIL)" : "off (RESEND_API_KEY and RESEND_WEBHOOK_SECRET)"}. iMessage: ${config.imessageProvider ? `${config.imessageProvider}${config.imessageAddress ? `, ${config.imessageAddress}` : ""}` : "off (see docs/IMESSAGE.md)"}.`,
       `Server address: ${config.publicUrl || "not set (PUBLIC_URL)"}. Website: ${webAddress() || "not set (WEB_URL)"}.`,
