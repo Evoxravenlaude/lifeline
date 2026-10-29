@@ -19,7 +19,7 @@ test/         192 tests on a real Postgres engine: gate, modules, channels, web,
 ## Running it on Railway (with Doppler + Supabase)
 
 1. **Supabase** → New project → Project Settings → Database → copy the **Session pooler** URI (port 5432). That's `DATABASE_URL`. Tables are created on first boot (`npm run schema` prints the SQL if you'd rather run it in the SQL editor first; it's also in `supabase/migrations.sql`).
-2. **Telegram** → @BotFather `/newbot` → `TELEGRAM_BOT_TOKEN`. Anyone with the bot's link or the website joins until the circle is full (`MAX_USERS`, default 15); put your own Telegram id in `ALLOWED_USER_IDS` to be the owner, who always gets in and can send `/circle`. In BotFather `/setdomain` → the web app's domain (your Vercel domain, or the Railway one), so the web app's Telegram login works.
+2. **Telegram** → @BotFather `/newbot` → `TELEGRAM_BOT_TOKEN`. Anyone with the bot's link or the website joins until the circle is full (`MAX_USERS`, default 55); put your own Telegram id in `ALLOWED_USER_IDS` to be the owner, who always gets in and can send `/circle`. In BotFather `/setdomain` → the web app's domain (your Vercel domain, or the Railway one), so the web app's Telegram login works.
 3. **Doppler** → `doppler setup` (project `lifeline`, config `prd`) → paste every secret from `.env.example` → Doppler dashboard → Integrations → Railway → sync to your service. Railway's env then stays empty of secrets.
 4. **Railway** → New project → Deploy from repo (this folder; `railway.json` picks the Dockerfile) → Settings → Networking → Generate domain → put it in `PUBLIC_URL`. Health check is `/health`. Railway sets `PORT`.
 5. **Model** → `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY`. Gemini also powers the grounded scout. `DAILY_MODEL_BUDGET_USD` caps each friend.
@@ -58,7 +58,7 @@ Day one for each friend: `/start` on Telegram → `timezone Europe/London` → `
 
 | Channel | In | Out | Buttons | Notes |
 |---|---|---|---|---|
-| Telegram | text, voice notes, video notes, photos, .ics, Business messages | text, voice notes, pictures, animated dice, inline keyboards, Copy buttons | tap | `/everything`, `/play`, `/voice`, `/persona`, `/link`, `/doctor` |
+| Telegram | text, voice notes, video notes, photos, .ics, Business messages | text, voice notes, pictures, Pip stickers, animated dice, coloured inline buttons, Copy buttons | tap | `/menu` (one message that changes in place: Today, Lists, Health, Money, Trips, Play, Settings, with ‹ Back and OK), `/everything`, `/play`, `/settings`, `/link`, `/doctor` |
 | Web | chat box, mic, photos | chat, voice replies, pictures + live sidebar | click | sign in through the bot or a link code; sessions 30 days |
 | SMS | Android gateway or Twilio webhook | gateway or Twilio REST | `1) Yes 2) No`, reply with the number | links by texting `link <code>`; strangers get silence unless they mention lifeline |
 | iMessage | BlueBubbles / Sendblue webhook | relay REST | same as SMS | see docs/IMESSAGE.md |
@@ -84,16 +84,23 @@ Outbound pushes go to the user's preferred channel and fall back down the chain 
 | Trips | `plan a trip to Accra from dec 20 to dec 27 budget 600 usd` · `add flight … to trip` · `packed charger` · `trip` | Checklist, itinerary, budget, 7/1-day nudges |
 | Lists | `todo: taxes, call bank` · `shopping: eggs, bread` · `bought eggs` · `lists` | Any number of named lists |
 | Dates | `Ada's birthday is march 14` · `countdown visa appointment dec 3` · `dates` | 7-day, 1-day, day-of alerts; birthdays repeat yearly |
-| Habits / spend / notes / memory | `did gym` · `spent 4500 naira on data` · `note: …` · `remember I'm vegetarian` · `/memory` | Streaks, summaries, provenance-tagged memory with Sunday review |
-| Weather / FX / summarise | `weather Lagos tomorrow` · `100 usd to ngn` · `2 sol to usd` · `tldr https://…` | Open-Meteo, ECB rates + CoinGecko, model summary |
+| Habits / spend / notes / memory | `did gym` · `spent 12 euros on lunch` · `note: …` · `remember I'm vegetarian` · `/memory` | Streaks, summaries, provenance-tagged memory with Sunday review |
+| Weather / FX / summarise | `weather Lisbon tomorrow` · `100 usd to inr` · `2 sol to usd` · `tldr https://…` | Open-Meteo, ECB rates + CoinGecko, model summary |
 | Hackathons | `hackathons solana` · `track Colosseum Frontier due nov 30` · `submitted/won Frontier` · `ledger` | 6 sources deduped, odds-style rank, 72h/24h/6h alerts, payout chase, win rate |
 | **Scout** | `scout solana perps for partnerships` · `scout ai agents to apply` · `watch scout fintech africa` · `outreach Perpz: want to integrate your SDK` | New/upcoming projects by niche across web3, crypto, AI, tech, web2 with official site/X/Telegram/Discord/GitHub and founders'/handlers' public handles; Gemini-grounded with citations when a key is set; outreach drafted, you send |
 | Prices / portfolio | `alert when sol above 250` · `alert me if eth moves 10% in 6h` · `price btc eth` · `watch wallet <addr> on solana` · `portfolio` | 5-min polling; refuses keys/seeds |
 | Jobs | `watch jobs lever dorahacks for growth` · `watch jobs remoteok for solana` · `jobs` | Greenhouse/Lever/Ashby/RemoteOK/Remotive; matches in the digest; never applies |
 | Launches | `launches` · `contact <github user>` | Show HN, GitHub, DexScreener + GoPlus (flagged tokens hidden) |
-| Bills (NG) | `billers airtime` · `pay 2000 to BIL099 for 08012345678` | Flutterwave Bills v3, Tier 2 echo-and-confirm |
+| Bills (Nigeria only) | `billers airtime` · `pay 2000 to BIL099 for 08012345678` | Flutterwave Bills v3, Tier 2 echo-and-confirm |
 | Trading | `follow <wallet> on polymarket max 10/trade 50/day` · `shadow report` | Shadow only; blocked-country users refused; no execution |
 | Business | connect the bot under Telegram → Business → Chatbots | Drafts replies to messages in the chats you chose and sends the draft to you; never auto-replies |
+| Calm | `quiet day` · `calm mode on` · `pause for 3 hours` · `I'm back` | Holds every nudge except what you set yourself; calm mode keeps replies gentle and lets things wait for the brief |
+| Safety | `is this legit: …` · forward a suspicious message · `check on me: walking home, 25 min` · `show my emergency card` · `log incident: …` | Scam red flags (never says "safe"), check-ins that alert only contacts who said yes, an emergency card, a tamper-evident incident log, a careful "if something happens to me" plan. See docs/features/safety.md |
+| Money and paperwork | `Ana owes me 40` · `Netflix 15.49 monthly renews on the 3rd` · `my passport expires 3 March 2027` · `rent 1200 due on the 1st` · `I want to buy AirPods for 249` · `add debt: card 2400 at 24%` · `invoice 1500 to Acme due 30 Nov` · `start a savings circle` · `I'm moving to Canada` | IOUs, subscriptions, document expiry, rent, warranties, a cool-off for impulse buys, debt plans, invoice chasing, tax year, savings circles (ajo, chama, tanda, tontine), relocation checklist. See docs/features/money.md |
+| Wellbeing and people | `call Mum every Sunday` · `check on my mood every evening` · `ask me for three good things at 9pm` · `I quit smoking on 1 Oct` · `help me do my taxes` · `buddy up on running with @ana` · `teach me Spanish` | All opt-in and private; crisis messages point to findahelpline.com and the local emergency number. See docs/features/wellbeing.md |
+| Home and the world | `refilled the gas` · `power cut from 6pm to 11pm` · `service the AC every 6 months` · `follow Arsenal` · `prayer times` · `next public holiday` · `status of BA75` · `my year wrapped` | Utilities and outages, home jobs, sports, faith rhythms, holidays and long weekends, flights, the year wrapped. See docs/features/home.md |
+| Work, code and crypto | `watch https://mysite.com` · `watch releases of vercel/next.js` · `decode jwt …` · `explain cron 0 9 * * 1-5` · `gas now` · `explain tx 0x…` · `is this token safe 0x… on base` · `funding on ETH` | Uptime with TLS and domain expiry, GitHub and packages, status pages, dev tools, gas, wallet activity, tx explainer, token and approval checks, claims, funding, Polymarket, ENS/SNS. Read-only. See docs/features/tech.md |
+| Groups | add the bot to a group · `/split 120 dinner @ana @ben` · `/list` · `/when movie night` · `/trivia` · `/birthday 12 March` | Things friends do together; nothing personal ever appears in a group. See docs/TELEGRAM.md |
 | Digest | `digest` · `digest at 8` | Schedule, meds, assignments, hackathon deadlines, trip countdown, job matches, new hackathons |
 
 ## The gate
