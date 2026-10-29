@@ -112,3 +112,8 @@ Live access from the build machine was blocked for most hosts, so shapes were ch
 - Safety's `scam.check` rule takes "is 0x... a scam / safe" before this area sees it. "is this token safe 0x... on base" and "check token 0x..." reach `token.check`. Worth agreeing that a contract address with a chain goes to `token.check`.
 - The core portfolio (`prices.ts`) has no Optimism; activity alerts here do.
 - Wallet activity covers native transfers and ERC-20 transfers (`txlist` + `tokentx`); NFT transfers and internal transactions aren't included.
+
+
+## Addresses people give us
+
+Every user-supplied URL (uptime, status pages, link summaries) goes through `src/core/safefetch.ts`: http(s) only, public addresses only, every redirect checked. The connection itself resolves through `safeLookup`, which refuses private answers, so a name that answers "public" when checked and "private" when connected (DNS rebinding) is still blocked. The TLS certificate check uses the same lookup.

@@ -48,3 +48,7 @@ The core's rules run before the plugins' rules, so a few natural sentences go to
 ## Crisis path
 
 `CRISIS` in `shared.ts` matches specific phrases about self-harm or not wanting to be alive. Everyday phrases ("I cut myself cooking", "this is killing me") don't match. The reply is warm and short. It points to https://findahelpline.com (international, finds free local lines) and to the local emergency number: we name the number only for countries we're sure of, otherwise we say "your local emergency number". It never names a single country's helpline and never lectures. Nothing is stored. The crisis rule is this area's first rule, and mood notes and good things check it too.
+
+## Their clock, not yours (caregiver texts)
+
+The daily text goes out at the time you said in the other person's time zone. It's worked out from their number's country code (`src/core/phonezone.ts`) when that country keeps one clock. For countries with several (the US and Canada on +1, Brazil, Mexico, Australia, Russia, Indonesia and a few others), lifeline asks which city they're in, unless it's your own country, when your clock is used. You can also say it up front: "remind Grandpa to take his pill at 9am by text on +1 416 555 0100, he's in Toronto". Messages to you say "08:00 their time (Lagos)" whenever the clocks differ.

@@ -36,3 +36,15 @@ It needs `WEB_URL` set to the https address of the website (the Vercel address).
 - A real milestone (a 7, 30, 100 or 365 day habit run) comes with Telegram's confetti effect, in a one-to-one chat only, and never in calm mode.
 - Streaks are kinder: one missed day a week is a rest day and keeps the run going. A run that ends says what the best one was, never that it was broken.
 - Live location updates now reach the bot (needed for safety check-ins).
+
+## The menu, redesigned
+
+- `/menu` opens a home screen with a picture card above it, drawn in the website's paper and ink: a greeting, the date, Pip in a pose that fits the hour, and three plates (what's next, what's open or waiting, this week's spending). Each section (Today, Lists, Money...) has its own card. Underneath, the facts read as a small tree, the way a dashboard does.
+- The card is a picture at a signed address that expires in two days (`/card/<kind>.png`, drawn by `src/core/cards.ts`, served by `src/web/extras.ts`). Telegram fetches it, so it needs `PUBLIC_URL` set to the server's https address. Without it the menu is text only, which still works. "plain menu" turns the picture off for one person.
+- Lists in any reply are drawn the same way: `├` for each item, `└` for the last.
+- The command list behind the Menu button is six commands: menu, today, everything, app, settings, help. The old ones still work if typed.
+- Long work (researching a trip plan) shows its steps in one small message that updates as it goes, then settles to "Completed N steps", with the answer below.
+
+## Trip plans
+
+"help me plan a trip to Liechtenstein" asks when and from where, then researches visas for the person's passport, getting there, where to stay, what to do and where to eat with live web search, and writes it up as a page at `/plan/<id>` on the server (unlisted, not indexed, taken down with "delete my Liechtenstein plan"). The reply leads with the one thing to start first, usually the visa. "plan a trip to Accra from dec 20 to dec 27" still makes a quick trip with dates and a packing list.
