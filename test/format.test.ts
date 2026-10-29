@@ -12,7 +12,7 @@ describe("formatting", () => {
     const html = toTelegramHtml("**Gym routine**\n\n## Day 1\n- Bench press 4×8\n* Rows 3×10\n| Day | Focus |\n|---|---|\n| Mon | Push |\nSee [the guide](https://x.io/a?b=1&c=2), *slowly*.");
     expect(html).toContain("<b>Gym routine</b>");
     expect(html).toContain("<b>Day 1</b>");
-    expect(html).toContain("• Bench press 4×8\n• Rows 3×10");
+    expect(html).toContain("├ Bench press 4×8\n└ Rows 3×10"); // lists read as a small tree
     expect(html).toContain("Mon · Push");
     expect(html).toContain('<a href="https://x.io/a?b=1&amp;c=2">the guide</a>');
     expect(html).toContain("<i>slowly</i>");
@@ -69,10 +69,10 @@ describe("errors in words", () => {
 });
 
 describe("where lifeline lives", () => {
-  it("says plainly when it isn't somewhere, and never mentions an app or a login to set up", () => {
+  it("says plainly when it isn't somewhere, and points to the website and app that do exist", () => {
     const a = answerCapability("can you work on whatsapp")!;
     expect(a).toMatch(/^Not WhatsApp, no\./);
-    expect(a).toMatch(/no app to install/);
+    expect(a).toMatch(/works as an app you can install/);
     const b = answerCapability("how do I use you on imessage")!;
     expect(b).toMatch(/On iMessage:/);
     expect(b).not.toMatch(/install the app|log in with/i);

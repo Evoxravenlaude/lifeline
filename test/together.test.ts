@@ -244,3 +244,134 @@ describe("after the review", () => {
     expect((await db.one<{ status: string }>(`SELECT status FROM safety_contacts WHERE user_id=$1`, [u.id]))!.status).toBe("declined");
   });
 });
+
+describe("the last two open items", () => {
+  it("refuses a name that resolves to a private address at connect time (DNS rebinding)", async () => {
+    const { safeLookup } = await import("../src/core/safefetch.js");
+    const err = await new Promise<any>((done) => safeLookup("localhost", {}, (e: any) => done(e)));
+    expect(err?.code).toBe("EBLOCKEDADDR");
+  });
+
+  it("works out the other person's clock from their number or city", async () => {
+    const { zoneForPhone } = await import("../src/core/phonezone.js");
+    const { theirZone } = await import("../src/modules/features/wellbeing/people.js");
+    expect(zoneForPhone("+234 803 123 4567")).toEqual({ country: "NG", tz: "Africa/Lagos" });
+    expect(zoneForPhone("+44 7700 900123")).toEqual({ country: "GB", tz: "Europe/London" });
+    expect(zoneForPhone("+1 416 555 0100")).toEqual({ country: "US", tz: null });
+    const owner = { id: 1, tz: "Europe/London", prefs: { country: "GB" } } as any;
+    expect(await theirZone(owner, "+2348031234567")).toBe("Africa/Lagos");
+    expect(await theirZone(owner, "+447700900123")).toBe("Europe/London");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ results: [{ name: "Toronto", country_code: "CA", country: "Canada", timezone: "America/Toronto", latitude: 43.7, longitude: -79.4 }] }), { headers: { "content-type": "application/json" } })));
+    expect(await theirZone(owner, "+14165550100", "Toronto")).toBe("America/Toronto");
+  });
+});
+
+describe("the new menu, the app and plans", () => {
+  it("signs card links, refuses tampered ones, and draws a card", async () => {
+    const { cardUrl, cardOk, cardPng } = await import("../src/web/extras.js");
+    config.publicUrl = "https://lifeline.example.com"; config.telegramToken = "123:abc";
+    const u = await ensureUser(db, "telegram", "8401", "Ada Okafor");
+    const url = new URL(cardUrl(u.id, "home")!);
+    const [uid, kind, exp, sig, v] = [Number(url.searchParams.get("u")), "home", Number(url.searchParams.get("e")), url.searchParams.get("s")!, url.searchParams.get("v")!];
+    expect(cardOk(uid, kind, exp, sig, new Date(), v)).toBe(true);
+    expect(cardOk(uid, kind, exp, sig, new Date(), "zz")).toBe(false); // the minute is signed too
+    expect(cardOk(uid + 1, kind, exp, sig, new Date(), v)).toBe(false);
+    expect(cardOk(uid, "money", exp, sig, new Date(), v)).toBe(false);
+    expect(cardOk(uid, kind, exp, sig, new Date((exp + 10) * 1000), v)).toBe(false);
+    config.telegramToken = "";
+    expect(cardOk(uid, kind, exp, sig, new Date(), v)).toBe(false); // no bot token, nothing is signed
+    config.telegramToken = "123:abc";
+    config.publicUrl = "http://insecure.example.com";
+    expect(cardUrl(u.id, "home")).toBeNull();
+    const png = await cardPng(db, u.id, "home");
+    expect(png!.subarray(1, 4).toString()).toBe("PNG");
+    const page = await cardPng(db, u.id, "money");
+    expect(page!.length).toBeGreaterThan(1000);
+  }, 30_000);
+
+  it("knows it has a website and an app", async () => {
+    config.webUrl = "https://lifeline.example.com";
+    const u = await ensureUser(db, "telegram", "8402", "Bo");
+    const r = await handleMessage(db, u, "do you have a website?", { channel: "telegram" });
+    expect(r.text).toMatch(/lifeline\.example\.com/);
+    expect(r.buttons?.[0].data).toBe("webapp:https://lifeline.example.com/");
+  });
+
+  it("only suggests new hackathons to people who asked", async () => {
+    const { wantsHackathonNews } = await import("../src/modules/hackathons.js");
+    expect(wantsHackathonNews({ prefs: {} })).toBe(false);
+    expect(wantsHackathonNews({ prefs: { tags: ["ai"] } })).toBe(true);
+    expect(wantsHackathonNews({ prefs: { tags: ["ai"], hackathonNews: false } })).toBe(false);
+    const u = await ensureUser(db, "telegram", "8403", "Cy");
+    expect((await handleMessage(db, u, "send me new hackathons", { channel: "telegram" })).text).toMatch(/morning note/);
+  });
+
+  it("reads the anchors of a trip, and a plan page renders and comes down", async () => {
+    const { readAnchors } = await import("../src/modules/planner.js");
+    expect(readAnchors("February 2027, from Abuja Nigeria. Hike and Travel, food and lounge")).toMatchObject({ when: "February 2027", from: "Abuja Nigeria", style: expect.stringMatching(/Hike and Travel/) });
+    expect(readAnchors("next month from Berlin")).toMatchObject({ when: "next month", from: "Berlin" });
+    const { planHtml } = await import("../src/web/plans.js");
+    const html = planHtml("abcdefghijklmnop", { title: "Liechtenstein in February", destination: "Liechtenstein", when: "February 2027", from: "Abuja", style: null, clock: "Apply for a Schengen visa first.", summary: "", visa: "Schengen visa via the Swiss embassy.", gettingThere: "", budget: "", stay: [{ area: "Triesenberg", why: "Mountain views." }], days: [{ title: "Vaduz", items: ["Castle walk"] }], food: [], tips: [], packing: ["Boots"], questions: [], sources: [{ title: "Swiss embassy", url: "https://example.com/<x>" }], passport: "Nigeria", made: new Date().toISOString() }, false);
+    expect(html).toMatch(/Start here\.<\/b> Apply for a Schengen visa first\./);
+    expect(html).toMatch(/Visa, for a Nigeria passport/);
+    expect(html).not.toMatch(/<x>/);
+    const u = await ensureUser(db, "telegram", "8404", "Dee");
+    await db.query(`INSERT INTO plans (id, user_id, title, data) VALUES ('abcdefghijklmnop',$1,'Liechtenstein in February','{"destination":"Liechtenstein"}')`, [u.id]);
+    const web = createWeb(db, "lifeline_bot");
+    expect((await web.request("/plan/abcdefghijklmnop")).status).toBe(200);
+    expect((await handleMessage(db, u, "delete my Liechtenstein plan", { channel: "telegram" })).text).toMatch(/Taken down/);
+    expect((await web.request("/plan/abcdefghijklmnop")).status).toBe(404);
+  });
+
+  it("without a model, a plan request starts nothing it can't finish", async () => {
+    const u = await ensureUser(db, "telegram", "8405", "Eli");
+    const ask = await handleMessage(db, u, "help me plan a trip to Liechtenstein", { channel: "telegram" });
+    expect(ask.text).toMatch(/when are you thinking, and where are you travelling from/);
+    const r = await handleMessage(db, u, "February 2027, from Abuja", { channel: "telegram" });
+    expect(r.text).toMatch(/can't research a full plan right now|I'm going to Liechtenstein/);
+  });
+});
+
+describe("after the second review", () => {
+  it("keeps adding Telegram to an account separate from signing in", async () => {
+    const { startWebLogin, answerWebLogin, pollWebLogin, webLoginPurpose } = await import("../src/core/weblogin.js");
+    const link = startWebLogin({ forUserId: 5, forName: "Ada" });
+    expect(webLoginPurpose(link)).toEqual({ purpose: "link", forName: "Ada" });
+    answerWebLogin(link, 99, true);
+    expect(pollWebLogin(link).state).toBe("expired"); // a link request can't sign a browser in
+    const link2 = startWebLogin({ forUserId: 5, forName: "Ada" });
+    answerWebLogin(link2, 99, true);
+    expect(pollWebLogin(link2, { purpose: "link", forUserId: 6 }).state).toBe("expired"); // only for the account that asked
+    const link3 = startWebLogin({ forUserId: 5, forName: "Ada" });
+    answerWebLogin(link3, 99, true);
+    expect(pollWebLogin(link3, { purpose: "link", forUserId: 5 })).toEqual({ state: "approved", userId: 99 });
+    const signin = startWebLogin();
+    answerWebLogin(signin, 98, true);
+    expect(pollWebLogin(signin, { purpose: "link", forUserId: 5 }).state).toBe("expired");
+  });
+
+  it("only ever posts notifications to the real push services", async () => {
+    const { cleanSubscription } = await import("../src/core/webpush.js");
+    const keys = { p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM", auth: "tBHItJI5svbpez7KI4CCXg" };
+    expect(cleanSubscription({ endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys })).not.toBeNull();
+    expect(cleanSubscription({ endpoint: "https://web.push.apple.com/abc", keys })).not.toBeNull();
+    expect(cleanSubscription({ endpoint: "https://internal.example.com/hook", keys })).toBeNull();
+    expect(cleanSubscription({ endpoint: "https://169.254.169.254/latest", keys })).toBeNull();
+  });
+
+  it("reads 'interest rates' as news, not hackathon interests", async () => {
+    const { parseByRules } = await import("../src/intent/rules.js");
+    expect(parseByRules("interest rates are up")?.action).not.toBe("hackathon.set_interests");
+    expect(parseByRules("interests: devtools, payments")?.action).toBe("hackathon.set_interests");
+    for (const s of ["track my period", "lost my phone", "won the lottery", "paid for lunch", "minted it", "sold my phone for 120 usdc", "I delivered the pizza", "homework done for tomorrow", "itinerary for tomorrow", "delete my meal plan", "the price drop is on friday"]) {
+      expect(parseByRules(s)?.action ?? "", s).not.toMatch(/^(?:hackathon|mint|commission|release|trip\.plan|plan\.|drop)\b/);
+    }
+  });
+
+  it("keeps a mint's local time right across a clock change", async () => {
+    const { parseMoment } = await import("../src/modules/features/creative/shared.js");
+    const user = { id: 1, tz: "America/New_York", prefs: {} } as any;
+    const m = parseMoment("Nov 6 2026 at 5pm my time", user, new Date("2026-10-29T12:00:00Z"))!;
+    expect(m.at.toISOString()).toBe("2026-11-06T22:00:00.000Z"); // 17:00 EST, after the clocks went back
+  });
+});

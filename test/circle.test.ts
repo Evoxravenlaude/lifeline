@@ -27,7 +27,7 @@ describe("the circle", () => {
   });
 
   it("the website's Telegram sign-in is refused politely when full", async () => {
-    config.maxUsers = 3; config.allowedUserIds = [];
+    config.maxUsers = 3; config.allowedUserIds = []; config.telegramToken = "123:test";
     const { createHash, createHmac } = await import("node:crypto");
     const fields: Record<string, string> = { id: "555", first_name: "New", auth_date: String(Math.floor(Date.now() / 1000)) };
     const check = Object.keys(fields).sort().map((k) => `${k}=${fields[k]}`).join("\n");
@@ -48,5 +48,21 @@ describe("the circle", () => {
     expect(caps.capabilities.length).toBeGreaterThan(15);
     const pub = await (await web.request("/api/public")).json();
     expect(pub.places).toEqual({ taken: 3, max: 15 });
+  });
+});
+
+describe("telegram sign-in without a bot token", () => {
+  it("is refused, because the hash would be computable by anyone", async () => {
+    const db = await openTestDb();
+    const before = config.telegramToken;
+    config.telegramToken = "";
+    try {
+      const { createHash, createHmac } = await import("node:crypto");
+      const fields: Record<string, string> = { id: "777", first_name: "Mallory", auth_date: String(Math.floor(Date.now() / 1000)) };
+      const check = Object.keys(fields).sort().map((k) => `${k}=${fields[k]}`).join("\n");
+      const hash = createHmac("sha256", createHash("sha256").update("").digest()).update(check).digest("hex");
+      const r = await createWeb(db, "lifeline_bot").request("/auth/telegram", { method: "POST", body: JSON.stringify({ ...fields, hash }), headers: { "content-type": "application/json" } });
+      expect(r.status).toBe(503);
+    } finally { config.telegramToken = before; await db.close(); }
   });
 });

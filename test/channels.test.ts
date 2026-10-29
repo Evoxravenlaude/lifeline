@@ -82,6 +82,7 @@ describe("web app", () => {
   };
 
   it("serves the app, rejects unauthenticated API, accepts a valid Telegram login", async () => {
+    config.telegramToken ||= "123:test"; // with no token, Telegram sign-in is refused outright
     const a = app();
     expect((await a.request("/")).status).toBe(200);
     expect((await a.request("/api/me")).status).toBe(401);

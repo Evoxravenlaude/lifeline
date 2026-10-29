@@ -394,7 +394,7 @@ describe("7. caregiver mode", () => {
     const ask = await say(u, "remind Mum to take her blood pressure pill at 8am by text");
     expect(ask.text).toBe("What's Mum's mobile number? Include the country code, like +44 7700 900123.");
     const echo = await say(u, "+44 7700 900123");
-    expect(echo.text).toMatch(/^This texts Mum at \+447700900123 once, to ask if they're happy to get a daily text at 08:00: "Time to take your blood pressure pill\./);
+    expect(echo.text).toMatch(/^This texts Mum at \+447700900123 once, to ask if they're happy to get a daily text at 08:00 their time \(London\): "Time to take your blood pressure pill\./);
     expect(echo.text).toMatch(/Go ahead\? This waits ten minutes for a yes\./);
     expect(sms).toHaveLength(0);
     const sent = await tap(u, echo.buttons![0].data);

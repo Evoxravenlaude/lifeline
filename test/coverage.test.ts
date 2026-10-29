@@ -56,6 +56,7 @@ const SENTENCES: Record<string, string[]> = {
   "habit.add": ["track habit gym 4x/week", "start tracking reading 5 times a week"],
   "habit.checkin": ["I went to the gym", "did gym yesterday", "worked out", "ran today"],
   "habit.list": ["my habits", "streaks"],
+  "hackathon.news": ["send me new hackathons", "stop hackathons", "no more hackathon messages"],
   "spend.log": ["I spent 4500 naira on data", "paid $20 for lunch", "spent 2k on fuel"],
   "spend.summary": ["how much did I spend this week", "expenses month"],
   "note.add": ["note: the wifi password is behind the router", "jot down call the landlord"],
