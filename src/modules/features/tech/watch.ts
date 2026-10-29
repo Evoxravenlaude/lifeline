@@ -12,7 +12,7 @@ import { onJob, type SchedulerDeps } from "../../../core/scheduler.js";
 import { config } from "../../../core/config.js";
 import { log } from "../../../core/log.js";
 import type { Db } from "../../../core/db.js";
-import { BlockedAddress, checkPublic, publicFetch } from "../../../core/safefetch.js";
+import { BlockedAddress, checkPublic, publicFetch, safeLookup } from "../../../core/safefetch.js";
 import { cachedJson, dayLabel, daysUntil, duration, flush, getJson, HttpError, inBatches, queue, sorry, UA } from "./shared.js";
 
 addSchema(`CREATE TABLE IF NOT EXISTS tech_monitors (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), url TEXT NOT NULL, host TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT true, fails INT NOT NULL DEFAULT 0, first_fail_at TIMESTAMPTZ, down_since TIMESTAMPTZ, last_status TEXT, last_checked TIMESTAMPTZ, cert_expires TIMESTAMPTZ, cert_warned INT, domain_expires TIMESTAMPTZ, domain_warned INT, expiry_checked TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now(), UNIQUE (user_id, url));
@@ -60,7 +60,7 @@ export async function probe(url: string): Promise<{ up: boolean; status?: number
 /** Swappable in tests: read a host's certificate expiry with a TLS handshake. */
 export const probes = {
   tls: (host: string): Promise<Date | null> => new Promise((resolve) => {
-    const s = tls.connect({ host, port: 443, servername: host, timeout: 10_000, rejectUnauthorized: false }, () => {
+    const s = tls.connect({ host, port: 443, servername: host, timeout: 10_000, rejectUnauthorized: false, lookup: safeLookup }, () => {
       const c = s.getPeerCertificate();
       s.end();
       resolve(c?.valid_to ? new Date(c.valid_to) : null);

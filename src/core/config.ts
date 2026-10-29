@@ -111,6 +111,18 @@ export const config = {
   flutterwaveKey: process.env.FLUTTERWAVE_SECRET_KEY ?? "",
   flutterwaveBase: process.env.FLUTTERWAVE_BASE ?? "https://api.flutterwave.com/v3",
   githubToken: process.env.GITHUB_TOKEN ?? "",
+  /* ---- more ways to sign in on the website (src/core/auth.ts, docs/SIGNIN.md) ---- */
+  /** Google OAuth web client id (…apps.googleusercontent.com). Empty turns Google sign-in off. */
+  googleClientId: (process.env.GOOGLE_CLIENT_ID ?? "").trim(),
+  /** Apple Services ID (com.example.lifeline.web). Empty turns Sign in with Apple off. */
+  appleClientId: (process.env.APPLE_CLIENT_ID ?? "").trim(),
+  /** The return URL registered on the Services ID. Empty: the website's own address with a trailing slash. */
+  appleRedirectUri: (process.env.APPLE_REDIRECT_URI ?? "").trim(),
+  /* ---- the installable app: web push (src/core/webpush.ts, docs/APP.md) ---- */
+  vapidPublicKey: (process.env.VAPID_PUBLIC_KEY ?? "").trim(),
+  vapidPrivateKey: (process.env.VAPID_PRIVATE_KEY ?? "").trim(),
+  /** mailto:you@example.com, so push services can reach whoever runs lifeline. */
+  vapidSubject: (process.env.VAPID_SUBJECT ?? "").trim(),
 };
 
 export type Config = typeof config;

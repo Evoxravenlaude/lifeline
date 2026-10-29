@@ -23,11 +23,22 @@ import { admit, circleSummary, FULL_MESSAGE, isOwner } from "../core/circle.js";
 import { copyButton, toPlain, toTelegramHtml } from "../core/format.js";
 import { ASKS, BACK, OK, panel, shapeAnswer, type Btn, type Style } from "./panels.js";
 import { ensurePip, pipSticker } from "./stickers.js";
+import { cardUrl } from "../web/extras.js";
+import { signInMethods } from "../core/auth.js";
+import { pushOn } from "../core/webpush.js";
+
+/** /doctor: which ways into the website are on, and whether app notifications can go out. */
+async function webWaysLine(): Promise<string> {
+  const m = await signInMethods("bot");
+  const ways: [string, unknown, string][] = [["Google", m.google, "set GOOGLE_CLIENT_ID"], ["Apple", m.apple, "set APPLE_CLIENT_ID"], ["text code", m.sms, "needs SMS"], ["iMessage code", m.imessage, "needs iMessage"], ["email code", m.email, "needs email sending"]];
+  const on = ways.filter(([, v]) => Boolean(v)).map(([n]) => n), off = ways.filter(([, v]) => !v).map(([n, , why]) => `${n} (${why})`);
+  return `Website sign-in: Telegram${on.length ? `, ${on.join(", ")}` : ""}.${off.length ? ` Off: ${off.join(", ")}.` : ""} App notifications: ${pushOn() ? "on" : "off (set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT)"}.`;
+}
 import { pluginLocationHandlers } from "../core/plugins.js";
 import { abilityLines, allow, mediaAbilities, probeVoice, speak, wantsVoice } from "../core/media.js";
 import { activePlaces, webAddress } from "../core/ways.js";
 import { everythingGroup, everythingIndex, helpGroups } from "../intent/capabilities.js";
-import { answerWebLogin, webLoginExists } from "../core/weblogin.js";
+import { answerWebLogin, webLoginExists, webLoginPurpose } from "../core/weblogin.js";
 import { activateGroup, deactivateGroup, dueBirthdays, groupActive, groupButton, groupCommand, guestAnswer, memberOf, wordsToCommand, type GroupOut, type Person } from "./group.js";
 
 /** Telegram HTML: escape; bold the head line of a multi-line message so lists read at a glance; keep links clickable. */
@@ -44,10 +55,10 @@ export const ABOUT_SHORT = "Your day, your body, your money and your work, kept 
 
 /** Four ways in, under the welcome only. They scroll away with it. */
 const WAYS_IN = () => new InlineKeyboard().text("Open the menu ›", "p:home").primary().row().text("What can you do?", "say:what can you do").text("Things I can track", "say:what can you track");
+/** The command list behind the Menu button: six, short, alike. Everything else is a sentence away (and the old commands still work). */
 const COMMANDS = [
-  ["menu", "Everything in one place"], ["today", "Your day in one message"], ["lists", "Your lists"], ["track", "Sleep, weight, mood and more"],
-  ["cycle", "Your period and cycle"], ["money", "This week's spending"], ["play", "A quick game"], ["everything", "All I can do, in drawers"],
-  ["settings", "Voice, personality, brief time"], ["link", "Use me on the web, by text, email or iMessage"], ["undo", "Take back the last thing"], ["doctor", "Check that everything's connected"],
+  ["menu", "Your home screen"], ["today", "Your day at a glance"], ["everything", "All I can do, in drawers"],
+  ["app", "Open lifeline as an app"], ["settings", "Voice, brief and calm mode"], ["help", "How to talk to me"],
 ] as const;
 const TZ_CHOICES: [string, string][] = [["London", "Europe/London"], ["New York", "America/New_York"], ["Los Angeles", "America/Los_Angeles"], ["Lagos", "Africa/Lagos"], ["Nairobi", "Africa/Nairobi"], ["Johannesburg", "Africa/Johannesburg"], ["Dubai", "Asia/Dubai"], ["Mumbai", "Asia/Kolkata"], ["Singapore", "Asia/Singapore"], ["Berlin", "Europe/Berlin"], ["São Paulo", "America/Sao_Paulo"], ["Sydney", "Australia/Sydney"]];
 
@@ -80,7 +91,11 @@ function kb(r: Reply): InlineKeyboard | undefined {
   const copy = copyButton(r.text);
   if (!r.buttons?.length && !copy) return undefined;
   const k = new InlineKeyboard();
-  (r.buttons ?? []).forEach((b, i) => { k.text(b.label, b.data); const st = styleOf(b.data, b.label); if (st) k.style(st); if (i % 2 === 1) k.row(); });
+  (r.buttons ?? []).forEach((b, i) => {
+    if (b.data.startsWith("webapp:")) k.webApp(b.label, b.data.slice(7)); // opens the website inside Telegram
+    else { k.text(b.label, b.data); const st = styleOf(b.data, b.label); if (st) k.style(st); }
+    if (i % 2 === 1) k.row();
+  });
   if (r.buttons?.some((b) => /^undo:/.test(b.data))) k.text("OK", "p:ok").style("primary");
   if (copy) { if (r.buttons?.length) k.row(); k.copyText(copy.label, copy.text); }
   return k;
@@ -190,12 +205,45 @@ export function createBot(db: Db): Bot {
     await c.reply(toHtml(t), { parse_mode: "HTML", link_preview_options: { is_disabled: true }, ...extra }).catch(() => c.reply(toPlain(t), extra as any));
   };
 
+  /**
+   * Long work shows its steps in one small message that updates in place, the way a person says "on it": each step
+   * ticks over as it finishes, and at the end it settles to "Completed N steps". Short replies never see it.
+   */
+  const stepsFor = (c: Context) => {
+    let msgId: number | null = null, sent: Promise<unknown> | null = null;
+    const done: string[] = [];
+    let current: string | null = null;
+    const draw = () => [`<i>Working on it</i>`, ...[...done.map((d) => `${d}, done`), ...(current ? [`${current}…`] : [])].map((t, i, a) => `${i === a.length - 1 ? "└" : "├"} ${toHtml(t)}`)].join("\n");
+    return {
+      step: async (text: string) => {
+        if (current) done.push(current);
+        current = text;
+        if (msgId === null) {
+          if (!sent) sent = c.reply(draw(), { parse_mode: "HTML" }).then((m) => { msgId = m.message_id; }).catch(() => {});
+          await sent;
+        } else await c.api.editMessageText(c.chat!.id, msgId, draw(), { parse_mode: "HTML" }).catch(() => {});
+        await c.replyWithChatAction("typing").catch(() => {});
+      },
+      done: async () => {
+        if (msgId === null) return;
+        if (current) done.push(current);
+        await c.api.editMessageText(c.chat!.id, msgId, `<i>Completed ${done.length} step${done.length === 1 ? "" : "s"}</i>`, { parse_mode: "HTML" }).catch(() => {});
+      },
+    };
+  };
+
   bot.command("start", async (c) => {
     const u = await userOf(c);
     const payload = (c.match ?? "").trim();
+    if (payload.startsWith("link_")) {
+      const id = payload.slice(5);
+      const what = webLoginPurpose(id);
+      if (!what || what.purpose !== "link") return say(c, "That link has expired. Go back to the page and press the button again; it lasts five minutes.");
+      return say(c, `Add this Telegram account to ${what.forName ? `${what.forName}'s` : "a"} lifeline account on the web? Everything you tell me here would then go into that account. Only say yes if it's your own account and you just pressed the button yourself.`, { reply_markup: new InlineKeyboard().text("Yes, add it", `weblogin:yes:${id}`).text("No", `weblogin:no:${id}`) });
+    }
     if (payload.startsWith("web_")) {
       const id = payload.slice(4);
-      if (!webLoginExists(id)) return say(c, "That sign-in link has expired. Go back to the page and press the button again; it lasts five minutes.");
+      if (!webLoginExists(id) || webLoginPurpose(id)?.purpose !== "signin") return say(c, "That sign-in link has expired. Go back to the page and press the button again; it lasts five minutes.");
       return say(c, "Sign in to lifeline on the web? Only say yes if you just pressed the button yourself, on your own device.", { reply_markup: new InlineKeyboard().text("Yes, sign me in", `weblogin:yes:${id}`).text("No", `weblogin:no:${id}`) });
     }
     const first = u.name ? u.name.split(" ")[0] : null;
@@ -217,9 +265,14 @@ export function createBot(db: Db): Bot {
     await showPanel(c, u, "home");
   });
   /** Send a fresh panel (the menu, or one of its pages). */
+  /** The picture card above a panel (a link preview of the signed card image), or no preview at all. */
+  const preview = (u: { id: number; prefs: Record<string, unknown> }, card?: string) => {
+    const url = card && u.prefs.menuCard !== false ? cardUrl(u.id, card) : null;
+    return url ? { url, prefer_large_media: true, show_above_text: true } : { is_disabled: true };
+  };
   const showPanel = async (c: Context, u: Awaited<ReturnType<typeof userOf>>, key: string) => {
     const r = await panel(db, u, key);
-    if (r.panel) await c.reply(toHtml(r.panel.text), { parse_mode: "HTML", reply_markup: toKb(r.panel.rows), link_preview_options: { is_disabled: true } }).catch(() => c.reply(toPlain(r.panel!.text), { reply_markup: toKb(r.panel!.rows) }));
+    if (r.panel) await c.reply(toHtml(r.panel.text), { parse_mode: "HTML", reply_markup: toKb(r.panel.rows), link_preview_options: preview(u, r.panel.card) }).catch(() => c.reply(toPlain(r.panel!.text), { reply_markup: toKb(r.panel!.rows) }));
   };
   bot.command(["menu", "home"], async (c) => showPanel(c, await userOf(c), "home"));
   bot.command("settings", async (c) => showPanel(c, await userOf(c), "settings"));
@@ -231,7 +284,8 @@ export function createBot(db: Db): Bot {
   bot.command("scout", async (c) => say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } }));
   bot.command("help", async (c) => say(c, FULL_HELP));
   const drawers = () => { const rows: Btn[][] = []; helpGroups().forEach(([t], i) => { if (i % 2 === 0) rows.push([]); rows[rows.length - 1].push({ label: `${t} ›`, data: `ev:${i}` }); }); return toKb([...rows, [BACK("home"), OK]]); };
-  bot.command(["everything", "all", "features"], async (c) => { await c.reply(toHtml(everythingIndex()), { parse_mode: "HTML", reply_markup: drawers() }); });
+  bot.command(["everything", "all", "features"], async (c) => { const u = await userOf(c); await c.reply(toHtml(everythingIndex()), { parse_mode: "HTML", reply_markup: drawers(), link_preview_options: preview(u, "everything") }); });
+  bot.command(["app", "web", "website"], async (c) => send(c, await handleMessage(db, await userOf(c), "open the app", { channel: "telegram" })));
   bot.command(["play", "game", "games"], async (c) => showPanel(c, await userOf(c), "play"));
   bot.command("voice", async (c) => showPanel(c, await userOf(c), "settings"));
   bot.command("circle", async (c) => {
@@ -263,6 +317,7 @@ export function createBot(db: Db): Bot {
       "",
       `Places: ${activePlaces()}. Email in: ${config.resendKey && config.resendWebhookSecret ? config.inboundEmail || "on, address not set (INBOUND_EMAIL)" : "off (RESEND_API_KEY and RESEND_WEBHOOK_SECRET)"}. iMessage: ${config.imessageProvider ? `${config.imessageProvider}${config.imessageAddress ? `, ${config.imessageAddress}` : ""}` : "off (see docs/IMESSAGE.md)"}.`,
       `Server address: ${config.publicUrl || "not set (PUBLIC_URL)"}. Website: ${webAddress() || "not set (WEB_URL)"}.`,
+      await webWaysLine(),
       `Guest calls from other chats: ${(c.me as any).supports_guest_queries ? "on" : "off (turn on guest mode in @BotFather)"}. App inside Telegram: ${/^https:/.test(webAddress()) ? "on" : "off (WEB_URL must be https)"}.`,
     ];
     await c.reply(lines.join("\n"), { link_preview_options: { is_disabled: true } });
@@ -383,7 +438,9 @@ export function createBot(db: Db): Bot {
     const text = OLD_TILES[raw] && !["Scout", "Pip"].includes(OLD_TILES[raw]) ? OLD_TILES[raw] : shapeAnswer(asked, raw);
     const forwarded = Boolean((c.message as any).forward_origin || (c.message as any).forward_date);
     await c.replyWithChatAction("typing").catch(() => {});
-    await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded }));
+    const steps = stepsFor(c);
+    await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded, progress: steps.step }));
+    await steps.done();
   });
 
   bot.on("callback_query:data", async (c) => {
@@ -428,9 +485,9 @@ export function createBot(db: Db): Bot {
       if (r.ask) return c.reply(ASKS[r.ask].prompt, { reply_markup: { force_reply: true, input_field_placeholder: ASKS[r.ask].placeholder } }).catch(() => {});
       if (!r.panel) return;
       const p = r.panel;
-      return c.editMessageText(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: { is_disabled: true } }).catch((e) => {
+      return c.editMessageText(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: preview(u, p.card) }).catch((e) => {
         if (/not modified/i.test(String(e?.description ?? e?.message ?? ""))) return;
-        return c.reply(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows) }).catch(() => {});
+        return c.reply(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: preview(u, p.card) }).catch(() => {});
       });
     }
     if (data.startsWith("ev:")) {

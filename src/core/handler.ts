@@ -35,19 +35,32 @@ import { parseRange, parseWhen, parseMoney } from "./time.js";
 import { markDone, snooze } from "../modules/reminders.js";
 import { resolveLog } from "../modules/medications.js";
 
-export type Channel = "telegram" | "web" | "sms" | "imessage" | "email";
+/**
+ * Where a person can be. "google" and "apple" are sign-in identities only and never carry messages;
+ * "app" is the installed web app, reached by web push (src/core/webpush.ts).
+ */
+export type Channel = "telegram" | "web" | "sms" | "imessage" | "email" | "google" | "apple" | "app";
+
+/** Identities that only sign someone in. Nothing is ever sent to them. */
+export const SIGN_IN_ONLY: readonly Channel[] = ["google", "apple"];
 
 export interface Reply extends Attachment {
   text: string;
   buttons?: { label: string; data: string }[];
+  /** For a ping: what sort it is (push()'s kind), so a notification on a lock screen can stay private. */
+  kind?: string;
 }
 
 export async function findUserByIdentity(db: Db, channel: Channel, externalId: string): Promise<User | undefined> {
   return db.one<User>(`SELECT u.* FROM users u JOIN identities i ON i.user_id=u.id WHERE i.channel=$1 AND i.external_id=$2`, [channel, externalId]);
 }
 
-/** Find or create a user for an identity. New users only auto-create on Telegram (allow-listed); other channels must link. */
-export async function ensureUser(db: Db, channel: Channel, externalId: string, name?: string): Promise<User> {
+/**
+ * Find or create a user for an identity. Telegram creates people as they arrive; the website creates them
+ * through a checked sign-in (src/core/auth.ts), which checks the circle has room first. A person made from a
+ * sign-in-only identity (Google, Apple) is reached on the web until they choose somewhere else.
+ */
+export async function ensureUser(db: Db, channel: Channel, externalId: string, name?: string, opts: { prefs?: Record<string, unknown>; email?: string | null } = {}): Promise<User> {
   const existing = await findUserByIdentity(db, channel, externalId);
   if (existing) return existing;
   if (channel === "telegram") {
@@ -58,9 +71,10 @@ export async function ensureUser(db: Db, channel: Channel, externalId: string, n
     }
   }
   const [qs, qe] = config.quietHours;
+  const preferred = SIGN_IN_ONLY.includes(channel) ? "web" : channel;
   const u = (await db.one<User>(
-    `INSERT INTO users (telegram_id, name, tz, digest_hour, quiet_start, quiet_end, preferred_channel) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [channel === "telegram" ? Number(externalId) : null, name ?? null, config.defaultTz, config.digestHour, qs, qe, channel],
+    `INSERT INTO users (telegram_id, name, tz, digest_hour, quiet_start, quiet_end, preferred_channel, prefs, email) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) RETURNING *`,
+    [channel === "telegram" ? Number(externalId) : null, name ?? null, config.defaultTz, config.digestHour, qs, qe, preferred, JSON.stringify(opts.prefs ?? {}), opts.email ?? null],
   ))!;
   await db.query(`INSERT INTO identities (user_id, channel, external_id) VALUES ($1,$2,$3)`, [u.id, channel, externalId]);
   await schedule(db, { userId: u.id, kind: "digest", cron: `0 ${u.digest_hour} * * *`, tz: u.tz });
@@ -108,7 +122,7 @@ const YES = /^(?:yes|y|yes please|yep|yeah|yup|confirm|go ahead|go|do it|sure|ok
 const NO = /^(?:no|n|nope|nah|cancel|never ?mind|don'?t|stop|forget it|leave it)[.!]*$/i;
 
 /** Every message gets an answer in words, even when something underneath breaks. */
-export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date }): Promise<Reply> {
+export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"] }): Promise<Reply> {
   try {
     return await answerMessage(db, user, text, opts);
   } catch (e: any) {
@@ -117,9 +131,9 @@ export async function handleMessage(db: Db, user: User, text: string, opts: { fo
   }
 }
 
-async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date }): Promise<Reply> {
+async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"] }): Promise<Reply> {
   const now = opts.now ?? new Date();
-  const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}` };
+  const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}`, progress: opts.progress };
   const t = text.trim();
   await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, redact(text)]);
 
@@ -171,7 +185,8 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
 
   // 3. "Can you track meds?"
   // A question that carries the real thing ("is this legit: …", "can you explain tx 0x…") is a request, not a question about me.
-  const request = (SPECIFIC.test(t) || /^how (?:do|can) i (?:cancel|unsubscribe from|stop paying for)\b/i.test(t)) && Boolean(parseByRules(t));
+  const ruled = parseByRules(t);
+  const request = Boolean(ruled) && (SPECIFIC.test(t) || /^how (?:do|can) i (?:cancel|unsubscribe from|stop paying for)\b/i.test(t) || ruled!.action === "app.open");
   if (!opts.forwarded && isCapabilityQuestion(t) && !request) {
     const a = answerCapability(t, user.name);
     if (a) { if (thread) await setThread(db, user, null); return finish(db, user, { text: a }); }
@@ -250,6 +265,8 @@ async function answerButton(db: Db, user: User, data: string, now: Date): Promis
   const ctx: Ctx = { db, user, now, sourceMessage: `[button ${data}]` };
   const [kind, a, b] = data.split(":");
   const say = (text: string, buttons?: Reply["buttons"]): Reply => ({ text: polish(text, { persona: personaOf(user.prefs) }), buttons });
+  // Outside Telegram an "open the app" button is just its address.
+  if (kind === "webapp") return say(`Open ${data.slice(7)} to use lifeline on the web, or install it from there as an app.`);
   switch (kind) {
     case "confirm": { const r = renderDecision(await confirmPending(ctx, Number(a))); return say(r.text, r.buttons); }
     case "cancel": return say(await cancelPending(ctx, Number(a)));

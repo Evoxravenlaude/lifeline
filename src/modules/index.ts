@@ -19,6 +19,8 @@ import "./measures.js";
 import "./senses.js";
 import "./fun.js";
 import "./calm.js";
+import "./appinfo.js";
+import "./planner.js";
 
 /* Feature folders: every src/modules/features/<area>/index.ts registers itself (see docs/PLUGINS.md). */
 import { readdirSync, existsSync } from "node:fs";

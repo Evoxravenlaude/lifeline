@@ -5,6 +5,10 @@
  * and sign the person in without any login step.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { addSchema } from "./plugins.js";
+
+/** Sessions made inside Telegram's app are marked: they can use lifeline, but not add or remove ways to sign in. */
+addSchema(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tab_only BOOLEAN NOT NULL DEFAULT false`);
 
 export interface WebAppUser { id: number; first_name?: string; last_name?: string; username?: string }
 

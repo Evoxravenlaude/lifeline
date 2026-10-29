@@ -48,6 +48,8 @@ export function toTelegramHtml(md: string): string {
   const lines = text.split("\n");
   // Replies written by the app (no marks of their own) get a bold first line when it reads as a title.
   const marked = /\*\*|^\s*[-*•#]\s|\u0000/m.test(text);
+  // Lists are drawn as a small tree, like a dashboard: "├" for each item and "└" for the last in a run.
+  const isBullet = lines.map((l) => /^\s*[-*+•]\s+/.test(l));
   const out = lines.map((raw, n) => {
     let line = raw;
     const bullet = /^\s*[-*+•]\s+/.test(line);
@@ -62,7 +64,7 @@ export function toTelegramHtml(md: string): string {
     // A short line that reads like a label ("Evening:", or a first line followed by a body) is set in bold.
     const plainLabel = !/[<*_]/.test(line) && ((/^[A-Z][^:]{1,40}:$/.test(line) && line.length < 44) || (!marked && n === 0 && lines.length >= 3 && line.length < 70 && /[.:!?]$/.test(line)));
     if (head || plainLabel) e = `<b>${e}</b>`;
-    return (bullet ? "• " : "") + e;
+    return (bullet ? (isBullet[n + 1] ? "├ " : "└ ") : "") + e;
   }).join("\n");
   return out
     .replace(/\u0000S(\d+)\u0000/g, (_, k) => `<code>${escHtml(spans[Number(k)])}</code>`)

@@ -24,6 +24,8 @@ export interface Ctx {
   skipAsk?: boolean;
   /** A follow-up the bot is waiting on, so the model can read the message as its answer. */
   thread?: Thread | null;
+  /** For long work (researching a plan): say which step is running, so the person sees it move. Optional; channels without it ignore it. */
+  progress?: (step: string) => Promise<void> | void;
 }
 
 /** A follow-up the bot asked and is waiting on. Lives in users.prefs.thread for ten minutes. */

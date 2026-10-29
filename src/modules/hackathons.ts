@@ -233,4 +233,21 @@ const ledger = defineAction({
   },
 });
 
-register(discover, setTags, track, update, ledger);
+/** New hackathons in the morning note are opt-in: nobody gets them unless they ask (or set their interests). */
+export const wantsHackathonNews = (user: { prefs: Record<string, unknown> }) =>
+  user.prefs?.hackathonNews === true || (user.prefs?.hackathonNews !== false && Array.isArray(user.prefs?.tags) && (user.prefs.tags as unknown[]).length > 0);
+
+const news = defineAction({
+  name: "hackathon.news",
+  tier: 1,
+  description: "Turn new-hackathon suggestions in the morning note on or off. Off by default; only people who ask get them.",
+  schema: z.object({ on: z.boolean() }),
+  async run(args, ctx) {
+    await ctx.db.query(`UPDATE users SET prefs = prefs || jsonb_build_object('hackathonNews', $2::boolean) WHERE id=$1`, [ctx.user.id, args.on]);
+    return args.on
+      ? { reply: "New hackathons that fit you will be in your morning note, three at most. Say \"interests: ai, payments\" to aim them, or \"stop hackathons\" to end them." }
+      : { reply: "No more hackathon suggestions. Ones you're entered in still get their deadline reminders." };
+  },
+});
+
+register(discover, setTags, track, update, ledger, news);

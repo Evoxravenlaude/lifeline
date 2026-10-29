@@ -22,7 +22,7 @@ export function waysIn(code?: string): string {
   const c = code ? `\`link ${code}\`` : "link and the code";
   const web = webAddress();
   const lines = [
-    web ? `On the website: open ${web} and tap Sign in with Telegram. Or type the code there.` : "On the website: tap Sign in with Telegram, or type the code there.",
+    web ? `On the website or the app: open ${web} and sign in (Telegram, or the other ways shown there). You can install it from there as an app. Or type the code there.` : "On the website: sign in with Telegram, or type the code there.",
     smsOn()
       ? config.smsNumber ? `By text message: send ${c} to ${config.smsNumber}.` : `By text message: send ${c} to the lifeline number.`
       : "By text message: not switched on for this circle yet.",
@@ -38,7 +38,8 @@ export function waysIn(code?: string): string {
 export function waysInForModel(): string {
   return [
     "How someone uses lifeline in another place (answer from this, never invent an app, account, password or download):",
-    "There is no app to install and nothing to log into. Every place is the same assistant with the same memory, joined by a six-character code: the person says \"link\" here, gets a code, and sends \"link CODE\" from the other place within fifteen minutes.",
+    `lifeline has a website and an app: ${webAddress() || "the lifeline website"}. It opens inside Telegram too ("Open the app" in /menu, or say "open the app"), and it can be installed on a phone or computer from the site so reminders arrive as notifications even with Telegram closed. People sign in there with the options the page shows (Telegram first). Never claim there is no website or app.`,
+    "Every place is the same assistant with the same memory. To join another place by message, the person says \"link\" here, gets a six-character code, and sends \"link CODE\" from the other place within fifteen minutes.",
     waysIn(),
   ].join("\n");
 }

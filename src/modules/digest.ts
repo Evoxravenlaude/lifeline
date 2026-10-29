@@ -11,7 +11,7 @@ import { register } from "../policy/registry.js";
 import { fmt, humanDelta } from "../core/time.js";
 import { onJob, push } from "../core/scheduler.js";
 import { rangeBounds } from "./calendar.js";
-import { hackLine, rankedForUser } from "./hackathons.js";
+import { hackLine, rankedForUser, wantsHackathonNews } from "./hackathons.js";
 import type { Db } from "../core/db.js";
 import type { User } from "../policy/types.js";
 import { DateTime } from "luxon";
@@ -74,7 +74,7 @@ export async function buildDigest(db: Db, user: User, now: Date, opts: { peek?: 
     lines.push("", `${jobs.length === 1 ? "A job that fits you" : `${jobs.length} jobs that fit you`}:`, ...jobs.map((j: any) => `${j.title}, ${j.url}`));
     if (!opts.peek) for (const j of jobs) await db.query(`INSERT INTO job_seen (user_id, post_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, j.id]);
   }
-  const fresh = await rankedForUser(db, user, now, 3);
+  const fresh = wantsHackathonNews(user) ? await rankedForUser(db, user, now, 3) : [];
   if (fresh.length) {
     lines.push("", `New since yesterday, ${fresh.length === 1 ? "one hackathon" : `${fresh.length} hackathons`} worth a look:`, ...fresh.map((h) => hackLine(h, user.tz, now)));
     if (!opts.peek) for (const h of fresh) await db.query(`INSERT INTO hackathon_seen (user_id, hackathon_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, h.id]);
@@ -99,9 +99,11 @@ onJob("memory_review", async (job, deps) => {
   const user = await deps.getUser(job.user_id!);
   if (!user) return;
   const rows = await deps.db.query<{ id: number; fact: string }>(`SELECT id, fact FROM memories WHERE user_id=$1 AND NOT confirmed ORDER BY id LIMIT 5`, [user.id]);
-  for (const r of rows) {
-    await push(deps, user, "memory", `Sunday check. I picked this up and haven't used it yet: "${r.fact}". Keep it?`, { exempt: true, buttons: [{ label: "Keep", data: `mem:keep:${r.id}` }, { label: "Drop", data: `mem:drop:${r.id}` }] });
-  }
+  if (!rows.length) return;
+  // One message, not five: the first thing to check with its buttons, and the rest named so they can be reviewed in words.
+  const [first, ...rest] = rows;
+  const more = rest.length ? `\n\nAlso picked up: ${rest.map((r) => `"${r.fact}"`).join(", ")}. Say "what do you know about me" to go through them.` : "";
+  await push(deps, user, "memory", `Sunday check. I picked this up and haven't used it yet: "${first.fact}". Keep it?${more}`, { buttons: [{ label: "Keep", data: `mem:keep:${first.id}` }, { label: "Drop", data: `mem:drop:${first.id}` }] });
 });
 
 const now = defineAction({

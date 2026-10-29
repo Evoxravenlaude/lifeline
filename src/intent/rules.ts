@@ -53,12 +53,16 @@ const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   [/^forget (?!(?:all\s+)?(?:of\s+)?my\s+(?:cycle|period|menstrual)\s+(?:data|history|tracking|logs?)$)(?:that |about )?(.+)$/i, (m) => ({ action: "memory.forget", args: { match: m[1] } })],
 
   // hackathons
+  [/^(?:send me|show me|give me|turn on|i want)\s+(?:new\s+)?hackathons?(?:\s+(?:in|with)\s+(?:my|the)\s+(?:brief|morning note|digest))?$|^hackathon (?:news|suggestions) on$/i, () => ({ action: "hackathon.news", args: { on: true } })],
+  [/^(?:stop|no more|turn off|don'?t send(?: me)?|i don'?t want)\s+(?:the\s+|any\s+)?(?:new\s+)?hackathons?(?:\s+(?:news|messages|suggestions|updates))?$|^hackathon (?:news|suggestions) off$/i, () => ({ action: "hackathon.news", args: { on: false } })],
   [/^(?:hackathons?|find hackathons?|discover)(?:\s+(.+))?$/i, (m) => ({ action: "hackathon.discover", args: { tag: m[1] } })],
-  [/^track (?:hackathon )?(.+?)(?:\s+(?:due|deadline)\s+(.+))?$/i, (m) => ({ action: "hackathon.track", args: { title: m[1], deadline: m[2] } })],
+  // Only a hackathon by name or with a deadline: "track my period" or "track my order" are not entries.
+  [/^track (?!(?:my|a|an|the|our|this|that|it)\b)(.+?\bhackathon\b.*?|.+?)\s+(?:due|deadline)\s+(.+)$|^track (?:the )?hackathon (.+)$/i, (m) => ({ action: "hackathon.track", args: { title: m[1] ?? m[3], deadline: m[2] } })],
   [/^(?:ledger|my entries|my hackathons)$/i, () => ({ action: "hackathon.ledger", args: {} })],
-  [/^(?:submitted|registered|building|won|lost|withdrew|withdrawn)\s+(.+)$/i, (m) => ({ action: "hackathon.update", args: { match: m[1], status: m[0].split(/\s/)[0].toLowerCase().replace("withdrew", "withdrawn") } })],
-  [/^(?:got paid|paid|payout received)\s+for\s+(?![\d$₦£€])(.+)$/i, (m) => ({ action: "hackathon.update", args: { match: m[1], payout_received: "today" } })],
-  [/^interests?:?\s+(.+)$/i, (m) => ({ action: "hackathon.set_interests", args: { tags: m[1].split(/\s*,\s*/) } })],
+  // "submitted my tax return", "won the lottery", "lost my phone" are life, not the ledger.
+  [/^(?:submitted|registered|building|won|lost|withdrew|withdrawn)\s+(?!(?:my|a|an|some|it|that|this|our|his|her|their|for|to|on|in|at|me|you|him|them|us|everything|nothing|track|sleep|weight)\b)(?!the\s+(?!.*\b(?:hackathon|buildathon|bounty|hack)\b))(.+)$/i, (m) => ({ action: "hackathon.update", args: { match: m[1], status: m[0].split(/\s/)[0].toLowerCase().replace("withdrew", "withdrawn") } })],
+  [/^(?:got paid|payout received)\s+for\s+(?![\d$₦£€])(?!(?:my|the|a|an|lunch|dinner|breakfast|work|it|that|this)\b)(.+)$|^paid\s+for\s+(?:the\s+)?(.+?\s+(?:hackathon|bounty|buildathon))$/i, (m) => ({ action: "hackathon.update", args: { match: m[1] ?? m[2], payout_received: "today" } })],
+  [/^(?:interests:|my interests are)\s*(.+)$/i, (m) => ({ action: "hackathon.set_interests", args: { tags: m[1].split(/\s*,\s*/) } })],
 
   // trading (shadow)
   [/^follow\s+(\S{20,})\s+on\s+(polymarket|pumpfun)(?:\s+max\s+([\d.]+)(?:\/trade)?\s+([\d.]+)(?:\/day)?)?/i, (m) => ({ action: "trading.follow_wallet", args: { address: m[1], venue: m[2].toLowerCase(), max_per_trade: Number(m[3] ?? 10), max_per_day: Number(m[4] ?? 50) } })],
@@ -153,7 +157,8 @@ export function parseByRules(text: string): Intent | null {
   const tryAll = (x: string) => {
     for (const [re, fn] of [...pluginRules(), ...RULES]) {
       const m = x.match(re);
-      if (m) return fn(m);
+      const hit = m ? fn(m) : null;
+      if (hit) return hit;
     }
     return null;
   };

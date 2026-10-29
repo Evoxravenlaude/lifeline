@@ -30,7 +30,7 @@ export interface Job {
 export interface SchedulerDeps {
   db: Db;
   /** Deliver to the user's preferred channel with fallback (see core/dispatch). Returns false if no channel reached them. */
-  send: (user: User, reply: { text: string; buttons?: { label: string; data: string }[] }) => Promise<boolean>;
+  send: (user: User, reply: { text: string; buttons?: { label: string; data: string }[]; kind?: string }) => Promise<boolean>;
   getUser: (id: number) => Promise<User | undefined>;
 }
 
@@ -122,7 +122,8 @@ export async function push(
     );
     if (Number(c?.n ?? 0) >= config.maxPushesPerDay) return false;
   }
-  const ok = await deps.send(user, { text, buttons: opts.buttons });
+  // The kind travels with it so a lock-screen notification can keep health, mood and safety details private.
+  const ok = await deps.send(user, { text, buttons: opts.buttons, kind });
   if (ok) await deps.db.query(`INSERT INTO pushes (user_id, kind, sent_at) VALUES ($1,$2,$3)`, [user.id, kind, now]);
   return ok;
 }

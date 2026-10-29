@@ -21,7 +21,8 @@ export const appButton = (): Btn | null => { const w = webAddress(); return /^ht
 export type Style = "primary" | "success" | "danger";
 /** `webApp`: open this https address as a Telegram Mini App instead of sending `data`. */
 export interface Btn { label: string; data: string; style?: Style; webApp?: string }
-export interface Panel { text: string; rows: Btn[][] }
+/** `card`: the picture shown above the text (src/web/extras.ts draws it): "home" or a section name. */
+export interface Panel { text: string; rows: Btn[][]; card?: string }
 export interface PanelResult { panel: Panel | null; toast?: string; ask?: AskKey; close?: boolean; passOn?: string }
 
 export const BACK = (to = "home"): Btn => ({ label: "‹ Back", data: `p:${to}` });
@@ -50,27 +51,42 @@ const first = (u: User) => (u.name ? u.name.split(" ")[0] : null);
 const hhmm = (d: Date | string, tz: string) => DateTime.fromJSDate(new Date(d)).setZone(tz).toFormat("HH:mm");
 const greeting = (h: number) => (h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening");
 
-async function home(db: Db, u: User, now: Date): Promise<Panel> {
+/** What the home screen (and its picture card) shows: the next thing today, open list items, what's waiting, this week's spending. */
+export async function homeFacts(db: Db, u: User, now: Date) {
   const local = DateTime.fromJSDate(now).setZone(u.tz);
   const end = local.endOf("day").toJSDate();
-  const [ev, rem, pend, open] = await Promise.all([
+  const [ev, rem, pend, open, spent] = await Promise.all([
     db.one<{ title: string; at: string }>(`SELECT title, starts_at AS at FROM events WHERE user_id=$1 AND NOT deleted AND starts_at > $2 AND starts_at <= $3 ORDER BY starts_at LIMIT 1`, [u.id, now, end]),
     db.one<{ title: string; at: string }>(`SELECT text AS title, due_at AS at FROM reminders WHERE user_id=$1 AND NOT done AND NOT deleted AND due_at > $2 AND due_at <= $3 ORDER BY due_at LIMIT 1`, [u.id, now, end]),
     db.one<{ n: string }>(`SELECT count(*)::text AS n FROM pending_actions WHERE user_id=$1 AND resolved IS NULL AND expires_at > $2`, [u.id, now]),
     db.one<{ n: string }>(`SELECT count(*)::text AS n FROM todos WHERE user_id=$1 AND NOT done`, [u.id]),
+    db.one<{ currency: string; total: string }>(`SELECT currency, sum(amount)::text AS total FROM spend WHERE user_id=$1 AND spent_at > $2 GROUP BY currency ORDER BY sum(amount) DESC LIMIT 1`, [u.id, local.startOf("week").toJSDate()]),
   ]);
-  const next = [ev, rem].filter(Boolean).sort((a, b) => +new Date(a!.at) - +new Date(b!.at))[0];
-  const lines = [
-    `**${greeting(local.hour)}${first(u) ? `, ${first(u)}` : ""}.**`,
-    `_${local.toFormat("cccc d LLLL")}, ${local.toFormat("HH:mm")}_`,
-    "",
-    next ? `Next: ${next.title}, at ${hhmm(next.at, u.tz)}.` : "Nothing else on today.",
+  const next = [ev, rem].filter(Boolean).sort((x, y) => +new Date(x!.at) - +new Date(y!.at))[0] ?? null;
+  return {
+    greeting: `${greeting(local.hour)}${first(u) ? `, ${first(u)}` : ""}.`,
+    date: local.toFormat("cccc d LLLL, HH:mm"),
+    next: next ? { title: next.title, at: hhmm(next.at, u.tz) } : null,
+    open: Number(open?.n ?? 0), pending: Number(pend?.n ?? 0),
+    spent: spent ? { amount: Number(spent.total), currency: spent.currency } : null,
+    hour: local.hour,
+  };
+}
+
+/** Lines drawn like a small tree, the way a dashboard reads: one fact a line, the last one closing it. */
+export const tree = (items: string[]) => items.map((t, i) => `${i === items.length - 1 ? "└" : "├"} ${t}`);
+
+async function home(db: Db, u: User, now: Date): Promise<Panel> {
+  const f = await homeFacts(db, u, now);
+  const facts = [
+    f.next ? `Next: ${f.next.title}, at ${f.next.at}.` : "Nothing else on today.",
+    ...(f.pending ? [`${f.pending === 1 ? "One thing is" : `${f.pending} things are`} waiting on your yes.`] : []),
+    ...(f.open ? [`${f.open} open on your lists.`] : []),
   ];
-  const p = Number(pend?.n ?? 0), o = Number(open?.n ?? 0);
-  if (p) lines.push(`${p === 1 ? "One thing is" : `${p} things are`} waiting on your yes.`);
-  if (o) lines.push(`${o} open on your lists.`);
+  const lines = [`**${f.greeting}**`, `_${DateTime.fromJSDate(now).setZone(u.tz).toFormat("cccc d LLLL, HH:mm")}_`, "", ...tree(facts)];
   return {
     text: lines.join("\n"),
+    card: "home",
     rows: [
       [{ label: "Today ›", data: "p:today" }, { label: "Lists ›", data: "p:lists" }],
       [{ label: "Health ›", data: "p:health" }, { label: "Money ›", data: "p:money" }],
@@ -82,7 +98,7 @@ async function home(db: Db, u: User, now: Date): Promise<Panel> {
 }
 
 async function today(db: Db, u: User, now: Date): Promise<Panel> {
-  return { text: await buildDigest(db, u, now, { peek: true }), rows: [[{ label: "Add a reminder", data: "p:ask:rem" }, { label: "Lists ›", data: "p:lists" }], nav()] };
+  return { text: await buildDigest(db, u, now, { peek: true }), card: "today", rows: [[{ label: "Add a reminder", data: "p:ask:rem" }, { label: "Lists ›", data: "p:lists" }], nav()] };
 }
 
 async function listNames(db: Db, u: User): Promise<{ list: string; n: number }[]> {
@@ -92,10 +108,10 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 async function lists(db: Db, u: User): Promise<Panel> {
   const names = await listNames(db, u);
-  if (!names.length) return { text: "**Your lists**\n\nNothing open. Add something, or say \"I need to buy rice and eggs\".", rows: [[{ label: "Add something", data: "p:ask:list" }], nav()] };
+  if (!names.length) return { text: "**Your lists**\n\nNothing open. Add something, or say \"I need to buy rice and eggs\".", card: "lists", rows: [[{ label: "Add something", data: "p:ask:list" }], nav()] };
   const rows: Btn[][] = [];
   for (let i = 0; i < Math.min(names.length, 10); i += 2) rows.push(names.slice(i, i + 2).map((x, j) => ({ label: `${cap(x.list)} · ${x.n} ›`, data: `p:list:${i + j}` })));
-  return { text: `**Your lists**\n\n${names.map((x) => `${cap(x.list)}, ${x.n} open`).join("\n")}`, rows: [...rows, [{ label: "Add something", data: "p:ask:list" }], nav()] };
+  return { text: `**Your lists**\n\n${tree(names.map((x) => `${cap(x.list)}, ${x.n} open`)).join("\n")}`, card: "lists", rows: [...rows, [{ label: "Add something", data: "p:ask:list" }], nav()] };
 }
 
 async function oneList(db: Db, u: User, i: number): Promise<Panel | null> {
@@ -134,7 +150,7 @@ async function health(db: Db, u: User, now: Date): Promise<Panel> {
   body.push(...habits.map((h) => `${cap(h.name)}: ${h.n} of ${h.target}`));
   if (body.length) lines.push("**This week**", ...body);
   if (lines.length === 2) lines.push("Nothing tracked yet. Try \"slept 7 hours\", \"I take vitamin D at 8\" or \"my period started today\".");
-  return { text: lines.join("\n").trim(), rows: [[{ label: "Log something", data: "p:ask:log" }], nav()] };
+  return { text: lines.join("\n").trim(), card: "health", rows: [[{ label: "Log something", data: "p:ask:log" }], nav()] };
 }
 
 async function viaAction(db: Db, u: User, now: Date, action: string, args: Record<string, unknown>): Promise<string> {
@@ -146,17 +162,19 @@ async function viaAction(db: Db, u: User, now: Date, action: string, args: Recor
 async function money(db: Db, u: User, now: Date, range: "week" | "month"): Promise<Panel> {
   return {
     text: `**Money**\n\n${await viaAction(db, u, now, "spend.summary", { range })}`,
+    card: "money",
     rows: [[range === "week" ? { label: "This month", data: "p:money:month" } : { label: "This week", data: "p:money" }, { label: "Log a spend", data: "p:ask:spend" }], nav()],
   };
 }
 
 async function trips(db: Db, u: User, now: Date): Promise<Panel> {
-  return { text: `**Trips**\n\n${await viaAction(db, u, now, "trip.show", {})}`, rows: [nav()] };
+  return { text: `**Trips**\n\n${await viaAction(db, u, now, "trip.show", {})}`, card: "trips", rows: [nav()] };
 }
 
 function play(): Panel {
   return {
     text: "**Play**\n\nA quick game, a decision, or a roast.",
+    card: "play",
     rows: [
       [{ label: "Trivia", data: "g:new:trivia" }, { label: "Would you rather", data: "g:new:wyr" }],
       [{ label: "A riddle", data: "g:new:riddle" }, { label: "Surprise me", data: "g:new:any" }],
@@ -175,7 +193,8 @@ function settings(u: User): Panel {
   const persona = typeof u.prefs.personaCustom === "string" && u.prefs.personaCustom ? "your own" : PERSONAS[(u.prefs.persona as string) ?? "plain"]?.label ?? "Plain";
   const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
   return {
-    text: ["**Settings**", "", `Voice replies: ${VR_LABEL[vr] ?? vr}`, `Voice: ${voice}`, `Personality: ${persona}`, `Morning brief: ${hh(u.digest_hour)}`, `Quiet hours: ${hh(u.quiet_start)} to ${hh(u.quiet_end)}`, "", "_Tap to change. Everything else, just say it._"].join("\n"),
+    text: ["**Settings**", "", ...tree([`Voice replies: ${VR_LABEL[vr] ?? vr}`, `Voice: ${voice}`, `Personality: ${persona}`, `Morning brief: ${hh(u.digest_hour)}`, `Quiet hours: ${hh(u.quiet_start)} to ${hh(u.quiet_end)}`, `Calm mode: ${u.prefs.calm === true ? "on" : "off"}`]), "", "_Tap to change. Everything else, just say it._"].join("\n"),
+    card: "settings",
     rows: [
       [{ label: `Switch voice replies to ${VR_LABEL[VR_NEXT[vr]] ?? "on"}`, data: "p:set:vr" }],
       [{ label: "Change voice ›", data: "p:set:voice" }, { label: "Personality ›", data: "p:persona" }],

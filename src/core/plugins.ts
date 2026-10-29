@@ -17,13 +17,14 @@ import type { Db } from "./db.js";
 import type { User } from "../policy/types.js";
 
 export interface Intent { action: string; args: Record<string, unknown> }
-export type Rule = [RegExp, (m: RegExpMatchArray) => Intent];
+/** A rule may look closer and decline (return null): the next rule gets the sentence. */
+export type Rule = [RegExp, (m: RegExpMatchArray) => Intent | null];
 
 /** Same shape as a card in src/intent/capabilities.ts. */
 export interface Card { key: string; name: string; cues: string[]; what: string; say: string[]; then: string; limits?: string }
 
 /** The drawers of /everything, in order. A module picks one by name. */
-export const DRAWERS = ["Your day", "Body and mind", "Money", "Home and paperwork", "Safety", "People", "Voice, photos and search", "Fun", "Work, code and crypto", "Me"] as const;
+export const DRAWERS = ["Your day", "Body and mind", "Money", "Home and paperwork", "Safety", "People", "Voice, photos and search", "Fun", "Work, code and crypto", "Creative and NFTs", "Me"] as const;
 export type Drawer = (typeof DRAWERS)[number];
 
 export interface BriefSection {

@@ -293,7 +293,7 @@ export function explain(c: Capability, asked = ""): string {
     const NAMES: Record<string, string> = { whatsapp: "WhatsApp", "whats app": "WhatsApp", signal: "Signal", instagram: "Instagram", messenger: "Messenger", discord: "Discord" };
     const no = /whats\s?app|signal|instagram|messenger|discord/i.exec(asked);
     const lead = no ? `Not ${NAMES[no[0].toLowerCase()] ?? no[0]}, no. ` : "";
-    return `${lead}Right now you can use me on ${activePlaces()}, all with one memory. There's no app to install and nothing to log into. To add another place, say "link" and I'll give you a six-character code:\n\n${waysIn()}`;
+    return `${lead}Right now you can use me on ${activePlaces()}, all with one memory. The website also works as an app you can install, and opens inside Telegram (say "open the app"). To add another place, say "link" and I'll give you a six-character code:\n\n${waysIn()}`;
   }
   const lines = [`Yes. ${c.what}`, `Say something like "${c.say[0]}"${c.say[1] ? ` or "${c.say[1]}"` : ""}.`, c.then];
   if (c.limits) lines.push(c.limits);

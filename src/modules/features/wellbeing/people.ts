@@ -19,6 +19,9 @@ import { onJob, push, schedule } from "../../../core/scheduler.js";
 import type { Db } from "../../../core/db.js";
 import { normalisePhone, sendSms, smsProvider } from "../../../channels/sms.js";
 import { yours } from "../../life.js";
+import { zoneForPhone } from "../../../core/phonezone.js";
+import { findCity } from "../../../core/geo.js";
+import { countryOf } from "../../../core/money.js";
 import { cancelJob, dayOf, daysBetween, escRe, first, iso, keepDaily, onButton, personName, readClock, rx, sayDay, setWb, stopHint, tell, toNum, today, wb, weekdayOf, WEEKDAYS, clockOf } from "./shared.js";
 
 addSchema(`CREATE TABLE IF NOT EXISTS well_people (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), name TEXT NOT NULL, every_days INT NOT NULL DEFAULT 14, weekday INT, ping BOOLEAN NOT NULL DEFAULT false, last_contact DATE, nudged_on DATE, active BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ DEFAULT now());
@@ -210,18 +213,35 @@ const PHONE = /^\+?[\d\s().-]{7,20}$/;
 
 interface Care { id: number; user_id: number; who: string; phone: string; task: string; at_time: string; tz: string; status: string; job_id: number | null }
 
+/** "Lagos" from "Africa/Lagos". */
+const placeOf = (tz: string) => tz.split("/").pop()!.replace(/_/g, " ");
+/**
+ * The clock the other person lives on: the city they named, else their number's country when it has one zone,
+ * else yours (same country, or a country code we don't know). Null when a named city can't be found.
+ */
+export async function theirZone(owner: User, phone: string, city?: string): Promise<string | null> {
+  if (city) return (await findCity(city).catch(() => null))?.tz ?? null;
+  const z = zoneForPhone(phone);
+  if (z?.tz) return z.country === countryOf(owner) ? owner.tz : z.tz;
+  return owner.tz;
+}
+
 const careAdd = defineAction({
   name: "care.add",
   tier: 1,
   description: "Set up a daily text-message reminder for someone else (a parent, a partner) who isn't on lifeline: 'remind Mum to take her blood pressure pill at 8am by text'. `phone` is their mobile with the country code. Nothing is sent until they agree: this proposes a one-time consent text for the person to confirm.",
-  schema: z.object({ who: z.string().min(1).max(40), task: z.string().min(2).max(120), time: z.string().min(1).max(20), phone: z.string().max(30).optional() }),
-  needs(args) {
-    if (args.phone && PHONE.test(args.phone) && args.phone.replace(/\D/g, "").length >= 7) return null;
-    return { need: "phone", question: `What's ${personName(args.who)}'s mobile number? Include the country code, like +44 7700 900123.` };
+  schema: z.object({ who: z.string().min(1).max(40), task: z.string().min(2).max(120), time: z.string().min(1).max(20), phone: z.string().max(30).optional(), city: z.string().min(2).max(60).optional() }),
+  needs(args, ctx) {
+    if (!(args.phone && PHONE.test(args.phone) && args.phone.replace(/\D/g, "").length >= 7)) return { need: "phone", question: `What's ${personName(args.who)}'s mobile number? Include the country code, like +44 7700 900123.` };
+    // Their 8am, not yours: a number from a country with several clocks, other than your own, needs the city.
+    const z = zoneForPhone(args.phone);
+    if (!args.city && z && !z.tz && z.country !== countryOf(ctx.user)) return { need: "city", question: `Which city is ${personName(args.who)} in? Their country has more than one time zone, and I want the text to arrive at ${args.time} their time.` };
+    return null;
   },
   fill(need, answer) {
-    if (need !== "phone") return null;
     const a = answer.trim();
+    if (need === "city") return a.length >= 2 && a.length <= 60 && !/\?$/.test(a) ? { city: a.replace(/^(?:she'?s|he'?s|they'?re|in)\s+(?:in\s+)?/i, "") } : null;
+    if (need !== "phone") return null;
     return PHONE.test(a) && a.replace(/\D/g, "").length >= 7 ? { phone: a } : null;
   },
   async run(args, ctx) {
@@ -231,9 +251,11 @@ const careAdd = defineAction({
     if (!clock) throw new Error(`I couldn't read a time in "${args.time}". What time each day, like 8am or 20:00?`);
     const phone = normalisePhone(args.phone!);
     const at = clockOf(clock[0], clock[1]);
+    const tz = await theirZone(ctx.user, phone, args.city);
+    if (!tz) throw new Error(`I couldn't find ${args.city}. Which city is ${who} in? Try it with the country, like "Porto, Portugal".`);
     await ctx.db.query(`UPDATE well_care SET status='replaced' WHERE user_id=$1 AND lower(who)=lower($2) AND status IN ('draft','asked')`, [ctx.user.id, who]);
-    await ctx.db.query(`INSERT INTO well_care (user_id, who, phone, task, at_time, tz) VALUES ($1,$2,$3,$4,$5,$6)`, [ctx.user.id, who, phone, careText(args.task), at, ctx.user.tz]);
-    const d = await propose(ctx, "care.consent", { who, phone, task: careText(args.task), time: at });
+    await ctx.db.query(`INSERT INTO well_care (user_id, who, phone, task, at_time, tz) VALUES ($1,$2,$3,$4,$5,$6)`, [ctx.user.id, who, phone, careText(args.task), at, tz]);
+    const d = await propose(ctx, "care.consent", { who, phone, task: careText(args.task), time: at, ...(tz !== ctx.user.tz ? { zone: placeOf(tz) } : {}) });
     if (d.kind === "pending") return { reply: `${d.echo}\n\nGo ahead? This waits ten minutes for a yes.`, buttons: [{ label: "Yes, send it", data: `confirm:${d.pendingId}` }, { label: "No", data: `cancel:${d.pendingId}` }] };
     return { reply: "reply" in d ? d.reply : "I couldn't set that up just now. Try again in a moment?" };
   },
@@ -246,9 +268,9 @@ const careConsent = defineAction({
   name: "care.consent",
   tier: 2,
   description: "Send (or send again) the one-time consent text to someone set up for caregiver reminders. Only after they reply YES do the daily texts start.",
-  schema: z.object({ who: z.string().min(1), phone: z.string().optional(), task: z.string().optional(), time: z.string().optional() }),
+  schema: z.object({ who: z.string().min(1), phone: z.string().optional(), task: z.string().optional(), time: z.string().optional(), zone: z.string().optional() }),
   echo: (a, ctx) => a.phone && a.task
-    ? `This texts ${personName(a.who)} at ${a.phone} once, to ask if they're happy to get a daily text at ${a.time}: "Time to ${a.task}. Reply TAKEN when you have." Nothing else is sent unless they reply YES.\n\nThe message:\n\`\`\`\n${consentBody(first(ctx.user), { who: personName(a.who), task: a.task, at_time: a.time ?? "" })}\n\`\`\``
+    ? `This texts ${personName(a.who)} at ${a.phone} once, to ask if they're happy to get a daily text at ${a.time}${a.zone ? ` their time (${a.zone})` : ""}: "Time to ${a.task}. Reply TAKEN when you have." Nothing else is sent unless they reply YES.\n\nThe message:\n\`\`\`\n${consentBody(first(ctx.user), { who: personName(a.who), task: a.task, at_time: a.time ?? "" })}\n\`\`\``
     : `This texts ${personName(a.who)} the consent message again, at the number you gave. Nothing else is sent unless they reply YES.`,
   async run(args, ctx) {
     if (!smsProvider()) throw new Error("Text messages aren't switched on here, so nothing was sent. Whoever runs lifeline can turn them on (docs/SMS.md).");
@@ -303,7 +325,8 @@ export async function handleCareSms(db: Db, from: string, text: string, now = ne
       const [h, m] = c.at_time.split(":").map(Number);
       const jobId = await schedule(db, { userId: c.user_id, kind: "well_care_dose", cron: `${m} ${h} * * *`, tz: c.tz, payload: { careId: c.id } });
       await db.query(`UPDATE well_care SET status='active', job_id=$2 WHERE id=$1`, [c.id, jobId]);
-      await tell(db, c.user_id, `${c.who} said yes. I'll text them at ${c.at_time} each day: "Time to ${c.task}." If they haven't replied TAKEN within two hours, I'll tell you quietly.`, { exempt: true, kind: "well_care" });
+      const ownerTz = (await db.one<{ tz: string }>(`SELECT tz FROM users WHERE id=$1`, [c.user_id]))?.tz;
+      await tell(db, c.user_id, `${c.who} said yes. I'll text them at ${c.at_time}${ownerTz && ownerTz !== c.tz ? ` their time (${placeOf(c.tz)})` : ""} each day: "Time to ${c.task}." If they haven't replied TAKEN within two hours, I'll tell you quietly.`, { exempt: true, kind: "well_care" });
     }
     const others = asked.length - 1;
     return `Thank you. I'll text you at ${latest.at_time} each day. Reply TAKEN when it's done, or STOP to end these any time.${others ? " Someone else asked as well; reply YES again to agree to theirs too." : ""}`;
@@ -552,7 +575,7 @@ addRules(
   [rx(String.raw`who should i (?:catch up with|call|check in (?:with|on)|reach out to|get in touch with|message)|who(?:'s| is) due (?:a call|a catch[- ]up)|who haven'?t i (?:talked to|spoken to|called)(?: in a while)?|(?:my )?keep in touch list`), () => ({ action: "touch.due", args: {} })],
   [rx(String.raw`(?:stop|no more) (?:keeping in touch with|reminding me (?:to call|about)|nudging me about|the nudges? (?:about|for)) (.{1,30})`), (m) => ({ action: "touch.remove", args: { name: m[1] } })],
 
-  [rx(String.raw`remind\s+(?!me\b)(.{1,30}?)\s+to\s+(.{2,80}?)\s+(?:at|every day at|each day at|daily at)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s+(?:every day|daily|each day))?\s+(?:by|via|over|with a)\s+(?:text|sms|text message)(?:\s+(?:on|at|to)\s+(\+?[\d\s().-]{7,20}))?`), (m) => ({ action: "care.add", args: { who: m[1], task: m[2], time: m[3], ...(m[4] ? { phone: m[4].trim() } : {}) } })],
+  [rx(String.raw`remind\s+(?!me\b)(.{1,30}?)\s+to\s+(.{2,80}?)\s+(?:at|every day at|each day at|daily at)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s+(?:every day|daily|each day))?\s+(?:by|via|over|with a)\s+(?:text|sms|text message)(?:\s+(?:on|at|to)\s+(\+?[\d\s().-]{7,20}))?(?:[,;]?\s+(?:she|he|they)(?:'s| is| are|'re)\s+in\s+(.{2,40}?))?`), (m) => ({ action: "care.add", args: { who: m[1], task: m[2], time: m[3], ...(m[4] ? { phone: m[4].trim() } : {}), ...(m[5] ? { city: m[5].trim() } : {}) } })],
   [rx(String.raw`(?:re-?send|send) (?:the )?consent (?:text|message) to (.{1,30}?)(?: again)?`), (m) => ({ action: "care.consent", args: { who: m[1] } })],
   [rx(String.raw`(?:stop|cancel|end) (?:the )?(?:texts|text reminders|daily texts) (?:for|to) (.{1,30})`), (m) => ({ action: "care.stop", args: { who: m[1] } })],
   [rx(String.raw`(?:who am i (?:reminding|texting)|(?:my )?caregiver reminders|(?:my )?reminders for (?:other people|others))`), () => ({ action: "care.list", args: {} })],
@@ -570,7 +593,7 @@ addExamples("touch.add", ["call Mum every Sunday", "check in with Ese if we have
 addExamples("touch.log", ["called Mum", "talked to Ese", "I caught up with Tolu yesterday"]);
 addExamples("touch.due", ["who should I catch up with", "who haven't I talked to in a while"]);
 addExamples("touch.remove", ["stop keeping in touch with Tolu"]);
-addExamples("care.add", ["remind Mum to take her blood pressure pill at 8am by text", "remind Dad to check his sugar at 7pm by text on +44 7700 900123"]);
+addExamples("care.add", ["remind Mum to take her blood pressure pill at 8am by text", "remind Grandpa to take his pill at 9am by text on +1 416 555 0100, he's in Toronto", "remind Dad to check his sugar at 7pm by text on +44 7700 900123"]);
 addExamples("care.consent", ["resend the consent text to Mum"]);
 addExamples("care.stop", ["stop the texts for Mum"]);
 addExamples("care.list", ["who am I reminding"]);
