@@ -1,6 +1,6 @@
 /**
  * Web channel + webhooks. Hono on node:http, static files from src/web/public.
- *  auth:    POST /auth/telegram  POST /auth/link  POST /auth/logout
+ *  auth:    POST /auth/telegram  POST /auth/webapp (Mini App)  POST /auth/link  POST /auth/logout
  *  app:     GET /api/me /api/public /api/messages /api/state /api/digest /api/hackathons /api/scout /api/money /api/trips /api/settings /api/quip
  *           POST /api/chat /api/button /api/scout   PATCH /api/settings
  *  hooks:   POST /webhooks/twilio  POST /webhooks/imessage   GET /health
@@ -30,13 +30,14 @@ import { propose } from "../policy/engine.js";
 import { PERSONAS } from "../intent/persona.js";
 import { startWebLogin, pollWebLogin } from "../core/weblogin.js";
 import { admit, FULL_MESSAGE } from "../core/circle.js";
+import { verifyInitData } from "../core/webapp.js";
 import { providerName } from "../intent/providers.js";
 import { draftReply } from "../intent/model.js";
 import { DateTime } from "luxon";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import type { User } from "../policy/types.js";
-import { CAPABILITIES, HELP_GROUPS } from "../intent/capabilities.js";
+import { allCapabilities, helpGroups } from "../intent/capabilities.js";
 import { pipLine, PIP_BIO, type PipState } from "../core/pip.js";
 import { polish, personaOf } from "../core/voice.js";
 
@@ -64,17 +65,20 @@ export function createWeb(db: Db, botUsername: string) {
   });
 
   const session = async (c: any): Promise<User | null> => {
-    const tok = getCookie(c, "ll_session");
+    const bearer = /^Bearer ([0-9a-f]{64})$/.exec(c.req.header("authorization") ?? "")?.[1];
+    const tok = bearer ?? getCookie(c, "ll_session");
     if (!tok) return null;
     const row = await db.one<{ user_id: number }>(`SELECT user_id FROM sessions WHERE token=$1 AND expires_at > now()`, [tok]);
     return row ? (await getUserById(db, row.user_id)) ?? null : null;
   };
-  const newSession = async (c: any, user: User) => {
+  /** `tabOnly`: a token for one tab (the Mini App), no cookie, a day long, so a crafted link can't take over the browser's own sign-in. */
+  const newSession = async (c: any, user: User, o: { tabOnly?: boolean } = {}) => {
     const token = randomBytes(32).toString("hex");
-    await db.query(`INSERT INTO sessions (token, user_id, expires_at) VALUES ($1,$2,$3)`, [token, user.id, new Date(Date.now() + SESSION_DAYS * 86_400_000)]);
+    await db.query(`INSERT INTO sessions (token, user_id, expires_at) VALUES ($1,$2,$3)`, [token, user.id, new Date(Date.now() + (o.tabOnly ? 1 : SESSION_DAYS) * 86_400_000)]);
     const cross = config.webOrigins.length > 0;
-    setCookie(c, "ll_session", token, { httpOnly: true, sameSite: cross ? "None" : "Lax", secure: cross || config.publicUrl.startsWith("https"), path: "/", maxAge: SESSION_DAYS * 86_400 });
+    if (!o.tabOnly) setCookie(c, "ll_session", token, { httpOnly: true, sameSite: cross ? "None" : "Lax", secure: cross || config.publicUrl.startsWith("https"), path: "/", maxAge: SESSION_DAYS * 86_400 });
     await db.query(`INSERT INTO identities (user_id, channel, external_id) VALUES ($1,'web',$2) ON CONFLICT DO NOTHING`, [user.id, `web:${user.id}`]);
+    return token;
   };
   const ctxOf = (u: User, src: string) => ({ db, user: u, now: new Date(), sourceMessage: `[web] ${src}` });
 
@@ -87,7 +91,7 @@ export function createWeb(db: Db, botUsername: string) {
     return c.json({ botUsername, places: { taken: Number(n?.n ?? 0), max: config.maxUsers } });
   });
   /** The catalogue is public: the landing page shows everything before anyone signs in. */
-  app.get("/api/capabilities", (c) => c.json({ capabilities: CAPABILITIES, groups: HELP_GROUPS, pip: PIP_BIO }));
+  app.get("/api/capabilities", (c) => c.json({ capabilities: allCapabilities(), groups: helpGroups(), pip: PIP_BIO }));
   for (const f of ["styles.css", "app.js", "mascot.js", "path.js", "icon.svg", "manifest.webmanifest"]) app.use(`/${f}`, serveStatic({ root: PUBLIC_DIR, path: f }));
   app.use("/fonts/*", serveStatic({ root: PUBLIC_DIR }));
   app.get("/", serveStatic({ root: PUBLIC_DIR, path: "index.html" }));
@@ -104,6 +108,17 @@ export function createWeb(db: Db, botUsername: string) {
     const user = await ensureUser(db, "telegram", String(id), [rest.first_name, rest.last_name].filter(Boolean).join(" "));
     await newSession(c, user);
     return c.json({ ok: true });
+  });
+  /* inside Telegram (the Mini App): the page posts the signed initData Telegram gave it */
+  app.post("/auth/webapp", async (c) => {
+    const { initData } = (await c.req.json().catch(() => ({}))) as { initData?: string };
+    const tg = verifyInitData(String(initData ?? ""), config.telegramToken);
+    if (!tg) return c.json({ error: "bad signature", text: "Telegram's sign-in didn't check out. Close the app and open it again from the bot." }, 401);
+    if ((await admit(db, tg.id)) === "full") return c.json({ error: "full", text: FULL_MESSAGE() }, 403);
+    const user = await ensureUser(db, "telegram", String(tg.id), [tg.first_name, tg.last_name].filter(Boolean).join(" "));
+    /* A token for this tab only: inside Telegram's desktop and web apps the page sits in a frame where cookies may not stick,
+       and no cookie means a link carrying someone else's launch data can't replace this browser's own sign-in. */
+    return c.json({ ok: true, token: await newSession(c, user, { tabOnly: true }) });
   });
   /* sign in through the bot: the page opens t.me/<bot>?start=web_<id> and polls */
   app.post("/auth/telegram/start", (c) => { const id = startWebLogin(); return c.json({ id, url: `https://t.me/${botUsername}?start=web_${id}` }); });
@@ -123,8 +138,8 @@ export function createWeb(db: Db, botUsername: string) {
     return c.json({ ok: true });
   });
   app.post("/auth/logout", async (c) => {
-    const tok = getCookie(c, "ll_session");
-    if (tok) await db.query(`DELETE FROM sessions WHERE token=$1`, [tok]);
+    const toks = [/^Bearer ([0-9a-f]{64})$/.exec(c.req.header("authorization") ?? "")?.[1], getCookie(c, "ll_session")].filter(Boolean);
+    if (toks.length) await db.query(`DELETE FROM sessions WHERE token = ANY($1::text[])`, [toks]);
     deleteCookie(c, "ll_session", { path: "/" });
     return c.json({ ok: true });
   });
@@ -266,7 +281,7 @@ export function createWeb(db: Db, botUsername: string) {
   app.post("/api/scout", async (c) => {
     const u = user(c);
     const { niche, objective } = await c.req.json();
-    if (!niche) return c.json({ error: "niche required", text: "Tell me what to look for first, like \"fintech in Lagos\"." }, 400);
+    if (!niche) return c.json({ error: "niche required", text: "Tell me what to look for first, like \"fintech in Nairobi\"." }, 400);
     await scout(db, String(niche), objective ? String(objective) : undefined, 10).catch((e) => log.warn({ err: e?.message }, "scout"));
     await db.query(`INSERT INTO audit_log (user_id, action, tier, args, outcome, source_message) VALUES ($1,'scout.find',1,$2,'ran','[web] scout')`, [u.id, JSON.stringify({ niche, objective })]);
     const results = await db.query(`SELECT * FROM scout_results WHERE niche=$1 ORDER BY first_seen DESC LIMIT 30`, [String(niche).toLowerCase()]);
