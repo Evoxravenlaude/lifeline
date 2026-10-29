@@ -3,9 +3,22 @@ window.App = (function () {
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   /** Every call returns an object; anything that isn't lifeline's own JSON comes back as { error }, never as a silent success. */
+  /* Inside Telegram (the Mini App), Telegram puts signed launch data in the address. We sign in with it and
+     keep a session token for this tab, because the desktop and web apps show the page in a frame where cookies may not stick. */
+  const store = { get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch {} } };
+  let tgToken = store.get("ll_tg_token");
+  const tgLaunch = (() => {
+    const m = /(?:^#|&)tgWebAppData=([^&]*)/.exec(location.hash);
+    if (!m) return store.get("ll_tg_init");
+    const data = decodeURIComponent(m[1]);
+    store.set("ll_tg_init", data);
+    history.replaceState(null, "", location.pathname + location.search + "#today");
+    return data;
+  })();
+  const auth = () => (tgToken ? { authorization: `Bearer ${tgToken}` } : {});
   const api = async (p, b, m) => {
     try {
-      const r = await fetch(p, { method: m || (b ? "POST" : "GET"), headers: { "content-type": "application/json" }, body: b ? JSON.stringify(b) : undefined, credentials: "same-origin" });
+      const r = await fetch(p, { method: m || (b ? "POST" : "GET"), headers: { "content-type": "application/json", ...auth() }, body: b ? JSON.stringify(b) : undefined, credentials: "same-origin" });
       const type = r.headers.get("content-type") || "";
       if (!type.includes("application/json")) return { error: "unreachable", status: r.status, text: "I can't reach lifeline right now. It may be restarting; try again in a minute." };
       const j = await r.json();
@@ -121,6 +134,7 @@ window.App = (function () {
     paintBar();
     $("#modeBtnL").addEventListener("click", toggleMode);
     if (!(await reachable())) { cantReach(); window.__bootDone && window.__bootDone(); return landing(true); }
+    if (tgLaunch) await openedInTelegram();
     me = await api("/api/me");
     if (me.error || typeof me.id !== "number") { me = null; return landing(); }
     signedIn = true;
@@ -133,7 +147,7 @@ window.App = (function () {
     $("#tabbar").innerHTML = PHONE.map((k) => { const v = VIEWS.find((x) => x[0] === k); return `<a href="#${k}" data-v="${k}">${ico(v[2])}${v[1]}</a>`; }).join("");
     $("#modeBtn").addEventListener("click", toggleMode);
     $("#sayBtn").addEventListener("click", openSay);
-    $("#logoutBtn").addEventListener("click", async () => { await api("/auth/logout", {}); location.hash = ""; location.reload(); });
+    $("#logoutBtn").addEventListener("click", async () => { await api("/auth/logout", {}); store.set("ll_tg_token", null); store.set("ll_tg_init", null); location.hash = ""; location.reload(); });
     document.addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSay(); }
       else if (e.key === "/" && !/input|textarea|select/i.test(document.activeElement.tagName)) { e.preventDefault(); openSay(); }
@@ -146,6 +160,19 @@ window.App = (function () {
     route();
     window.__bootDone && window.__bootDone();
     setInterval(refresh, 30000);
+  }
+  /** Opened from the bot's "Open the app" button: sign in from Telegram's launch data and settle into its frame. */
+  async function openedInTelegram() {
+    document.documentElement.classList.add("in-telegram");
+    const s = document.createElement("script"); s.src = "https://telegram.org/js/telegram-web-app.js?59";
+    s.onload = () => { try { const w = window.Telegram.WebApp; w.ready(); w.expand(); if (w.colorScheme && !localStorage.getItem("ll_mode")) setMode(w.colorScheme === "dark" ? "night" : "day", null, false); } catch {} };
+    document.head.appendChild(s);
+    if (tgToken && !(await api("/api/me")).error) return;
+    /* Already signed in on this browser? Keep that, and ignore launch data in the address. */
+    const own = await fetch("/api/me", { credentials: "same-origin" }).then((r) => r.ok).catch(() => false);
+    if (own) { store.set("ll_tg_init", null); return; }
+    const r = await api("/auth/webapp", { initData: tgLaunch });
+    if (r.ok && r.token) { tgToken = r.token; store.set("ll_tg_token", r.token); } else { tgToken = null; store.set("ll_tg_token", null); store.set("ll_tg_init", null); }
   }
   async function refresh() { const s = await api("/api/state"); if (s.error || !Array.isArray(s.pending)) return; state = s; if (view === "today") renderToday(true); updatePip(); }
 
@@ -360,7 +387,7 @@ window.App = (function () {
   const thinking = (label) => { if ($("#log .empty")) $("#log").innerHTML = ""; const th = document.createElement("div"); th.className = "msg bot thinking"; th.innerHTML = `<div class="av"><svg viewBox="0 0 32 32"><use href="#mark"/></svg></div><div class="tx">${esc(label)}</div>`; $("#log").appendChild(th); th.scrollIntoView({ block: "end" }); return th; };
   async function raw(path, body, type, headers = {}) {
     try {
-      const r = await fetch(path, { method: "POST", body, headers: { "content-type": type, ...headers }, credentials: "same-origin" });
+      const r = await fetch(path, { method: "POST", body, headers: { "content-type": type, ...auth(), ...headers }, credentials: "same-origin" });
       if (!(r.headers.get("content-type") || "").includes("application/json")) return { error: "unreachable", text: "I can't reach lifeline right now. Try again in a minute." };
       return await r.json();
     } catch { return { error: "offline", text: "You look to be offline. Check your connection and try again." }; }
@@ -437,7 +464,7 @@ window.App = (function () {
   function openSay(prefill) {
     if ($(".say")) return $(".say input").focus();
     const o = document.createElement("div"); o.className = "say"; o.setAttribute("role", "dialog"); o.setAttribute("aria-label", "Say anything");
-    o.innerHTML = `<div class="card"><form>${ico("say", "lg")}<input placeholder="Say anything" aria-label="Say anything" autocomplete="off"><button class="btn sm primary" type="submit">Send</button></form><div class="out" hidden></div><div class="hints">${["what's on today", "remind me to drink water at 3pm", "I spent 2000 naira on lunch", "when is my next period", "my lists"].map((s) => `<button class="chip" type="button">${esc(s)}</button>`).join("")}</div></div>`;
+    o.innerHTML = `<div class="card"><form>${ico("say", "lg")}<input placeholder="Say anything" aria-label="Say anything" autocomplete="off"><button class="btn sm primary" type="submit">Send</button></form><div class="out" hidden></div><div class="hints">${["what's on today", "remind me to drink water at 3pm", "I spent 2000 on lunch", "when is my next period", "my lists"].map((s) => `<button class="chip" type="button">${esc(s)}</button>`).join("")}</div></div>`;
     document.body.appendChild(o);
     const input = $("input", o), out = $(".out", o);
     if (typeof prefill === "string") input.value = prefill;
@@ -549,7 +576,7 @@ window.App = (function () {
         ${pack.length ? `<h4 style="margin:18px 0 8px;font-size:1rem;font-family:var(--body);font-weight:700">Packing, ${packed} of ${pack.length}</h4><div class="chips">${pack.map((i) => `<button class="chip ${i.done ? "on" : ""} k-trip" data-pack="${esc(i.title)}" aria-pressed="${i.done}">${i.done ? ico("check", "sm") : ""}${esc(i.title)}</button>`).join("")}</div>` : ""}
         <div class="row" style="margin-top:18px"><button class="btn sm" data-add-trip="${esc(tr.destination)}">${ico("plus", "sm")}Add a flight, stay or plan</button></div>
       </div><div class="side">${days == null ? `<span class="small">no date yet</span>` : days > 0 ? `<b>${days}</b><span class="small">day${days === 1 ? "" : "s"} to go</span>` : days === 0 ? `<b>Today</b>` : `<span class="small">underway or past</span>`}</div></div></div>`;
-    }).join("") : empty(`No trips on the books. Say ${tryLink("I'm going to Accra on the 20th")} and I'll keep the dates, the list and the budget.`);
+    }).join("") : empty(`No trips on the books. Say ${tryLink("I'm going to Lisbon on the 20th")} and I'll keep the dates, the list and the budget.`);
     wireTries(main);
     $$("[data-pack]", main).forEach((b) => b.addEventListener("click", async () => { if (b.getAttribute("aria-pressed") === "true") return; b.classList.add("on"); await act("trip.tick", { match: b.dataset.pack }, "trip"); renderTrips(); }));
     $$("[data-add-trip]", main).forEach((b) => b.addEventListener("click", () => openSay(`add to the ${b.dataset.addTrip} trip: `)));
@@ -579,7 +606,7 @@ window.App = (function () {
     const main = $("#main");
     main.innerHTML = `<div class="wrap page"><div class="page-head"><h2>Scout</h2><p>New and upcoming projects in a niche, the people behind them, and their public handles. I draft the first message; you send it.</p></div>
       <div class="card k-scout"><form class="card-body scoutform" id="scoutForm">
-        <label class="field">The niche<input id="niche" placeholder="fintech in Lagos, design studios in Accra, ai startups"></label>
+        <label class="field">The niche<input id="niche" placeholder="fintech in Nairobi, design studios in Lisbon, ai startups"></label>
         <label class="field">And what for<input id="obj" placeholder="a job, clients, partners, to learn"></label>
         <button class="btn primary" type="submit">Scout</button><button class="btn" type="button" id="watchBtn">Keep watching</button></form></div>
       <div id="scoutOut" style="margin-top:30px">${empty("Loading what you've scouted before.")}</div></div>`;
@@ -616,7 +643,7 @@ window.App = (function () {
     const sec = (k, icon, t, rows, f, emptyHtml) => `<div class="card k-${k}">${cardHead(icon, t)}${rows.length ? `<ul class="lines">${rows.map(f).join("")}</ul>` : empty(emptyHtml)}</div>`;
     $("#mo").innerHTML = `<div class="home-grid"><div class="stack">
       <div class="card k-money">${cardHead("coin", "This week")}${Object.keys(byCur).length ? Object.entries(byCur).map(([cur, rows]) => { const max = Math.max(...rows.map((r) => Number(r.total))); const total = rows.reduce((s, r) => s + Number(r.total), 0); return `<div class="bars"><div class="row"><b class="serif" style="font-size:1.6rem;font-weight:500">${total.toLocaleString()} ${esc(cur)}</b></div>${rows.map((r) => `<div class="b"><span>${esc(cap(r.category))}</span><div class="meter k-money"><i style="width:${((Number(r.total) / max) * 100).toFixed(0)}%"></i></div><span class="tnum">${Number(r.total).toLocaleString()}</span></div>`).join("")}</div>`; }).join("") : empty(`Nothing logged this week. Say ${tryLink("I spent 20 dollars on lunch")}.`)}</div>
-      ${sec("hack", "flag", "Bills paid", m.bills, (b) => `<li><span class="w">${Number(b.amount).toLocaleString()} naira to ${esc(b.biller_code)}<small>${esc(when(b.created_at))}</small></span><span class="status">${esc(b.status)}</span></li>`, "No payments. Every one waits for your yes first.")}
+      ${sec("hack", "flag", "Bills paid", m.bills, (b) => `<li><span class="w">${Number(b.amount).toLocaleString()} NGN to ${esc(b.biller_code)}<small>${esc(when(b.created_at))}</small></span><span class="status">${esc(b.status)}</span></li>`, "No payments. Every one waits for your yes first.")}
     </div><div class="stack">
       ${sec("rem", "clock", "Price alerts", m.alerts, (a) => `<li><span class="w">${esc(a.coin.toUpperCase())} ${esc(a.op)} ${a.op === "move" ? `${a.target}% in ${a.pct_window}h` : "$" + Number(a.target).toLocaleString()}</span><span class="status k-rem">${a.active ? "armed" : "rang"}</span></li>`, `None set. Say ${tryLink("tell me when btc goes above 100k")}.`)}
       ${sec("event", "coin", "Wallets I watch", m.wallets, (w) => `<li><span class="w">${esc(w.label || w.address.slice(0, 12) + "…")}<small>${esc(w.chain)}</small></span></li>`, "No wallets yet. Public addresses only, never keys.")}
@@ -681,15 +708,18 @@ window.App = (function () {
   }
 
   /* ---------- Landing: the whole catalogue, grouped ---------- */
-  const GROUP_KIND = { "Your day": "event", "Body and health": "dose", "Money": "money", "Voice, photos and search": "class", "Fun": "hack", "Work and growth": "scout", "Me": "list" };
+  const GROUP_KIND = { "Your day": "event", "Body and mind": "dose", "Money": "money", "Home and paperwork": "trip", "Safety": "rem", "People": "list", "Voice, photos and search": "class", "Fun": "hack", "Work, code and crypto": "scout", "Me": "list" };
   const GROUP_LINE = {
-    "Your day": "Plans, lists and the dates that matter, brought back at the right moment.",
-    "Body and health": "Doses, your period and cycle, sleep, weight, mood and habits, kept privately.",
-    "Money": "What you spend in any currency, and bills paid only after your yes.",
+    "Your day": "Plans, lists and the dates that matter, brought back at the right moment, mostly in one morning note.",
+    "Body and mind": "Doses, your cycle, sleep, mood and habits, kept privately. Gentle check-ins only if you ask for them.",
+    "Money": "What you spend in any currency, who owes you, subscriptions and renewals, and nothing paid without your yes.",
+    "Home and paperwork": "Document expiry dates, rent, warranties, gas and power refills, and the jobs a home needs.",
+    "Safety": "A second look at messages that feel off, a check-in when you're heading home, and your emergency card.",
+    "People": "Keep in touch with the people who matter, share a habit with a friend, and split bills in a group.",
     "Voice, photos and search": "Talk instead of typing, send a photo of a receipt or a flyer, ask for a picture, search the web, send an email.",
-    "Fun": "Trivia with a running score, riddles, would you rather, dice, decisions, roasts and your week wrapped.",
-    "Work and growth": "If you want it: jobs, companies and people in any field, hackathons, and crypto if you hold it.",
-    "Me": "Small tools, the voice it talks in, where it reaches you, and what it never does.",
+    "Fun": "Trivia, riddles, would you rather, dice, decisions and your week or year, wrapped.",
+    "Work, code and crypto": "If you want it: jobs and companies, site and release watching, dev tools, gas, wallets and token checks. Read-only, never trades.",
+    "Me": "Calm mode and quiet days, the voice it talks in, where it reaches you, and what it never does.",
   };
   async function everything() {
     const r = await api("/api/capabilities");
@@ -704,13 +734,14 @@ window.App = (function () {
     $("#landing").hidden = false;
     if (offline) { $("#linkForm button").disabled = true; }
     const sets = [
-      ["A bit of everything", [["remind me to call mum on sunday at 5", "Call mum, Sunday at 17:00. I'll ping you here.", "rem"], ["my period started today", "Got it, day one. Your next one is likely around the 24th; I'll give you a quiet heads-up two days before.", "dose"], ["spent 4500 naira on data", "₦4,500 on data, logged. That's ₦12,300 this week, most of it on data.", "money"], ["watch jobs at stripe for product design", "Watching Stripe for product design roles. New ones go in your morning note, not as pings.", "scout"]]],
-      ["Your day", [["dentist on friday at 3", "Dentist, Friday at 15:00. It's on your calendar.", "event"], ["I need to buy milk, eggs and bread", "Milk, eggs and bread, on your shopping list.", "list"], ["assignment Lab 3 due next monday", "Lab 3, due Monday. I'll warn you the day before.", "class"], ["what's on today", "Gym at 07:30, lunch with Ada at 13:00, and the landlord to call by 17:00.", "event"]]],
-      ["Body and health", [["I take vitamin D at 8 and 8pm", "Vitamin D at 08:00 and 20:00. I'll ring you at each; tell me when it's taken.", "dose"], ["cramps and bloating today", "Noted for today, day two. I'll keep it with this cycle so you can see the pattern.", "dose"], ["slept 6 hours", "Sleep 6 hours, logged. That's an hour under your week's average.", "event"], ["did gym", "Gym, done. That's four days in a row.", "rem"]]],
-      ["Money", [["paid 20 dollars for lunch", "$20 on lunch, logged.", "money"], ["how much did I spend this week", "₦38,400 this week. Food is the biggest share, then transport.", "money"], ["pay 2000 airtime to 0801 234 5678", "₦2,000 airtime to 0801 234 5678. That spends money, so it waits for you: yes to send, no to drop it.", "money"]]],
-      ["Work", [["who's building fintech in Lagos", "Six young fintech companies in Lagos, with who runs each one and where to find them. Want a first message drafted to any of them?", "scout"], ["any hackathons for ai this month", "Three open this month that fit AI, the nearest closing on the 14th. Want them in your brief?", "hack"], ["what's eth right now", "ETH is at $3,412, up 2% today.", "hack"]]],
-      ["Photos, voice and fun", [["(a photo of a receipt) log this", "Shoprite, ₦12,450, mostly groceries. Logged under food.", "money"], ["(a voice note) remind me to call the landlord at 5", "Call the landlord, today at 17:00. And I said it back to you, since you spoke.", "rem"], ["draw yourself as an astronaut", "Here's me in a space suit, spectacles and all. Say again for another take.", "class"], ["quiz me on football", "Which club has won the most Champions League titles? A. AC Milan  B. Real Madrid  C. Liverpool  D. Bayern", "hack"]]],
-      ["Trips and dates", [["I'm going to Accra on the 20th", "Accra, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"], ["Ada's birthday is march 14", "Ada, 14 March. I'll remind you the day before.", "rem"], ["packed charger", "Charger, packed. Four things left on the Accra list.", "trip"]]],
+      ["A bit of everything", [["remind me to call mum on sunday at 5", "Call mum, Sunday at 17:00. I'll ping you here.", "rem"], ["my period started today", "Got it, day one. Your next one is likely around the 24th; I'll give you a quiet heads-up two days before.", "dose"], ["spent 6 on a cab", "$6 on transport, logged. That's $41 this week, most of it on food.", "money"], ["watch jobs at stripe for product design", "Watching Stripe for product design roles. New ones go in your morning note, not as pings.", "scout"]]],
+      ["Your day", [["dentist on friday at 3", "Dentist, Friday at 15:00. It's on your calendar.", "event"], ["I need to buy milk, eggs and bread", "Milk, eggs and bread, on your shopping list.", "list"], ["assignment Lab 3 due next monday", "Lab 3, due Monday. I'll warn you the day before.", "class"], ["what's on today", "Gym at 07:30, lunch with Ada at 13:00, and the landlord to call by 17:00.", "event"], ["I'm going to Lisbon on the 20th", "Lisbon, nice. When are you back? Dates, or roughly, or say skip and I'll hold the trip without them.", "trip"]]],
+      ["Body and mind", [["I take vitamin D at 8 and 8pm", "Vitamin D at 08:00 and 20:00. I'll ring you at each; tell me when it's taken.", "dose"], ["cramps and bloating today", "Noted for today, day two. I'll keep it with this cycle so you can see the pattern.", "dose"], ["slept 6 hours", "Sleep 6 hours, logged. That's an hour under your week's average.", "event"], ["did gym", "Gym, done. That's four days in a row.", "rem"]]],
+      ["Money", [["paid 20 dollars for lunch", "$20 on lunch, logged.", "money"], ["how much did I spend this week", "€184 this week. Food is the biggest share, then transport.", "money"], ["Ana owes me 40 for dinner", "Ana owes you €40 for dinner. Say \"Ana paid me back\" when she does.", "money"], ["Netflix 15.49 monthly renews on the 3rd", "Netflix, 15.49 a month, renews on the 3rd. I'll mention it three days before.", "money"]]],
+      ["Photos, voice and fun", [["(a photo of a receipt) log this", "Tesco, £42.50, mostly groceries. Logged under food.", "money"], ["(a voice note) remind me to call the landlord at 5", "Call the landlord, today at 17:00. And I said it back to you, since you spoke.", "rem"], ["draw yourself as an astronaut", "Here's me in a space suit, spectacles and all. Say again for another take.", "class"], ["quiz me on football", "Which club has won the most Champions League titles? A. AC Milan  B. Real Madrid  C. Liverpool  D. Bayern", "hack"]]],
+      ["Safety and calm", [["is this legit: your parcel is held, pay 1.99 at royalmail-redelivery.top", "Red flags: a small fee to release a parcel, and a web address that isn't the courier's. Don't pay through the link; track it on the courier's own site.", "rem"], ["check on me: walking home, 25 min", "Check-in on until 22:40. Tap I'm safe when you're in. If I don't hear from you, I'll tell your safety contact.", "rem"], ["quiet day", "Quiet until tomorrow 08:00. I'll only bring the things you set yourself, like reminders and doses. Take care of yourself.", "list"]]],
+      ["Work, code and crypto", [["who's building fintech in Nairobi", "Six young fintech companies in Nairobi, with who runs each one and where to find them. Want a first message drafted to any of them?", "scout"], ["watch https://mysite.com", "Watching mysite.com every five minutes. If it goes down twice in a row, you'll hear from me, and again when it's back.", "scout"], ["gas now", "Ethereum 4 gwei, Base and Arbitrum under 0.1. A quiet time to move things.", "hack"], ["decode jwt eyJhbGciOi...", "Header and payload below, ready to copy. The signature isn't checked here.", "scout"]]],
+      ["Together", [["/split 120 dinner @ana @ben", "Dinner, €120. €40 each. Ana and Ben each tap I've paid when they have.", "money"], ["/when movie night", "A poll of the next few evenings, for everyone in the group.", "event"], ["/birthday 12 March", "Noted. I'll say happy birthday here on the day.", "rem"]]],
     ];
     const showSet = (n) => {
       $$("#letterTabs .chip").forEach((b, i) => { b.classList.toggle("on", i === n); b.setAttribute("aria-selected", String(i === n)); });
