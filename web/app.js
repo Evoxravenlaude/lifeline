@@ -132,6 +132,7 @@ window.App = (function () {
   /* ---------- boot ---------- */
   async function boot() {
     paintBar();
+    registerSW();
     $("#modeBtnL").addEventListener("click", toggleMode);
     if (!(await reachable())) { cantReach(); window.__bootDone && window.__bootDone(); return landing(true); }
     if (tgLaunch) await openedInTelegram();
@@ -147,12 +148,13 @@ window.App = (function () {
     $("#tabbar").innerHTML = PHONE.map((k) => { const v = VIEWS.find((x) => x[0] === k); return `<a href="#${k}" data-v="${k}">${ico(v[2])}${v[1]}</a>`; }).join("");
     $("#modeBtn").addEventListener("click", toggleMode);
     $("#sayBtn").addEventListener("click", openSay);
-    $("#logoutBtn").addEventListener("click", async () => { await api("/auth/logout", {}); store.set("ll_tg_token", null); store.set("ll_tg_init", null); location.hash = ""; location.reload(); });
+    $("#logoutBtn").addEventListener("click", signOut);
     document.addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSay(); }
       else if (e.key === "/" && !/input|textarea|select/i.test(document.activeElement.tagName)) { e.preventDefault(); openSay(); }
       else if (e.key === "Escape") closeSay();
     });
+    if (me.firstRun) { window.__bootDone && window.__bootDone(); await welcome(); me = await api("/api/me"); $("#who").textContent = me.name ? `Signed in as ${me.name}` : ""; }
     window.addEventListener("hashchange", route);
     state = await api("/api/state");
     if (state.error || !Array.isArray(state.pending)) state = { pending: [], reminders: [], events: [], meds: [], ledger: [], lists: [], memory: [], dates: [], classes_today: [], habits: [], quiet: false };
@@ -160,6 +162,7 @@ window.App = (function () {
     route();
     window.__bootDone && window.__bootDone();
     setInterval(refresh, 30000);
+    setTimeout(offerInstallOnce, 6000);
   }
   /** Opened from the bot's "Open the app" button: sign in from Telegram's launch data and settle into its frame. */
   async function openedInTelegram() {
@@ -682,10 +685,14 @@ window.App = (function () {
           <label class="field">What I call you<input data-set="name" value="${esc(s.name || "")}"></label>
           <label class="field">Interests, for ranking<input id="tags" value="${esc((s.tags || []).join(", "))}" placeholder="ai, payments, base, ethereum"></label>
           <div class="grid two" style="gap:12px"><label class="field">Country, two letters<input data-set="country" maxlength="2" value="${esc(s.country || "")}"></label><label class="field">Email, as a last resort<input data-set="email" type="email" value="${esc(s.email || "")}"></label></div></div></div>
-        <div class="card k-class">${cardHead("chat", "Where I reach you")}<div class="card-body"><dl class="kv">${(s.identities || []).map((i) => `<dt>${esc(cap(i.channel))}</dt><dd class="muted">${esc(i.external_id)}</dd>`).join("")}</dl><div class="row" style="margin-top:16px"><button class="btn sm" id="linkCode">Get a link code</button><button id="linkOut" class="link-code" type="button" hidden title="Copy"></button></div><p class="faint small" style="margin-top:8px">${s.smsNumber ? `Text <b>link</b> and the code to <code class="cp" role="button" tabindex="0" title="Copy">${esc(s.smsNumber)}</code>, or send it from iMessage or another browser, within fifteen minutes.` : "Send link and the code from iMessage, or type it in another browser, within fifteen minutes."} Tap the code to copy it.</p></div></div>
+        <div class="card k-class">${cardHead("chat", "Where I reach you")}<div class="card-body"><dl class="kv">${(s.identities || []).filter((i) => !["google", "apple", "app"].includes(i.channel)).map((i) => `<dt>${esc(cap(i.channel))}</dt><dd class="muted">${esc(i.external_id)}</dd>`).join("")}</dl><div class="row" style="margin-top:16px"><button class="btn sm" id="linkCode">Get a link code</button><button id="linkOut" class="link-code" type="button" hidden title="Copy"></button></div><p class="faint small" style="margin-top:8px">${s.smsNumber ? `Text <b>link</b> and the code to <code class="cp" role="button" tabindex="0" title="Copy">${esc(s.smsNumber)}</code>, or send it from iMessage or another browser, within fifteen minutes.` : "Send link and the code from iMessage, or type it in another browser, within fifteen minutes."} Tap the code to copy it.</p></div></div>
+        <div class="card k-metal">${cardHead("key", "Ways to sign in")}<div id="waysHost">${empty("Gathering them.")}</div></div>
+        <div class="card k-dose">${cardHead("bell", "This app")}<div id="appHost">${empty("Checking this device.")}</div></div>
         <div class="card k-hack">${cardHead("flag", "Work tools")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Hackathons, grants and scouting for companies and people. Handy if you build or job-hunt; out of the way if not. They're always under More.</p><div class="seg" role="group" aria-label="Work tools in the bar"><button data-work="true" aria-pressed="${!!workOn()}">In the bar</button><button data-work="false" aria-pressed="${!workOn()}">Under More</button></div></div></div>
         <div class="card k-list">${cardHead("sliders", "Under the hood")}<div class="card-body"><dl class="kv"><dt>Model</dt><dd>${esc(s.provider || "plain language only, no model key")}</dd><dt>Spend today</dt><dd>$${Number(s.spend || 0).toFixed(3)} of $${s.budget}</dd></dl></div></div>
       </div></div>`;
+    waysCard($("#waysHost"));
+    appCard($("#appHost"), s);
     $$("[data-work]", main).forEach((b) => b.addEventListener("click", async () => { me.work = b.dataset.work === "true"; await api("/api/settings", { work: me.work }, "PATCH"); drawTabs(); $$("[data-work]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); toast(me.work ? "Work tools are in the bar." : "Work tools moved under More."); }));
     $$("[data-mode]", main).forEach((b) => b.addEventListener("click", (e) => { setMode(b.dataset.mode, e.currentTarget); $$("[data-mode]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
     $$("[data-palette]", main).forEach((b) => b.addEventListener("click", (e) => { setPalette(b.dataset.palette, e.currentTarget); $$("[data-palette]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
@@ -704,11 +711,11 @@ window.App = (function () {
   /* ---------- More (phone) ---------- */
   function renderMore() {
     $("#main").innerHTML = `<div class="wrap page"><div class="page-head"><h2>More</h2></div><div class="stack">${VIEWS.filter((v) => !PHONE.includes(v[0])).map(([k, l, i]) => `<a class="card press" href="#${k}" style="text-decoration:none"><div class="card-body row">${ico(i, "lg")}<span class="serif" style="font-size:1.4rem">${l}</span><span class="sp"></span></div></a>`).join("")}<button class="btn" id="logout2">${ico("logout", "sm")}Sign out</button></div></div>`;
-    $("#logout2").addEventListener("click", async () => { await api("/auth/logout", {}); location.hash = ""; location.reload(); });
+    $("#logout2").addEventListener("click", signOut);
   }
 
   /* ---------- Landing: the whole catalogue, grouped ---------- */
-  const GROUP_KIND = { "Your day": "event", "Body and mind": "dose", "Money": "money", "Home and paperwork": "trip", "Safety": "rem", "People": "list", "Voice, photos and search": "class", "Fun": "hack", "Work, code and crypto": "scout", "Me": "list" };
+  const GROUP_KIND = { "Your day": "event", "Body and mind": "dose", "Money": "money", "Home and paperwork": "trip", "Safety": "rem", "People": "list", "Voice, photos and search": "class", "Fun": "hack", "Work, code and crypto": "scout", "Creative and NFTs": "hack", "Me": "list" };
   const GROUP_LINE = {
     "Your day": "Plans, lists and the dates that matter, brought back at the right moment, mostly in one morning note.",
     "Body and mind": "Doses, your cycle, sleep, mood and habits, kept privately. Gentle check-ins only if you ask for them.",
@@ -719,6 +726,7 @@ window.App = (function () {
     "Voice, photos and search": "Talk instead of typing, send a photo of a receipt or a flyer, ask for a picture, search the web, send an email.",
     "Fun": "Trivia, riddles, would you rather, dice, decisions and your week or year, wrapped.",
     "Work, code and crypto": "If you want it: jobs and companies, site and release watching, dev tools, gas, wallets and token checks. Read-only, never trades.",
+    "Creative and NFTs": "Commissions, open calls and release dates for people who make things, and a tab on every mint you hold.",
     "Me": "Calm mode and quiet days, the voice it talks in, where it reaches you, and what it never does.",
   };
   async function everything() {
@@ -759,6 +767,7 @@ window.App = (function () {
     Mascot.mount($("#loginMascot"), { greeting: "" });
     const lm = $("#loginMascot .pip-line"); if (lm) lm.hidden = true;
     api("/api/public").then((p) => {
+      landingWays(p.signin);
       if (p.places && p.places.max) {
         const left = Math.max(0, p.places.max - p.places.taken), el = $("#places");
         el.textContent = left ? `${left} of ${p.places.max} places left. Anyone with the link can come in until it's full.` : `Every one of the ${p.places.max} places is taken right now. Ask whoever sent you the link to make room.`;
@@ -804,6 +813,271 @@ window.App = (function () {
     setTimeout(tick, 2500);
   }
   async function onTg(u) { const r = await api("/auth/telegram", u); if (r.ok) location.reload(); else $("#lerr").textContent = r.text || "That sign-in didn't check out. Try again."; }
+
+  /* ---------- more ways in: Google, Apple, a code by text, iMessage or email (docs/SIGNIN.md) ---------- */
+  const scripts = {};
+  const loadScript = (src) => (scripts[src] = scripts[src] || new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.async = true; s.onload = res; s.onerror = () => { delete scripts[src]; rej(new Error("script")); }; document.head.appendChild(s); }));
+  const GSI = "https://accounts.google.com/gsi/client";
+  const APPLE_JS = "https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js";
+  const WAY_NAME = { telegram: "Telegram", google: "Google", apple: "Apple", sms: "Text messages", imessage: "iMessage", email: "Email" };
+  /** After a way in checks out: a new sign-in opens the day; a way added from Settings just says so. */
+  function wayDone(r, say, onLinked) {
+    if (r.error) return say(r.text);
+    if (onLinked || r.linked !== undefined) { say(""); toast(plain(r.text)); onLinked && onLinked(r); return; }
+    say("Signed in. Opening your day."); location.hash = "today"; location.reload();
+  }
+  let googleInit = null, googleHook = null;
+  /* Google: every attempt carries a one-time nonce from the server (so a token can't be replayed); a fresh one after each try. */
+  async function googleSetup(clientId) {
+    const r = await api("/auth/google/start", {});
+    if (r.error || !r.nonce) return false;
+    window.google.accounts.id.initialize({ client_id: clientId, nonce: r.nonce, callback: (resp) => googleHook && googleHook(resp.credential), ux_mode: "popup", auto_select: false, cancel_on_tap_outside: true, itp_support: true });
+    return true;
+  }
+  async function googleButton(host, clientId, say, onLinked) {
+    googleInit = googleInit || loadScript(GSI).then(async () => ((await googleSetup(clientId)) ? window.google.accounts.id : null)).catch(() => { googleInit = null; return null; });
+    const id = await googleInit;
+    if (!id || !host) { if (host) host.hidden = true; return; }
+    googleHook = async (credential) => { say("Checking with Google."); const r = await api("/auth/google", { credential }); await googleSetup(clientId); wayDone(r, say, onLinked); };
+    host.hidden = false; host.innerHTML = "";
+    id.renderButton(host, { type: "standard", theme: root.dataset.mode === "night" ? "filled_black" : "outline", size: "large", text: "continue_with", shape: "rectangular", logo_alignment: "left", width: Math.round(Math.min(400, Math.max(220, host.clientWidth || 300))) });
+  }
+  /* Apple: each attempt needs a fresh nonce from the server, fetched before the press so the popup isn't blocked. */
+  let appleNonce = null;
+  async function appleReady(cfg) {
+    await loadScript(APPLE_JS);
+    const r = await api("/auth/apple/start", {});
+    if (r.error || !r.nonce) return false;
+    appleNonce = r.nonce;
+    window.AppleID.auth.init({ clientId: cfg.clientId, scope: "name email", redirectURI: cfg.redirectUri || `${location.origin}/`, state: r.state, nonce: r.nonce, usePopup: true });
+    return true;
+  }
+  async function appleButton(btn, cfg, say, onLinked) {
+    if (!btn || !(await appleReady(cfg).catch(() => false))) return;
+    btn.hidden = false;
+    btn.addEventListener("click", async () => {
+      const nonce = appleNonce;
+      let res;
+      try { res = await window.AppleID.auth.signIn(); }
+      catch (e) { if (!/popup_closed|cancel/i.test(String((e && e.error) || ""))) say("Apple didn't finish signing you in. Try once more."); appleReady(cfg).catch(() => {}); return; }
+      say("Checking with Apple.");
+      const r = await api("/auth/apple", { id_token: res && res.authorization && res.authorization.id_token, nonce, name: (res && res.user && res.user.name) || null });
+      appleReady(cfg).catch(() => {});
+      wayDone(r, say, onLinked);
+    });
+  }
+  /** A number or an address, then the six digits sent to it. `kind` is "phone" or "email". */
+  function codeFlow(host, kind, methods, say, onLinked) {
+    const vias = kind === "email" ? ["email"] : ["sms", "imessage"].filter((v) => methods[v]);
+    const LABEL = { sms: "Text me a code", imessage: "iMessage me a code", email: "Email me a code" };
+    const mail = kind === "email";
+    host.innerHTML = `<form class="code-flow" novalidate>
+        <label class="field">${mail ? "Your email address" : "Your number, with its country code"}<input name="to" type="${mail ? "email" : "tel"}" inputmode="${mail ? "email" : "tel"}" autocomplete="${mail ? "email" : "tel"}" placeholder="${mail ? "you@example.com" : "+44 7700 900123"}" maxlength="254"></label>
+        <div class="row">${vias.map((v, i) => `<button class="btn sm ${i ? "" : "primary"}" type="submit" value="${v}">${LABEL[v]}</button>`).join("")}</div>
+      </form>
+      <form class="code-flow" hidden novalidate>
+        <p class="small muted" data-sent></p>
+        <label class="field">The six digits<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"></label>
+        <div class="row"><button class="btn sm primary" type="submit">${onLinked ? "Add it" : "Sign in"}</button><button class="btn sm ghost" type="button" data-again>Use a different ${mail ? "address" : "number"}</button></div>
+      </form>`;
+    const [ask, check] = $$("form", host);
+    const toIn = ask.elements.namedItem("to"), codeIn = check.elements.namedItem("code");
+    let via = vias[0], to = "";
+    ask.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      via = (e.submitter && e.submitter.value) || vias[0];
+      to = toIn.value.trim(); if (!to) { say(mail ? "Type your email address first." : "Type your number first, starting with + and the country code."); return toIn.focus(); }
+      $$("button", ask).forEach((b) => (b.disabled = true));
+      const r = await api("/auth/code/start", { via, to });
+      $$("button", ask).forEach((b) => (b.disabled = false));
+      if (r.error) return say(r.text);
+      say(""); $("[data-sent]", check).textContent = r.text;
+      ask.hidden = true; check.hidden = false; codeIn.value = ""; codeIn.focus();
+    });
+    check.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const code = codeIn.value.replace(/\D/g, ""); if (code.length !== 6) return say("The code is six digits.");
+      const btn = $("[type=submit]", check); btn.disabled = true;
+      const r = await api("/auth/code/verify", { via, to, code });
+      btn.disabled = false;
+      if (!r.error && onLinked) { check.hidden = true; ask.hidden = false; ask.reset(); }
+      wayDone(r, say, onLinked);
+    });
+    $("[data-again]", check).addEventListener("click", () => { check.hidden = true; ask.hidden = false; say(""); toIn.focus(); });
+  }
+  /** The landing's quieter ways in, under Telegram. Each shows only when it's switched on. */
+  function landingWays(m) {
+    if (!m) return;
+    const say = (t) => { $("#altStatus").textContent = t || ""; };
+    const phone = Boolean(m.sms || m.imessage), mail = Boolean(m.email);
+    if (m.google) googleButton($("#gBtn"), m.google, say);
+    if (m.apple) appleButton($("#appleBtn"), m.apple, say);
+    $('[data-code="phone"]').hidden = !phone; $('[data-code="email"]').hidden = !mail;
+    $$(".code-ways [data-code]").forEach((b) => b.addEventListener("click", () => {
+      const open = b.getAttribute("aria-pressed") === "true";
+      $$(".code-ways [data-code]").forEach((x) => x.setAttribute("aria-pressed", String(!open && x === b)));
+      if (open) { $("#codeHost").innerHTML = ""; say(""); return; }
+      codeFlow($("#codeHost"), b.dataset.code, m, say); $("#codeHost input").focus();
+    }));
+    $("#altWays").hidden = !(m.google || m.apple || phone || mail);
+  }
+
+  /* ---------- first run: someone new on the web, without Telegram ---------- */
+  function welcome() {
+    return new Promise((done) => {
+      let zone = ""; try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch {}
+      $("#main").innerHTML = `<div class="wrap page"><div class="welcome"><div class="card k-trip">${cardHead("shell", "Welcome in")}<form class="card-body" id="welcomeForm" novalidate>
+        <p>Two small things, then your day. You can change either in Settings.</p>
+        <label class="field">What should I call you?<input name="who" autocomplete="given-name" maxlength="60" value="${esc(me.name || "")}"></label>
+        <label class="field">Your city or time zone<input name="place" autocomplete="address-level2" maxlength="80" placeholder="Lisbon, or Europe/Lisbon" value="${esc(zone)}"></label>
+        <p class="small faint">So reminders ring at your time, wherever you are.</p>
+        <div class="row"><button class="btn primary" type="submit">Carry on</button></div>
+        <p class="err small" role="alert" id="welcomeErr"></p></form></div></div></div>`;
+      const f = $("#welcomeForm"), who = f.elements.namedItem("who"), place = f.elements.namedItem("place");
+      f.addEventListener("submit", async (e) => {
+        e.preventDefault(); const btn = $("button", f); btn.disabled = true;
+        const r = await api("/api/welcome", { name: who.value.trim(), place: place.value.trim() });
+        btn.disabled = false;
+        if (r.error) { $("#welcomeErr").textContent = r.text; return place.focus(); }
+        toast(plain(r.text)); done();
+      });
+      (who.value ? place : who).focus();
+    });
+  }
+
+  /* ---------- the installable app: service worker, install, notifications (docs/APP.md) ---------- */
+  function registerSW() {
+    if (!("serviceWorker" in navigator) || tgLaunch) return;
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "open" && typeof e.data.url === "string") location.href = e.data.url; });
+  }
+  let installEvt = null;
+  const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; });
+  window.addEventListener("appinstalled", () => { installEvt = null; const o = $(".install-offer"); if (o) o.remove(); });
+  const IOS_HOW = "Open this page in Safari, tap Share, then Add to Home Screen. Open lifeline from your Home Screen; notifications work there on iOS 16.4 and later.";
+  async function install() { if (!installEvt) return false; const e = installEvt; installEvt = null; e.prompt(); const c = await e.userChoice.catch(() => null); return Boolean(c && c.outcome === "accepted"); }
+  /** Offered once, ever, a little after the day has loaded. After that it lives in Settings. */
+  function offerInstallOnce() {
+    if (!signedIn || standalone() || tgLaunch || $(".install-offer") || $(".say") || (!installEvt && !isIOS())) return;
+    try { if (localStorage.getItem("ll_install_offered")) return; localStorage.setItem("ll_install_offered", "1"); } catch { return; }
+    const o = document.createElement("div"); o.className = "install-offer card k-trip"; o.setAttribute("role", "region"); o.setAttribute("aria-label", "Install lifeline");
+    o.innerHTML = `<div class="card-body"><p><b>Keep lifeline on your ${isIOS() ? "Home Screen" : "device"}.</b> It opens like an app, and reminders can come as notifications, even while Telegram is muted.</p>${installEvt ? "" : `<p class="small muted">${IOS_HOW}</p>`}<div class="row">${installEvt ? `<button class="btn sm primary" type="button" data-i="go">Install</button>` : ""}<button class="btn sm ghost" type="button" data-i="no">${installEvt ? "Not now" : "Got it"}</button><span class="small faint">It's in Settings too.</span></div></div>`;
+    document.body.appendChild(o);
+    o.addEventListener("click", async (e) => { const b = e.target.closest("[data-i]"); if (!b) return; if (b.dataset.i === "go") await install(); o.remove(); });
+  }
+  const pushAble = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const keyBytes = (b64) => { const raw = atob((b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(raw, (c) => c.charCodeAt(0)); };
+  const deviceName = () => { const u = navigator.userAgent; return /iphone/i.test(u) ? "iPhone" : /ipad/i.test(u) ? "iPad" : /android/i.test(u) ? "Android" : /mac/i.test(u) ? "Mac" : /windows/i.test(u) ? "Windows" : /linux|cros/i.test(u) ? "Computer" : "Browser"; };
+  /** Sign out here, and stop this device's notifications with it, so whoever uses it next never sees them. */
+  async function signOut() {
+    const sub = await currentSub().catch(() => null);
+    await api("/auth/logout", sub ? { endpoint: sub.endpoint } : {});
+    if (sub) await sub.unsubscribe().catch(() => {});
+    store.set("ll_tg_token", null); store.set("ll_tg_init", null); location.hash = ""; location.reload();
+  }
+  async function currentSub() { if (!pushAble()) return null; const reg = await navigator.serviceWorker.getRegistration(); return reg ? reg.pushManager.getSubscription() : null; }
+  async function notificationsOn(key) {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return { error: "denied", text: perm === "denied" ? "Notifications are blocked for this site. Allow them in your browser's site settings, then try again." : "Notifications stay off. Turn them on whenever you like." };
+    try {
+      const reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.register("/sw.js"));
+      await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) }));
+      return api("/api/push/subscribe", { subscription: sub.toJSON(), device: deviceName() });
+    } catch { return { error: "subscribe", text: "This browser wouldn't set up notifications. Try again in a moment, or in another browser." }; }
+  }
+  async function notificationsOff() {
+    const sub = await currentSub().catch(() => null);
+    if (!sub) return { ok: true, text: "Notifications are off for this device." };
+    const endpoint = sub.endpoint; await sub.unsubscribe().catch(() => {});
+    return api("/api/push/unsubscribe", { endpoint });
+  }
+  /** Settings: install, notifications on this device, and where reminders go. */
+  async function appCard(host, s) {
+    if (!host) return;
+    const push = s.push || {};
+    const on = Boolean(await currentSub().catch(() => null));
+    const seg = (attr, items, cur, label) => `<div class="seg" role="group" aria-label="${label}">${items.map(([k, l]) => `<button type="button" data-${attr}="${k}" aria-pressed="${cur === k}">${l}</button>`).join("")}</div>`;
+    let h = "";
+    if (standalone()) h += `<p class="muted">lifeline is installed on this device.</p>`;
+    else if (installEvt) h += `<div class="row"><button class="btn sm" type="button" id="installBtn">Install lifeline</button><span class="small muted">It opens like an app, from your home screen or dock.</span></div>`;
+    else if (isIOS()) h += `<details class="small"><summary class="muted" style="cursor:pointer">Install lifeline on iPhone or iPad</summary><p class="muted" style="margin-top:8px">${IOS_HOW}</p></details>`;
+    else h += `<p class="small muted">To install it, use your browser's menu: Install app, or Add to Home Screen.</p>`;
+    if (!push.on) h += `<p class="small faint">Notifications aren't switched on for this lifeline yet. Whoever runs it can turn them on.</p>`;
+    else if (!pushAble()) h += `<p class="small muted">${isIOS() && !standalone() ? "On iPhone, notifications come from the Home Screen app. Install it first, then turn them on there." : "This browser can't show notifications from lifeline."}</p>`;
+    else h += `<div class="row"><span>Notifications on this device</span><span class="sp"></span>${seg("push", [["on", "On"], ["off", "Off"]], on ? "on" : "off", "Notifications on this device")}</div>${on ? `<div class="row"><button class="btn sm ghost" type="button" id="pushTest">Send a test</button></div>` : ""}`;
+    if (push.on) h += `<div class="reach"><span>Where should reminders reach you?</span>${seg("reach", [["telegram", "Telegram"], ["app", "This app"], ["both", "Both"]], s.reach, "Where reminders reach you")}<p class="small faint">Both sends each reminder here and on Telegram, so muting one never means missing it.</p></div>`;
+    host.innerHTML = `<div class="card-body app-card">${h}</div>`;
+    const again = async () => { const s2 = await api("/api/settings"); appCard(host, s2.error ? s : s2); };
+    const ib = $("#installBtn", host); if (ib) ib.addEventListener("click", async () => { await install(); appCard(host, s); });
+    const pt = $("#pushTest", host); if (pt) pt.addEventListener("click", async () => { pt.disabled = true; tell(await api("/api/push/test", {}), "Sent."); pt.disabled = false; });
+    $$("[data-push]", host).forEach((b) => b.addEventListener("click", async () => {
+      if (b.getAttribute("aria-pressed") === "true") return;
+      $$("[data-push]", host).forEach((x) => (x.disabled = true));
+      const r = b.dataset.push === "on" ? await notificationsOn(push.key) : await notificationsOff();
+      tell(r, b.dataset.push === "on" ? "Notifications are on." : "Notifications are off.", "dose");
+      again();
+    }));
+    $$("[data-reach]", host).forEach((b) => b.addEventListener("click", async () => {
+      const r = await api("/api/settings", { reach: b.dataset.reach }, "PATCH");
+      tell(r, "Saved.", "dose");
+      if (!r.error) { s.reach = b.dataset.reach; $$("[data-reach]", host).forEach((x) => x.setAttribute("aria-pressed", String(x === b))); }
+    }));
+  }
+  /** Settings: the ways into this account, adding another, taking one off (never the last). */
+  async function waysCard(host) {
+    if (!host) return;
+    const w = await api("/api/ways");
+    if (w.error || !Array.isArray(w.ways)) { host.innerHTML = empty("I couldn't load these just now."); return; }
+    const m = w.methods || {};
+    const has = (ch) => w.ways.some((x) => x.channel === ch);
+    const many = w.ways.length > 1;
+    host.innerHTML = `<ul class="lines">${w.ways.map((x) => `<li><span class="w">${esc(WAY_NAME[x.channel] || x.channel)}<small>${esc(x.label)}</small></span>${many ? `<button class="btn sm ghost a" type="button" data-rm="${x.id}" data-ch="${esc(x.channel)}">Remove</button>` : ""}</li>`).join("")}</ul>
+      <div class="card-body ways-add">
+        <p class="small muted">${many ? "Add another way in, or take one off. Your last way in always stays." : "Add a second way in, so you can still get in if one stops working."}</p>
+        ${m.google && !has("google") ? `<div class="g-btn" id="gLink" hidden></div>` : ""}
+        ${m.apple && !has("apple") ? `<button class="btn apple-btn" id="aLink" type="button" hidden>${ico("apple")}Continue with Apple</button>` : ""}
+        <div class="row">${m.telegram && !has("telegram") ? `<button class="btn sm" type="button" id="tgLink">Add Telegram</button>` : ""}${m.sms || m.imessage ? `<button class="btn sm" type="button" data-lcode="phone">Add a phone number</button>` : ""}${m.email ? `<button class="btn sm" type="button" data-lcode="email">Add an email address</button>` : ""}</div>
+        <div id="lcodeHost"></div><p class="small muted" id="waysSay" role="status" aria-live="polite"></p>
+      </div>`;
+    const say = (t) => { const e = $("#waysSay", host); if (e) e.textContent = t || ""; };
+    const again = () => waysCard(host);
+    if ($("#gLink", host)) googleButton($("#gLink", host), m.google, say, again);
+    if ($("#aLink", host)) appleButton($("#aLink", host), m.apple, say, again);
+    $$("[data-lcode]", host).forEach((b) => b.addEventListener("click", () => { codeFlow($("#lcodeHost", host), b.dataset.lcode, m, say, again); $("#lcodeHost input", host).focus(); }));
+    $$("[data-rm]", host).forEach((b) => b.addEventListener("click", async () => {
+      const name = WAY_NAME[b.dataset.ch] || "that";
+      if (!confirm(`Take ${name} off as a way into your account?${["google", "apple"].includes(b.dataset.ch) ? "" : " Messages stop going there too."}`)) return;
+      const r = await api("/auth/ways/remove", { id: Number(b.dataset.rm) });
+      tell(r, "Removed.");
+      if (!r.error) again();
+    }));
+    const tg = $("#tgLink", host);
+    if (tg) {
+      // The request is made ahead of the press, so Telegram opens straight from it.
+      let req = await api("/auth/telegram/link/start", {});
+      tg.addEventListener("click", async () => {
+        if (!req || req.error || !req.url) { say("One moment, then press it again."); req = await api("/auth/telegram/link/start", {}); return; }
+        const mine = req; req = null; window.open(mine.url, "_blank", "noopener");
+        tg.disabled = true; say("Waiting for you in Telegram. Tap \"Yes, add it\" there.");
+        const until = Date.now() + 5 * 60_000;
+        const stop = async (t) => { tg.disabled = false; say(t); req = await api("/auth/telegram/link/start", {}); };
+        const tick = async () => {
+          if (!document.body.contains(tg)) return;
+          if (Date.now() > until) return stop("That request ran out. Press the button again.");
+          const p = await api("/auth/telegram/link", { id: mine.id });
+          if (p.state === "approved") { toast(plain(p.text)); return again(); }
+          if (p.state === "taken") return stop(p.text);
+          if (p.state === "declined") return stop("You said no in Telegram, so nothing changed.");
+          if (p.state === "expired" || (p.error && p.state !== "waiting")) return stop(p.text && p.state !== "expired" ? p.text : "That request ran out. Press the button again.");
+          setTimeout(tick, 2000);
+        };
+        setTimeout(tick, 2500);
+      });
+    }
+  }
 
   boot();
   return { onTg, openSay, setPalette, setMode };

@@ -12,6 +12,10 @@ The same files Railway serves at `/` are a Vercel project, so the web app can li
 
 Pushing to the repo redeploys both Railway (the brain) and Vercel (the front).
 
+## The installable app
+
+`sw.js` (the service worker), `offline.html`, the PNG icons and `manifest.webmanifest` sit in this folder, so both Vercel and Railway serve them from the site's root. `vercel.json` keeps `sw.js` uncached so updates reach people straight away. Notifications need VAPID keys on the brain; see `docs/APP.md`. Other ways to sign in (Google, Apple, codes) are in `docs/SIGNIN.md`.
+
 ## If you'd rather call Railway directly (no proxy)
 
 Delete the `rewrites` from `vercel.json`, set `WEB_ORIGINS=https://lifeline.yourdomain.xyz` on the brain, and change `api()` in `app.js` to prefix requests with the Railway URL and use `credentials: "include"`. The proxy route is simpler; use this only if you need websockets later.

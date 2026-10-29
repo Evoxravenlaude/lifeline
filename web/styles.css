@@ -401,6 +401,29 @@ code.cp.copied { background: var(--k-dose); border-color: var(--ink); }
 .letter .ll { max-width: 48ch; padding: 14px 16px; }
 .signin .card-body { display: grid; gap: 14px; }
 .signin .err { color: var(--warn); min-height: 1.3em; font-size: var(--t-13); }
+/* the quieter ways in, under Telegram: Google, Apple, a code */
+.alt-ways { display: grid; gap: 10px; }
+.alt-ways .or { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; color: var(--ink-3); font-size: var(--t-13); font-style: italic; }
+.alt-ways .or::before, .alt-ways .or::after { content: ""; border-top: 1px solid var(--line); }
+.g-btn { min-height: 44px; max-width: 400px; }
+.apple-btn { justify-self: start; min-width: 220px; justify-content: flex-start; background: #000; color: #fff; border-color: #000; }
+.apple-btn:hover { background: #1a1a1a; }
+[data-mode="night"] .apple-btn { background: #fff; color: #000; border-color: var(--ink); }
+[data-mode="night"] .apple-btn:hover { background: #f2f2f2; }
+.code-ways .btn[aria-pressed="true"] { background: var(--sunk); }
+.code-flow { display: grid; gap: 10px; }
+#altStatus:empty, #waysSay:empty { display: none; }
+/* first run, the welcome step */
+.welcome { max-width: 520px; margin: 0 auto; }
+.welcome form { display: grid; gap: 14px; }
+.welcome .err:empty { display: none; }
+/* settings: ways in, and this app */
+.ways-add { display: grid; gap: 12px; border-top: var(--edge-w) solid var(--line); }
+.app-card { display: grid; gap: 16px; }
+.app-card .reach { display: grid; gap: 8px; justify-items: start; }
+/* offered once: keep lifeline on the home screen */
+.install-offer { position: fixed; z-index: 85; left: 50%; bottom: calc(24px + var(--safe-b)); transform: translateX(-50%); width: min(460px, calc(100vw - 32px)); animation: fadein .3s ease; }
+.install-offer .card-body { display: grid; gap: 10px; }
 .everything { padding: 10px 0 40px; }
 .ev-lede { max-width: 52ch; margin: -4px 0 20px; }
 .ev-grid { columns: 3 290px; column-gap: 22px; }
@@ -485,6 +508,7 @@ code.cp.copied { background: var(--k-dose); border-color: var(--ink); }
   body.app { padding-bottom: calc(var(--tab-h) + var(--safe-b)); }
   .composer { bottom: calc(var(--tab-h) + var(--safe-b)); }
   .toast { bottom: calc(var(--tab-h) + 16px + var(--safe-b)); }
+  .install-offer { bottom: calc(var(--tab-h) + 16px + var(--safe-b)); }
   .board { grid-template-columns: 1fr; }
   .next { grid-template-columns: 1fr; gap: 8px; } .next .when { font-size: var(--t-39); }
   .stub { grid-template-columns: 1fr; } .stub .main { border-right: 0; border-bottom: var(--edge-w) dashed var(--ink); } .stub .side { border-radius: 0 0 calc(var(--r) - var(--edge-w)) calc(var(--r) - var(--edge-w)); grid-auto-flow: column; justify-content: start; gap: 10px; align-items: baseline; }
