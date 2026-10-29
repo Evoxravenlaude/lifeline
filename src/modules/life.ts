@@ -1,4 +1,5 @@
 /** Habits, spend log, quick notes, memory with provenance. */
+import { money, userCurrency } from "../core/money.js";
 import { z } from "zod";
 
 /** "I'm vegetarian" said back is "you're vegetarian". */
@@ -9,6 +10,30 @@ export function yours(fact: string): string {
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
 import { localDay } from "../core/time.js";
+
+/**
+ * A kinder streak: a run of days, where one missed day a week is a rest day and doesn't break it.
+ * `days` are ISO dates, newest first; `today` is the day just logged. Also the best run in that history.
+ */
+export function streakOf(days: string[], today: string): { run: number; best: number; restYesterday: boolean } {
+  const have = new Set(days);
+  const step = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  const walk = (from: string) => {
+    let cur = from, run = 0, lastRest: string | null = null, firstRest: string | null = null;
+    for (let guard = 0; guard < 1000; guard++) {
+      if (have.has(cur)) { run++; cur = step(cur, -1); continue; }
+      const before = step(cur, -1);
+      const restOk = have.has(before) && run > 0 && (!lastRest || Date.parse(lastRest) - Date.parse(cur) >= 7 * 86_400_000);
+      if (!restOk) break;
+      lastRest = cur; firstRest ??= cur; cur = before;
+    }
+    return { run, firstRest };
+  };
+  const now = walk(today);
+  let best = now.run;
+  for (const d of days) if (!have.has(step(d, 1)) && !have.has(step(d, 2))) best = Math.max(best, walk(d).run);
+  return { run: now.run, best, restYesterday: now.firstRest === step(today, -1) };
+}
 
 const habitAdd = defineAction({
   name: "habit.add",
@@ -42,13 +67,14 @@ const habitCheck = defineAction({
     }
     const day = localDay(args.day === "yesterday" ? new Date(ctx.now.getTime() - 86_400_000) : ctx.now, ctx.user.tz);
     await ctx.db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [h.id, day]);
-    const streak = await ctx.db.one<{ n: string }>(
-      `WITH d AS (SELECT day FROM habit_checkins WHERE habit_id=$1 ORDER BY day DESC)
-       SELECT count(*)::text AS n FROM (SELECT day, row_number() OVER (ORDER BY day DESC) AS rn FROM d) x WHERE day = $2::date - (rn-1)::int`,
-      [h.id, day],
-    );
-    const n = Number(streak?.n ?? 1);
-    return { reply: `${h.name}, logged. ${first ? "I'll count it from here; say \"did " + h.name + "\" each time and I keep the streak." : n === 1 ? "Day one." : `That's ${n} days running.`}`, undo: { payload: { id: h.id, day, created: first } } };
+    const days = (await ctx.db.query<{ day: string }>(`SELECT to_char(day, 'YYYY-MM-DD') AS day FROM habit_checkins WHERE habit_id=$1 AND day <= $2::date ORDER BY day DESC LIMIT 800`, [h.id, day])).map((r) => r.day);
+    const s = streakOf(days, day);
+    const n = s.run;
+    const said = first ? "I'll count it from here; say \"did " + h.name + "\" each time and I keep the streak."
+      : n === 1 ? (s.best > 2 ? `Day one again. Your best run is ${s.best} days, and every one of them still counts.` : "Day one.")
+      : `That's ${n} days running.${s.restYesterday ? " Yesterday was a rest day; one a week keeps the run going." : ""}`;
+    const milestone = !first && [7, 30, 100, 365].includes(n);
+    return { reply: `${h.name}, logged. ${said}`, ...(milestone ? { sticker: "cheers", celebrate: true } : {}), undo: { payload: { id: h.id, day, created: first } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM habit_checkins WHERE habit_id=$1 AND day=$2`, [p.id, p.day]);
@@ -77,11 +103,12 @@ const habitList = defineAction({
 const spendLog = defineAction({
   name: "spend.log",
   tier: 1,
-  description: "Log a spend from chat ('spent 4500 naira on data'). Currency as ISO code (NGN, USD, XAF, GBP). Category free text: food, transport, data, rent, fun, other.",
-  schema: z.object({ amount: z.number().positive(), currency: z.string().min(3).max(3), category: z.string().optional(), note: z.string().optional() }),
+  description: "Log a spend from chat ('spent 20 dollars on lunch'). Currency as an ISO code (USD, EUR, GBP, NGN, KES, INR...); leave it out when the person didn't say one and their own currency is used. Category free text: food, transport, data, rent, fun, other.",
+  schema: z.object({ amount: z.number().positive(), currency: z.string().min(3).max(3).optional(), category: z.string().optional(), note: z.string().optional() }),
   async run(args, ctx) {
-    const r = await ctx.db.one<{ id: number }>(`INSERT INTO spend (user_id, amount, currency, category, note) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [ctx.user.id, args.amount, args.currency.toUpperCase(), args.category ?? "other", args.note ?? null]);
-    return { reply: `${args.amount.toLocaleString()} ${args.currency.toUpperCase()} on ${args.category ?? "other"}, logged. Ask "how much did I spend this week" any time.`, undo: { payload: { id: r!.id } } };
+    const cur = (args.currency ?? userCurrency(ctx.user)).toUpperCase();
+    const r = await ctx.db.one<{ id: number }>(`INSERT INTO spend (user_id, amount, currency, category, note) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [ctx.user.id, args.amount, cur, args.category ?? "other", args.note ?? null]);
+    return { reply: `${money(args.amount, cur)} on ${args.category ?? "other"}, logged. Ask "how much did I spend this week" any time.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
     await ctx.db.query(`DELETE FROM spend WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
@@ -101,7 +128,7 @@ const spendSummary = defineAction({
       [ctx.user.id, String(days)],
     );
     const label = args.range === "month" ? "this month" : "this week";
-    if (!rows.length) return { reply: `Nothing logged ${label}. Say "I spent 4500 naira on data" and I'll keep count.` };
+    if (!rows.length) return { reply: `Nothing logged ${label}. Say "I spent 20 on lunch" and I'll keep count.` };
     const byCur = new Map<string, number>();
     for (const r of rows) byCur.set(r.currency, (byCur.get(r.currency) ?? 0) + Number(r.total));
     const head = `${[...byCur].map(([c, t]) => `${t.toLocaleString()} ${c}`).join(" and ")} ${label}.`;

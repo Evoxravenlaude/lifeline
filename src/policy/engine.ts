@@ -10,6 +10,7 @@
  * exactly which sentence produced which action.
  */
 import { humanError } from "../core/humanize.js";
+import { redact, redactJson } from "../core/redact.js";
 import { getAction } from "./registry.js";
 import type { ActionResult, Attachment, Ctx, Thread, Tier } from "./types.js";
 
@@ -80,7 +81,7 @@ async function runNow(ctx: Ctx, actionName: string, tier: Tier, args: unknown): 
     );
     undoId = row!.id;
   }
-  const extra: Attachment | undefined = result.image || result.speak || result.dice || result.buttons ? { image: result.image, speak: result.speak, dice: result.dice, buttons: result.buttons } : undefined;
+  const extra: Attachment | undefined = result.image || result.speak || result.dice || result.buttons || result.sticker || result.celebrate ? { image: result.image, speak: result.speak, dice: result.dice, buttons: result.buttons, sticker: result.sticker, celebrate: result.celebrate } : undefined;
   return { kind: "ran", reply: result.reply, undoId, extra };
 }
 
@@ -136,6 +137,6 @@ export async function undo(ctx: Ctx, undoId: number): Promise<string> {
 async function audit(ctx: Ctx, action: string, tier: Tier, args: unknown, outcome: string) {
   await ctx.db.query(
     `INSERT INTO audit_log (user_id, action, tier, args, outcome, source_message) VALUES ($1,$2,$3,$4,$5,$6)`,
-    [ctx.user.id, action, tier, JSON.stringify(args ?? {}), outcome, ctx.sourceMessage ?? null],
+    [ctx.user.id, action, tier, JSON.stringify(redactJson(args ?? {})), outcome, ctx.sourceMessage ? redact(ctx.sourceMessage) : null],
   );
 }

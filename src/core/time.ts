@@ -101,14 +101,23 @@ export function parseRange(text: string, tz: string, now: Date): { start: Date; 
 }
 
 /** "600 usd", "$600", "600 dollars", "80k naira" -> amount and ISO-ish currency. */
+const SYMBOLS: Record<string, string> = { $: "USD", "US$": "USD", "€": "EUR", "£": "GBP", "₦": "NGN", "¥": "JPY", "₹": "INR", "₩": "KRW", "₱": "PHP", "₺": "TRY", "₽": "RUB", "₴": "UAH", "₵": "GHS", "R$": "BRL", "A$": "AUD", "C$": "CAD", "₫": "VND", "฿": "THB", "₪": "ILS", "zł": "PLN", "Kč": "CZK" };
+const WORDS: [RegExp, string][] = [
+  [/^(?:usd|dollars?|bucks)$/, "USD"], [/^(?:eur|euros?)$/, "EUR"], [/^(?:gbp|pounds?|quid)$/, "GBP"], [/^(?:ngn|naira)$/, "NGN"], [/^(?:ghs|cedis?)$/, "GHS"],
+  [/^(?:xaf|xof|cfa)$/, "XAF"], [/^(?:kes|shillings?)$/, "KES"], [/^(?:zar|rand)$/, "ZAR"], [/^(?:inr|rupees?|rs)$/, "INR"], [/^(?:jpy|yen)$/, "JPY"], [/^(?:cny|rmb|yuan)$/, "CNY"],
+  [/^(?:brl|reais|real)$/, "BRL"], [/^(?:mxn|pesos?)$/, "MXN"], [/^(?:aed|dirhams?)$/, "AED"], [/^(?:egp)$/, "EGP"], [/^(?:cad|aud|chf|sgd|hkd|nzd|sek|nok|dkk|pln|php|idr|myr|thb|krw|vnd|pkr|bdt|try|sar|qar|ils|uah|cop|clp|pen|ars|mad|tzs|ugx|rwf|etb)$/, ""],
+  [/^(?:usdt|usdc|eth|btc|sol)$/, ""],
+];
+/** "€40", "1,200 dollars", "80k naira", "2500 INR", "R$ 90". Needs a currency sign or word; a bare number isn't money. */
 export function parseMoney(text: string): { amount: number; currency: string } | null {
-  const m = /(?:([$€£₦])\s*)?(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\s*(usd|dollars?|bucks|eur|euros?|gbp|pounds?|ngn|naira|ghs|cedis?|xaf|cfa|kes|zar|usdt|usdc)?/i.exec(text);
-  if (!m || (!m[1] && !m[4])) return null;
+  const m = /(?:(US\$|R\$|A\$|C\$|zł|Kč|[$€£₦¥₹₩₱₺₽₴₵₫฿₪])\s*)?(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b\s*([A-Za-z]{2,7})?/.exec(text);
+  if (!m) return null;
+  const word = (m[4] ?? "").toLowerCase();
+  const hit = word ? WORDS.find(([re]) => re.test(word)) : undefined;
+  if (!m[1] && !hit) return null;
   let amount = Number(m[2].replace(/,/g, ""));
   if (m[3]?.toLowerCase() === "k") amount *= 1000;
   if (m[3]?.toLowerCase() === "m") amount *= 1_000_000;
-  const sym: Record<string, string> = { $: "USD", "€": "EUR", "£": "GBP", "₦": "NGN" };
-  const word = (m[4] ?? "").toLowerCase();
-  const cur = m[1] ? sym[m[1]] : /^(usd|dollar|buck)/.test(word) ? "USD" : /^(eur)/.test(word) ? "EUR" : /^(gbp|pound)/.test(word) ? "GBP" : /^(ngn|naira)/.test(word) ? "NGN" : /^(ghs|cedi)/.test(word) ? "GHS" : /^(xaf|cfa)/.test(word) ? "XAF" : /^kes/.test(word) ? "KES" : /^zar/.test(word) ? "ZAR" : word.toUpperCase();
+  const cur = m[1] ? SYMBOLS[m[1]] : hit![1] || word.toUpperCase();
   return { amount, currency: cur };
 }

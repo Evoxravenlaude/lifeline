@@ -5,6 +5,7 @@ import { register } from "../policy/registry.js";
 import { fmtDate, localDay, parseWhen } from "../core/time.js";
 import { onJob, push } from "../core/scheduler.js";
 import { DateTime } from "luxon";
+import { publicFetch } from "../core/safefetch.js";
 
 /* ---------- lists ---------- */
 const listAdd = defineAction({
@@ -169,7 +170,7 @@ const summarize = defineAction({
   async run(args, ctx) {
     let body = args.text ?? "";
     if (args.url) {
-      const r = await fetch(args.url, { headers: { "user-agent": "lifeline-bot/0.1" } });
+      const r = await publicFetch(args.url, { headers: { "user-agent": "lifeline-bot/0.1" }, signal: AbortSignal.timeout(15_000) });
       const html = await r.text();
       body = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 12000);
     }

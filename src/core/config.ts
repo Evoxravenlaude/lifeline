@@ -18,7 +18,7 @@ export const config = {
     .filter(Boolean)
     .map(Number),
   /** How many people the circle holds. Anyone with the link joins until it's full. */
-  maxUsers: Number(process.env.MAX_USERS || 15),
+  maxUsers: Number(process.env.MAX_USERS || 55),
   databaseUrl: process.env.DATABASE_URL ?? "",
   anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
   model: process.env.MODEL ?? "claude-haiku-4-5",
@@ -90,7 +90,7 @@ export const config = {
   sendblueKey: process.env.SENDBLUE_API_KEY ?? "",
   sendblueSecret: process.env.SENDBLUE_API_SECRET ?? "",
   webhookSecret: process.env.WEBHOOK_SECRET ?? "",
-  defaultTz: process.env.DEFAULT_TZ ?? "Africa/Lagos",
+  defaultTz: process.env.DEFAULT_TZ ?? "UTC",
   quietHours: parseQuiet(process.env.QUIET_HOURS),
   maxPushesPerDay: Number(process.env.MAX_PUSHES_PER_DAY ?? 3),
   digestHour: Number(process.env.DIGEST_HOUR ?? 7),

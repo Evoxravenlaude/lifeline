@@ -1,6 +1,6 @@
 /**
  * Who gets in. Anyone with the bot's link or the website can join, until the
- * circle is full (MAX_USERS, 15 by default). People already in always get in.
+ * circle is full (MAX_USERS, 55 by default). People already in always get in.
  * ALLOWED_USER_IDS is optional: those Telegram ids are the owners. They always
  * get in, even when the circle is full, and can ask /circle to see who's in.
  */

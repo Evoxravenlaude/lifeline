@@ -1,3 +1,4 @@
+import { DRAWERS, pluginCards } from "../core/plugins.js";
 import { activePlaces, waysIn } from "../core/ways.js";
 /**
  * What the bot can do, written so the bot can explain itself. One card per
@@ -99,7 +100,7 @@ export const CAPABILITIES: Capability[] = [
     key: "money", name: "Spending",
     cues: ["spent", "spend", "spending", "expense", "expenses", "budget", "cost", "paid", "money", "naira", "dollars", "cedis", "how much"],
     what: "I log what you spend in any currency and tell you where it went.",
-    say: ["I spent 4500 naira on data", "paid 20 dollars for lunch", "how much did I spend this week"],
+    say: ["I spent 20 on lunch", "paid 4500 naira for data", "how much did I spend this week"],
     then: "Ask by week or month and I group it. Set a budget and I tell you when you're close.",
   },
   {
@@ -120,7 +121,7 @@ export const CAPABILITIES: Capability[] = [
     key: "scout", name: "Scout: companies and people",
     cues: ["scout", "founders", "founder", "who's building", "who is building", "startups", "projects in", "partnership", "partnerships", "outreach", "intro", "dm", "find people", "niche"],
     what: "Looking for clients, partners, a job or people to learn from? I find new and growing companies in any field and the people behind them, with their public links, and draft the first message.",
-    say: ["who's building fintech in Lagos", "find design studios in Accra to partner with", "scout ai startups hiring designers", "draft a message to Paystack about an internship"],
+    say: ["who's building fintech in Nairobi", "find design studios in Lisbon to partner with", "scout ai startups hiring designers", "draft a message to Paystack about an internship"],
     then: "I search the open web, GitHub, launch sites and company lists, then give you names, links and handles. Say \"keep watching\" and new ones land in your morning note.",
     limits: "I draft; you send. I don't post or DM from your accounts.",
   },
@@ -149,7 +150,7 @@ export const CAPABILITIES: Capability[] = [
   {
     key: "bills", name: "Bills and airtime",
     cues: ["bill", "bills", "airtime", "top up", "topup", "recharge", "data bundle", "electricity", "dstv", "pay for"],
-    what: "In Nigeria I can buy airtime and data and pay billers like electricity and TV through Flutterwave, after you say yes to the exact amount.",
+    what: "Where Flutterwave covers it (Nigeria today), I buy airtime and data and pay billers like electricity and TV, after you say yes to the exact amount.",
     say: ["which billers do airtime", "pay 2000 airtime to 0801 234 5678"],
     then: "I echo the amount, the biller and the number, and wait ten minutes for your yes. Nothing moves without it.",
     limits: "Needs a Flutterwave key on the server, and the number must be one you've confirmed before.",
@@ -165,7 +166,7 @@ export const CAPABILITIES: Capability[] = [
     key: "tools", name: "Small tools",
     cues: ["weather", "convert", "exchange rate", "rate", "tldr", "summarise", "summarize", "translate"],
     what: "Weather, currency, a quick summary of a link.",
-    say: ["weather Lagos tomorrow", "100 usd to ngn", "tldr https://..."],
+    say: ["weather London tomorrow", "100 usd to eur", "tldr https://..."],
     then: "Straight answers, no setup.",
   },
   {
@@ -186,7 +187,7 @@ export const CAPABILITIES: Capability[] = [
     key: "drawing", name: "Drawing",
     cues: ["draw", "generate an image", "make an image", "make a picture", "illustration", "wallpaper", "sticker", "logo", "art", "paint"],
     what: "I draw what you describe: wallpapers, stickers, birthday cards, ideas, or Pip in any outfit.",
-    say: ["draw a lion in agbada, oil painting", "make a wallpaper of Lagos at night", "draw yourself as an astronaut"],
+    say: ["draw a lion in agbada, oil painting", "make a wallpaper of Tokyo at night", "draw yourself as an astronaut"],
     then: "Say again for another take, or tell me what to change.",
     limits: "A handful a day each, and nothing explicit.",
   },
@@ -194,7 +195,7 @@ export const CAPABILITIES: Capability[] = [
     key: "search", name: "Web search",
     cues: ["search", "google", "look up", "news", "latest", "who won", "online", "internet", "current"],
     what: "I search the web for anything current: news, scores, prices, opening hours, release dates, how-tos, and give you the answer with sources.",
-    say: ["search who won the Champions League last night", "look up the price of a PS5 in Lagos", "what's the latest on the fuel price"],
+    say: ["search who won the Champions League last night", "look up the price of a PS5 near me", "what's the latest on the fuel price"],
     then: "Short answer first, links underneath.",
   },
   {
@@ -259,7 +260,7 @@ export function trackAnswer(): string {
     "Periods and your cycle: when it starts and ends, cramps, flow, mood, and when the next one is likely. Say \"my period started today\".",
     "Medication: every dose, with Taken and Skip. Say \"I take vitamin D at 8am and 8pm\".",
     "Habits: gym, reading, prayer, practice, anything you want a streak for. Say \"did gym\".",
-    "Money: what you spend and on what. Say \"I spent 2000 naira on lunch\".",
+    "Money: what you spend and on what. Say \"I spent 12 on lunch\".",
     "Ask \"how's my sleep this week\" or \"when is my next period\" any time and I'll show you where things stand.",
   ].join("\n");
 }
@@ -274,12 +275,13 @@ export function isCapabilityQuestion(text: string): boolean {
     if (OVERVIEW.test(t)) return true;
     if (!ASKING.test(t)) return false;
     // "can you remind me at 9" is a request; "can you do reminders" is a question. Requests carry concrete arguments.
-    const concrete = /\b(?:at|on|in|by|tomorrow|tonight|next|every|\d)\b/i.test(t) && !/\b(?:how|what kind|what sort|which)\b/i.test(t);
+    const concrete = (/\b(?:at|on|in|by|tomorrow|tonight|next|every|\d)\b/i.test(t) || /\b0x[0-9a-f]{8,}|https?:\/\/|\b[\w-]+\.(?:eth|sol|com|io|xyz|org|net)\b|@\w{3,}/i.test(t)) && !/\b(?:how|what kind|what sort|which)\b/i.test(t);
     return !concrete || /\b(?:how do i|how can i|what can|is there a way|able to|do you (?:do|support|handle|keep|track|know))\b/i.test(t);
   });
 }
 
 export function matchCapabilities(text: string, max = 2): Capability[] {
+  sync();
   const t = ` ${text.toLowerCase()} `;
   return CAPABILITIES.map((c) => ({ c, s: c.cues.reduce((s, cue) => s + (t.includes(cue.startsWith(" ") || cue.length > 4 ? cue : ` ${cue}`) ? (cue.length > 5 ? 3 : 2) : 0), 0) }))
     .filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, max).map((x) => x.c);
@@ -308,7 +310,7 @@ export function overview(name?: string | null): string {
   return [
     `${first ? `${first}, here's` : "Here's"} what I'm for. I keep your day: reminders, your calendar, lists, birthdays, classes and trips. I look after the body side too: medication, periods and your cycle, sleep, water, weight, mood, habits, anything you want to track. And the money side: what you spend, what's due, and bills or airtime when you say yes.`,
     `If you work on things, I can do more: find jobs and companies in your field and the people behind them, watch hackathons and grants, keep crypto prices and wallets in view. None of that gets in the way if it's not for you.`,
-    `You don't need commands. Say it the way you'd say it to a friend: "remind me to call mum on Sunday at 5", "my period started today", "I spent 4500 naira on lunch", "slept 6 hours".`,
+    `You don't need commands. Say it the way you'd say it to a friend: "remind me to call mum on Sunday at 5", "my period started today", "I spent 15 on lunch", "slept 6 hours".`,
     `Anything that moves money, deletes, or reaches someone else waits for your yes, and you can undo most things for five minutes.`,
   ].join("\n\n");
 }
@@ -337,17 +339,31 @@ export function answerCapability(text: string, name?: string | null): string | n
   return `${lead}${explain(hits[0])}\n\nIf you meant ${hits[1].name.toLowerCase()}: ${hits[1].what} Say "${hits[1].say[0]}".`;
 }
 
-/** Full index for /help: short, grouped, nothing that looks like a manual. */
-/** How the catalogue is grouped wherever it's shown whole: /help, the web's What I do, the landing page. */
-export const HELP_GROUPS: [string, string[]][] = [
-  ["Your day", ["reminders", "calendar", "lists", "dates", "trips", "classes", "notes", "brief"]],
-  ["Body and health", ["medications", "cycle", "measures", "habits"]],
-  ["Money", ["money", "bills"]],
-  ["Voice, photos and search", ["talk", "pictures", "drawing", "search", "email"]],
-  ["Fun", ["games", "fun"]],
-  ["Work and growth", ["jobs", "scout", "hackathons", "markets", "trading"]],
-  ["Me", ["voice", "tools", "channels", "safety"]],
-];
+/** How the catalogue is grouped wherever it's shown whole: /everything, /help, the website. Features from modules join their drawer. */
+const CORE_GROUPS: Record<string, string[]> = {
+  "Your day": ["reminders", "calendar", "lists", "dates", "trips", "classes", "notes", "brief"],
+  "Body and mind": ["medications", "cycle", "measures", "habits"],
+  "Money": ["money", "bills"],
+  "Voice, photos and search": ["talk", "pictures", "drawing", "search", "email"],
+  "Fun": ["games", "fun"],
+  "Work, code and crypto": ["jobs", "scout", "hackathons", "markets", "trading"],
+  "Me": ["voice", "tools", "channels", "safety"],
+};
+let synced = -1;
+/** Bring in cards that modules registered (src/core/plugins.ts). Cheap: only does work when a new one arrived. */
+function sync() {
+  const pc = pluginCards();
+  if (pc.length === synced) return;
+  for (const { card } of pc) if (!CAPABILITIES.some((c) => c.key === card.key)) CAPABILITIES.push(card);
+  synced = pc.length;
+}
+/** The drawers that have something in them, in their fixed order. */
+export function helpGroups(): [string, string[]][] {
+  sync();
+  const pc = pluginCards();
+  return DRAWERS.map((d) => [d, [...(CORE_GROUPS[d] ?? []), ...pc.filter((x) => x.drawer === d).map((x) => x.card.key)]] as [string, string[]]).filter(([, keys]) => keys.length);
+}
+export function allCapabilities(): Capability[] { sync(); return CAPABILITIES; }
 
 /** "(send a receipt) log this" → Try: send a receipt with "log this". */
 export function tryLine(say: string): string {
@@ -356,35 +372,31 @@ export function tryLine(say: string): string {
   return m[2] ? `Try: ${m[1]} with "${m[2]}"` : `Try: ${m[1]}`;
 }
 
-/** /everything: one line per drawer, so the whole of it fits on a phone screen. */
+/** /everything: one short line per drawer, so the whole of it fits on a phone screen without a wall of text. */
 export function everythingIndex(): string {
-  const by = Object.fromEntries(CAPABILITIES.map((c) => [c.key, c]));
-  return ["Everything I can do. Ask about any of it in your own words, or open a drawer below.", "", ...HELP_GROUPS.map(([title, keys]) => `**${title}**\n${keys.map((k) => by[k]?.name.replace(/^[A-Z](?=[a-z])/, (m) => m.toLowerCase())).filter(Boolean).join(", ")}\n`)].join("\n").trim();
+  const by = Object.fromEntries(allCapabilities().map((c) => [c.key, c]));
+  const low = (n: string) => n.replace(/^[A-Z](?=[a-z])/, (m) => m.toLowerCase());
+  return ["Everything I can do. Ask about any of it in your own words, or open a drawer below.", "", ...helpGroups().map(([title, keys]) => {
+    const names = keys.map((k) => by[k]?.name).filter(Boolean).map((n) => low(n!));
+    return `**${title}**\n${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}`;
+  })].join("\n");
 }
 
 /** One drawer: each thing, what it does in a line, and a sentence to try. */
 export function everythingGroup(i: number): string | null {
-  const g = HELP_GROUPS[i];
+  const g = helpGroups()[i];
   if (!g) return null;
-  const by = Object.fromEntries(CAPABILITIES.map((c) => [c.key, c]));
+  const by = Object.fromEntries(allCapabilities().map((c) => [c.key, c]));
   const first = (t: string) => (t.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? t);
   return [`**${g[0]}**`, ...g[1].map((k) => by[k]).filter(Boolean).map((c) => `\n**${c.name}**\n${first(c.what)}\n${tryLine(c.say[0])}`)].join("\n");
 }
 
+/** /help: the same calm index, with how buttons work. */
 export function helpIndex(): string {
-  const groups = HELP_GROUPS;
-  const by = Object.fromEntries(CAPABILITIES.map((c) => [c.key, c]));
-  const out: string[] = ["Ask me about any of these in plain words, or ask \"can you do X\" and I'll show you how.", ""];
-  for (const [title, keys] of groups) {
-    out.push(title);
-    for (const k of keys) { const c = by[k]; if (c) out.push(`${c.name}: "${c.say[0]}"`); }
-    out.push("");
-  }
-  out.push("Buttons: Confirm, Cancel, Undo. On SMS reply 1 or 2. Say pending to see what's waiting, undo to take back the last thing.");
-  return out.join("\n");
+  return `${everythingIndex().replace(", or open a drawer below", "")}\n\nButtons: Yes, No, Undo, OK. By text message, reply 1 or 2. Say pending for what's waiting, undo to take back the last thing, quiet day for a day without nudges.`;
 }
 
 /** Compact catalogue for the model's system prompt. */
 export function catalogueForModel(): string {
-  return CAPABILITIES.map((c) => `${c.name}: ${c.what}${c.limits ? ` Limit: ${c.limits}` : ""}`).join("\n");
+  return allCapabilities().map((c) => `${c.name}: ${c.what}${c.limits ? ` Limit: ${c.limits}` : ""}`).join("\n");
 }

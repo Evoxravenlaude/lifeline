@@ -35,7 +35,8 @@ export function splitTime(text: string, now = new Date()): { when: string | null
 const strip = (s: string, ...res: RegExp[]) => res.reduce((a, re) => a.replace(re, ""), s).replace(/\s+/g, " ").trim();
 const cur = (s?: string) => {
   const v = (s ?? "").toLowerCase();
-  if (!v || /naira|ngn|₦/.test(v)) return "NGN";
+  if (!v) return undefined;
+  if (/naira|ngn|₦/.test(v)) return "NGN";
   if (/dollar|usd|\$/.test(v)) return "USD";
   if (/pound|gbp|£/.test(v)) return "GBP";
   if (/cfa|xaf/.test(v)) return "XAF";
@@ -102,6 +103,8 @@ const RULES: Rule[] = [
   { test: /^(?:what'?s|how'?s|give me)\s+(?:my |the )?(?:day|digest|brief|briefing|morning|rundown)(?: (?:look|looking) like)?$|^(?:brief|digest|rundown) me/i, build: () => ({ action: "digest.now", args: {} }) },
 
   // ---- lists ----
+  { test: /^(?:add|put) (.+?) (?:to|on) (?:my |the )?shopping(?: list)?$/i, build: (_t, m) => ({ action: "list.add", args: { list: "shopping", items: m[1].split(/\s*(?:,|\band\b)\s*/) } }) },
+  { test: /^(?:add|put) (.+?) (?:to|on) (?:my |the )?(?:todo|to-?do|tasks?)(?: list)?$/i, build: (_t, m) => ({ action: "list.add", args: { list: "todo", items: [m[1]] } }) },
   { test: /^(?:i (?:need|have) to buy|add .+ to (?:my |the )?shopping|shopping(?: list)?:?)\s*(.+)/i, build: (_t, m) => ({ action: "list.add", args: { list: "shopping", items: strip(m[1], /^(?:i (?:need|have) to buy|add)\s+/i, /\s+to (?:my |the )?shopping(?: list)?$/i).split(/\s*(?:,|\band\b)\s*/) } }) },
   { test: /^(?:i (?:need|have|got) to|todo:?|to-?do:?|add .+ to (?:my |the )?(?:todo|to-?do|tasks?)(?: list)?)\s*(.+)/i, build: (_t, m) => ({ action: "list.add", args: { list: "todo", items: strip(m[1], /^add\s+/i, /\s+to (?:my |the )?(?:todo|to-?do|tasks?)(?: list)?$/i).split(/\s*(?:,|\band then\b|\band\b)\s*/) } }) },
   { test: /^(?:i )?(?:bought|got(?! paid)|picked up|grabbed)\s+(.+)/i, build: (_t, m) => ({ action: "list.done", args: { match: m[1], list: "shopping" } }) },

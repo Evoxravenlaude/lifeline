@@ -18,5 +18,20 @@ import "./cycle.js";
 import "./measures.js";
 import "./senses.js";
 import "./fun.js";
+import "./calm.js";
+
+/* Feature folders: every src/modules/features/<area>/index.ts registers itself (see docs/PLUGINS.md). */
+import { readdirSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+const featuresDir = join(dirname(fileURLToPath(import.meta.url)), "features");
+if (existsSync(featuresDir)) {
+  for (const area of readdirSync(featuresDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()) {
+    const ts = join(featuresDir, area, "index.ts"), js = join(featuresDir, area, "index.js");
+    const file = existsSync(ts) ? ts : existsSync(js) ? js : null;
+    if (file) { const url = pathToFileURL(file).href; await import(url); }
+  }
+}
 import "../intent/persona.js";
 import "../pollers/hackathons.js";
+import "../telegram/group.js";

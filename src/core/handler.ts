@@ -9,8 +9,10 @@
  *   4. intent: rules, model, loose language, small talk
  * Every reply passes through the voice pass before it leaves.
  */
+import { buttonHandler, pluginFirstLooks, pluginForwardedRules, pluginPhotoActions } from "./plugins.js";
+import { redact } from "./redact.js";
 import { everythingIndex } from "../intent/capabilities.js";
-import { parseByRules } from "../intent/rules.js";
+import { parseByRules, SPECIFIC } from "../intent/rules.js";
 import { parseLoose } from "../intent/loose.js";
 import { allow, mediaAbilities, search, see } from "./media.js";
 import { answerGame, gameAnswer } from "../modules/fun.js";
@@ -111,7 +113,7 @@ export async function handleMessage(db: Db, user: User, text: string, opts: { fo
     return await answerMessage(db, user, text, opts);
   } catch (e: any) {
     log.error({ err: e?.message, user: user.id }, "message failed");
-    return { text: BROKE };
+    return { text: BROKE, sticker: "oops" };
   }
 }
 
@@ -119,7 +121,13 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
   const now = opts.now ?? new Date();
   const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}` };
   const t = text.trim();
-  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, text]);
+  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, redact(text)]);
+
+  // 0. Anything that must be seen first (someone in crisis), whatever else is open.
+  if (!opts.forwarded) for (const look of pluginFirstLooks()) {
+    const said = await look(db, user, t).catch(() => null);
+    if (said) { await setThread(db, user, null); return finish(db, user, { text: said }); }
+  }
 
   // 1. About the last thing we said.
   if (YES.test(t)) {
@@ -162,9 +170,17 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
   if (played) return finish(db, user, played);
 
   // 3. "Can you track meds?"
-  if (!opts.forwarded && isCapabilityQuestion(t)) {
+  // A question that carries the real thing ("is this legit: …", "can you explain tx 0x…") is a request, not a question about me.
+  const request = (SPECIFIC.test(t) || /^how (?:do|can) i (?:cancel|unsubscribe from|stop paying for)\b/i.test(t)) && Boolean(parseByRules(t));
+  if (!opts.forwarded && isCapabilityQuestion(t) && !request) {
     const a = answerCapability(t, user.name);
     if (a) { if (thread) await setThread(db, user, null); return finish(db, user, { text: a }); }
+  }
+
+  // 3a. Forwarded: a feature may want to look at it (a message that smells like a scam).
+  if (opts.forwarded) for (const rule of pluginForwardedRules()) {
+    const i = rule(t);
+    if (i && getAction(i.action)?.tier === 1) return finish(db, user, await decide(ctx, i.action, i.args));
   }
 
   // 4. Intent.
@@ -213,17 +229,20 @@ function defaultFill(need: string, text: string, ctx: Ctx): Record<string, unkno
 
 async function finish(db: Db, user: User, r: Reply): Promise<Reply> {
   const out = { ...r, text: polish(r.text, { persona: personaOf(user.prefs) }) };
-  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'assistant',$2)`, [user.id, out.text.slice(0, 2000)]);
+  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'assistant',$2)`, [user.id, redact(out.text.slice(0, 2000))]);
   return out;
 }
 
 /** Button presses (Telegram callback_data, web button, or "1"/"2" on SMS). */
 export async function handleCallback(db: Db, user: User, data: string, now = new Date()): Promise<Reply> {
   try {
+    // A tap is a sign of life too (a legacy plan's inactivity window counts it).
+    await db.query(`UPDATE users SET prefs = prefs || jsonb_build_object('lastTap', $2::bigint) WHERE id=$1`, [user.id, now.getTime()]);
+    user.prefs = { ...user.prefs, lastTap: now.getTime() };
     return await answerButton(db, user, data, now);
   } catch (e: any) {
     log.error({ err: e?.message, user: user.id, data }, "button failed");
-    return { text: BROKE };
+    return { text: BROKE, sticker: "oops" };
   }
 }
 
@@ -255,7 +274,11 @@ async function answerButton(db: Db, user: User, data: string, now: Date): Promis
       await db.query(`UPDATE users SET prefs = prefs || $2::jsonb WHERE id=$1`, [user.id, JSON.stringify({ photoSuggestions: list.filter((p) => p.id !== a) })]);
       return finish(db, user, await keepFromPhoto(ctx, sug.text));
     }
-    default: return say("That button doesn't do anything any more.");
+    default: {
+      const fn = buttonHandler(data);
+      if (fn) return finish(db, user, await fn(db, user, data, now));
+      return say("That button doesn't do anything any more.");
+    }
   }
 }
 
@@ -274,7 +297,7 @@ export function buttonsAsText(r: Reply): string {
 export async function handlePhoto(db: Db, user: User, image: Buffer, mime: string, caption: string, channel: Channel): Promise<Reply> {
   try {
     const cap = caption.trim();
-    await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, `[picture]${cap ? ` ${cap}` : ""}`]);
+    await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, `[picture]${cap ? ` ${redact(cap)}` : ""}`]);
     if (!mediaAbilities().see) return finish(db, user, { text: "I can't look at pictures on this server yet. It needs a Gemini or Groq key." });
     if (!allow("see", user.id)) return finish(db, user, { text: "That's a lot of pictures for one day; I'll be able to look again tomorrow." });
     const seen = await see(image, mime, cap);
@@ -297,7 +320,7 @@ export async function handlePhoto(db: Db, user: User, image: Buffer, mime: strin
     return finish(db, user, { text });
   } catch (e: any) {
     log.error({ err: e?.message, user: user.id }, "photo failed");
-    return { text: BROKE };
+    return { text: BROKE, sticker: "oops" };
   }
 }
 
@@ -316,7 +339,7 @@ async function keepFromPhoto(ctx: Ctx, suggestion: string): Promise<Reply> {
     const r = await resolveIntent(suggestion, ctx, { forwarded: true });
     intent = r.kind === "action" ? r.intent : null;
   }
-  if (!intent || !FROM_PHOTO.test(intent.action) || getAction(intent.action)?.tier !== 1) {
+  if (!intent || !(FROM_PHOTO.test(intent.action) || pluginPhotoActions().has(intent.action)) || getAction(intent.action)?.tier !== 1) {
     return { text: `I'd keep it as: "${suggestion}". Say that, or your own version, and I'll do it.` };
   }
   const r = await decide(ctx, intent.action, intent.args);

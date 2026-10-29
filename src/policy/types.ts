@@ -52,6 +52,10 @@ export interface Attachment {
   speak?: boolean | string;
   /** Telegram's animated dice: 🎲 🎯 🏀 ⚽ 🎳 🎰 */
   dice?: string;
+  /** One of Pip's stickers to go with the reply on Telegram (src/telegram/stickers.ts), for real moments only. */
+  sticker?: string;
+  /** A real milestone: Telegram plays its confetti effect on the message (private chats only; never in calm mode). */
+  celebrate?: boolean;
   /** Buttons of the action's own (a game's answers, a "log it" offer). callback data stays under 64 bytes. */
   buttons?: { label: string; data: string }[];
 }

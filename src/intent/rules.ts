@@ -3,6 +3,7 @@
  * without a model key (and so tests are deterministic). Anything it can't
  * match returns null and the model handles it.
  */
+import { pluginRules } from "../core/plugins.js";
 export interface Intent {
   action: string;
   args: Record<string, unknown>;
@@ -112,6 +113,8 @@ const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   [/^roast me(?: (?:about|on|for) (.+))?$/i, (m) => ({ action: "fun.roast", args: { about: m[1] } })],
   [/^hype me(?: up)?(?: (?:for|before) (.+))?$/i, (m) => ({ action: "fun.hype", args: { about: m[1] } })],
   [/^(?:my )?(?:week )?wrapped$|^my week in numbers$|^how was my week$/i, () => ({ action: "fun.wrapped", args: {} })],
+  [/^(?:my )?currency(?: is)?\s+([a-z]{3})$/i, (m) => ({ action: "settings.update", args: { currency: m[1].toUpperCase() } })],
+  [/^(?:i live in|my city is|i moved to|i(?:'ve| have) moved to|set my city to|my home is in)\s+(.{2,60})$/i, (m) => ({ action: "settings.city", args: { city: m[1] } })],
   [/^(?:verify|code|confirm)\s*:?\s*(\d{6})$/i, (m) => ({ action: "settings.verify_email", args: { code: m[1] } })],
   // Email.
   [/^(?:e-?mail|mail) me (.{2,})$/i, (m) => ({ action: "email.me", args: { body: m[1] } })],
@@ -134,18 +137,27 @@ function norm(s?: string) {
 }
 function cur(s?: string) {
   const v = (s ?? "").toLowerCase();
-  if (!v || v === "naira") return "NGN";
+  if (!v) return undefined;
+  if (v === "naira") return "NGN";
   if (v.startsWith("dollar")) return "USD";
   if (v.startsWith("pound")) return "GBP";
   if (v === "cfa") return "XAF";
   return v.toUpperCase();
 }
 
+/** Something only a real request carries: a number, a link, an address or hash, a handle, a pasted message. */
+export const SPECIFIC = /\d|https?:\/\/|\b0x[0-9a-f]{6,}|@\w{3,}|:\s*\S/i;
+
 export function parseByRules(text: string): Intent | null {
   const t = text.trim().replace(/[.!]+$/, "");
-  for (const [re, fn] of RULES) {
-    const m = t.match(re);
-    if (m) return fn(m);
-  }
-  return null;
+  const tryAll = (x: string) => {
+    for (const [re, fn] of [...pluginRules(), ...RULES]) {
+      const m = x.match(re);
+      if (m) return fn(m);
+    }
+    return null;
+  };
+  // "can you explain tx 0x…", "please check this link …": the ask without the politeness.
+  const plain = t.replace(/^(?:(?:hey|hi|ok|okay),?\s+)?(?:(?:can|could|would|will) you(?: please)?|please|pls|kindly)\s+(?=\S)/i, "").replace(/\?$/, "");
+  return tryAll(t) ?? (plain !== t && SPECIFIC.test(plain) ? tryAll(plain) : null);
 }

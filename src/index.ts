@@ -13,6 +13,7 @@ import { registerIMessage } from "./channels/imessage.js";
 import { startPumpfunWatcher } from "./modules/trading.js";
 import { ensurePriceJob } from "./modules/prices.js";
 import { providerName } from "./intent/providers.js";
+import { pluginSystemJobs } from "./core/plugins.js";
 
 async function main() {
   const db = await getDb();
@@ -25,7 +26,7 @@ async function main() {
     ["poll_scout", "7 */12 * * *"],
     ["poll_polymarket", "*/2 * * * *"],
   ];
-  for (const [kind, cron] of systemJobs) {
+  for (const [kind, cron] of [...systemJobs, ...pluginSystemJobs()]) {
     const exists = await db.one(`SELECT 1 FROM jobs WHERE kind=$1 AND active AND user_id IS NULL`, [kind]);
     if (!exists) await schedule(db, { kind, cron, tz: "UTC" });
   }
@@ -55,7 +56,7 @@ async function main() {
   // During a redeploy the old container still polls for a few seconds and Telegram answers 409. Wait it out instead of crashing.
   for (let attempt = 1; bot; attempt++) {
     try {
-      await bot.start({ allowed_updates: ["message", "callback_query", "business_connection", "business_message"] as any, onStart: (me) => log.info({ username: me.username }, "telegram polling") });
+      await bot.start({ allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "business_connection", "business_message", "guest_message"] as any, onStart: (me) => log.info({ username: me.username }, "telegram polling") });
       break;
     } catch (e: any) {
       if (e?.error_code !== 409 || attempt > 12) throw e;

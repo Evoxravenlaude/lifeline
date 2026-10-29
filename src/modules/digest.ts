@@ -4,6 +4,7 @@
  * Also the weekly memory review (Sunday) so unconfirmed facts get confirmed
  * or dropped.
  */
+import { briefExtras } from "../core/plugins.js";
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
@@ -17,7 +18,8 @@ import { DateTime } from "luxon";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
-export async function buildDigest(db: Db, user: User, now: Date): Promise<string> {
+/** The day in one message. `peek` reads it without marking new jobs and hackathons as seen (the Today panel). */
+export async function buildDigest(db: Db, user: User, now: Date, opts: { peek?: boolean } = {}): Promise<string> {
   const { from, to } = rangeBounds("today", user.tz, now);
   const wd = new Date(from.getTime() + 12 * 3_600_000).getUTCDay(); // approx local weekday
   const [events, classes, meds, reminders, hacks, trips, assignments] = await Promise.all([
@@ -63,17 +65,19 @@ export async function buildDigest(db: Db, user: User, now: Date): Promise<string
   }
   if (tripDays !== null && !lead.includes(trips[0].destination)) side.push(`${trips[0].destination.replace(/\b[a-z]/g, (c: string) => c.toUpperCase())} in ${tripDays} day${tripDays === 1 ? "" : "s"}.`);
   if (side.length) lines.push("", ...side);
+  const extras = await briefExtras(db, user, now, 6, { peek: opts.peek });
+  if (extras.length) lines.push("", ...extras);
 
   const { matchesFor } = await import("./jobs.js");
   const jobs = await matchesFor(db, user.id, 3);
   if (jobs.length) {
     lines.push("", `${jobs.length === 1 ? "A job that fits you" : `${jobs.length} jobs that fit you`}:`, ...jobs.map((j: any) => `${j.title}, ${j.url}`));
-    for (const j of jobs) await db.query(`INSERT INTO job_seen (user_id, post_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, j.id]);
+    if (!opts.peek) for (const j of jobs) await db.query(`INSERT INTO job_seen (user_id, post_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, j.id]);
   }
   const fresh = await rankedForUser(db, user, now, 3);
   if (fresh.length) {
     lines.push("", `New since yesterday, ${fresh.length === 1 ? "one hackathon" : `${fresh.length} hackathons`} worth a look:`, ...fresh.map((h) => hackLine(h, user.tz, now)));
-    for (const h of fresh) await db.query(`INSERT INTO hackathon_seen (user_id, hackathon_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, h.id]);
+    if (!opts.peek) for (const h of fresh) await db.query(`INSERT INTO hackathon_seen (user_id, hackathon_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [user.id, h.id]);
   }
   // Sundays: the week, wrapped.
   if (DateTime.fromJSDate(now).setZone(user.tz).weekday === 7 && user.prefs?.wrapped !== false) {
@@ -122,12 +126,13 @@ const settings = defineAction({
     name: z.string().max(60).optional(),
     country: z.string().length(2).optional(),
     email: z.string().email().optional(),
+    currency: z.string().regex(/^[A-Za-z]{3}$/).optional(),
   }),
   async run(args, ctx) {
     if (args.tz) {
       try { new Intl.DateTimeFormat("en", { timeZone: args.tz }); } catch { throw new Error(`I don't know a timezone called "${args.tz}". Try the city, like Africa/Lagos or Europe/London.`); }
     }
-    const prefs: Record<string, unknown> = { ...ctx.user.prefs, ...(args.country ? { country: args.country.toUpperCase() } : {}) };
+    const prefs: Record<string, unknown> = { ...ctx.user.prefs, ...(args.country ? { country: args.country.toUpperCase() } : {}), ...(args.currency ? { currency: args.currency.toUpperCase() } : {}) };
     // A new email address is only used once its owner proves it: a six-digit code goes there first.
     let emailNote = "";
     if (args.email && args.email.toLowerCase() !== String(prefs.emailVerified ?? "").toLowerCase()) {
@@ -154,6 +159,7 @@ const settings = defineAction({
     if (args.quiet_start !== undefined || args.quiet_end !== undefined) bits.push(`quiet hours run ${hh(args.quiet_start ?? ctx.user.quiet_start)} to ${hh(args.quiet_end ?? ctx.user.quiet_end)}`);
     if (args.name) bits.push(`I'll call you ${args.name}`);
     if (args.country) bits.push(`your country is ${args.country.toUpperCase()}`);
+    if (args.currency) bits.push(`amounts without a currency are in ${args.currency.toUpperCase()}`);
     const said = bits.join(", ");
     const out = [bits.length ? `Saved. ${said.charAt(0).toUpperCase()}${said.slice(1)}.` : "", emailNote].filter(Boolean).join(" ");
     return { reply: out || "Nothing to change there." };
@@ -178,7 +184,26 @@ const verifyEmail = defineAction({
   },
 });
 
-register(now, settings, verifyEmail);
+/** "I live in Berlin": clock, country and currency from a city name, anywhere. */
+const setCity = defineAction({
+  name: "settings.city",
+  tier: 1,
+  description: "Set where the user lives from a city name (any city worldwide): sets their time zone, country and so their default currency.",
+  schema: z.object({ city: z.string().min(2) }),
+  async run(args, ctx) {
+    const { findCity } = await import("../core/geo.js");
+    const { userCurrency } = await import("../core/money.js");
+    const p = await findCity(args.city);
+    if (!p) throw new Error(`I couldn't find a place called "${args.city}". Try the city with its country?`);
+    const prefs = { ...ctx.user.prefs, ...(p.country ? { country: p.country } : {}), city: p.name };
+    await ctx.db.query(`UPDATE users SET tz=$2, prefs=$3 WHERE id=$1`, [ctx.user.id, p.tz, JSON.stringify(prefs)]);
+    await ctx.db.query(`UPDATE jobs SET tz=$2 WHERE user_id=$1 AND kind='digest'`, [ctx.user.id, p.tz]);
+    const cur = userCurrency({ tz: p.tz, prefs });
+    return { reply: `${p.name}${p.countryName ? `, ${p.countryName}` : ""}. Your clock is on ${p.tz.split("/").pop()!.replace(/_/g, " ")} time now, and amounts without a currency are in ${cur}. Say "my currency is …" to change that.` };
+  },
+});
+
+register(now, settings, verifyEmail, setCity);
 
 /** Export a small summary for the "what do you know" command. */
 export function weekdayName(i: number) { return DAYS[i]; }

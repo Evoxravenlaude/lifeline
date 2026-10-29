@@ -21,6 +21,7 @@
  * unknown numbers get one instruction and nothing else.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { pluginTextReplyHandlers } from "../core/plugins.js";
 import { config } from "../core/config.js";
 import { log } from "../core/log.js";
 import { registerSender } from "../core/dispatch.js";
@@ -165,6 +166,10 @@ export function parseGatewayInbound(provider: "httpsms" | "textbee", body: any, 
 /** Shared by SMS and iMessage: text in → reply text out. */
 export async function handleTextChannel(db: Db, channel: "sms" | "imessage" | "email", from: string, text: string, opts: { forwarded?: boolean } = {}): Promise<string> {
   const t = text.trim();
+  for (const h of pluginTextReplyHandlers()) {
+    const said = await h(db, channel, from, t).catch(() => null);
+    if (said) return said;
+  }
   const link = /^link\s+([a-z0-9]{6})\b/i.exec(t);
   const user = await findUserByIdentity(db, channel, from);
   const thing = channel === "email" ? "address" : "number";

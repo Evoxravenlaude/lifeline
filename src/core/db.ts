@@ -5,6 +5,7 @@
 import { config } from "./config.js";
 import { log } from "./log.js";
 import { MIGRATIONS } from "./migrations.js";
+import { applySchemas } from "./plugins.js";
 
 export interface Db {
   query<T = any>(sql: string, params?: unknown[]): Promise<T[]>;
@@ -75,4 +76,5 @@ async function migrate(db: Db) {
     await db.query(`INSERT INTO schema_migrations (id) VALUES ($1)`, [m.id]);
     log.info({ migration: m.id }, "migration applied");
   }
+  await applySchemas(db);
 }

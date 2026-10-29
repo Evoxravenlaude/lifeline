@@ -255,7 +255,7 @@ export interface Seen { reply: string; suggestion: string | null; label: string 
 const SEE_PROMPT = (question: string) => `Someone sent this picture to their personal assistant${question ? ` with the words: "${question}"` : ""}.
 Reply as JSON with three keys:
 "reply": a natural, friendly reply. If they asked something, answer it directly. Otherwise say what it is and pull out anything useful: a receipt's shop and total, an event's name, date, time and place, a medicine's name and how often to take it, a document's key points; if it's mostly text, give the text. Be specific. A few short lines at most. If it's a person, describe what you see, never guess who they are.
-"suggestion": one sentence they could have typed to their assistant to keep the useful thing, in their words, e.g. "I spent 12500 naira at Shoprite on groceries", "Davido concert at Eko Hotel on Sat 14 Nov at 7pm", "I take amoxicillin at 8, 14 and 20". null if there's nothing to keep.
+"suggestion": one sentence they could have typed to their assistant to keep the useful thing, in their words, e.g. "I spent 42.50 at Tesco on groceries", "Davido concert at Eko Hotel on Sat 14 Nov at 7pm", "I take amoxicillin at 8, 14 and 20". null if there's nothing to keep.
 "label": a 2 to 4 word button for that, like "Log the spend", "Add to calendar", "Set the doses". null if suggestion is null.`;
 
 export async function see(image: Buffer, mime: string, question = ""): Promise<Seen | null> {

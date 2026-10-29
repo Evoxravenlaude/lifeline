@@ -37,7 +37,7 @@ export interface Game { kind: "trivia" | "wyr" | "riddle"; q: string; options?: 
 export const gid = (g: Game) => (g.at % 46656).toString(36);
 interface Score { played: number; right: number; streak: number; best: number }
 
-const TRIVIA: [string, string[], number, string][] = [
+export const TRIVIA: [string, string[], number, string][] = [
   ["Which planet has the shortest day?", ["Jupiter", "Earth", "Mars", "Venus"], 0, "Jupiter spins once in under ten hours."],
   ["How many hearts does an octopus have?", ["One", "Two", "Three", "Eight"], 2, "Two pump blood to the gills, one to the rest of the body."],
   ["What's the most widely spoken language in Africa by total speakers?", ["Swahili", "Arabic", "Hausa", "Yoruba"], 1, "Arabic, counting North Africa; Swahili is the biggest lingua franca south of the Sahara."],
@@ -124,7 +124,7 @@ const gamePlay = defineAction({
 const norm = (s: string) => s.toLowerCase().replace(/^(?:an?|the)\s+/, "").replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ").trim();
 
 /** A typed answer to an open riddle or quiz. Null when the message isn't one, so it's read as normal. */
-export async function gameAnswer(db: Db, user: User, text: string): Promise<{ text: string; buttons?: { label: string; data: string }[] } | null> {
+export async function gameAnswer(db: Db, user: User, text: string): Promise<{ text: string; buttons?: { label: string; data: string }[]; sticker?: string } | null> {
   const g = user.prefs.game as Game | null | undefined;
   if (!g || Date.now() - g.at > 15 * 60_000) return null;
   const t = text.trim();
@@ -143,7 +143,7 @@ export async function gameAnswer(db: Db, user: User, text: string): Promise<{ te
     const guess = norm(t), want = norm(String(g.answer)) || String(g.answer).toLowerCase().trim();
     const ok = guess !== "" && (guess === want || (guess.length > 2 && want.includes(guess)) || guess.includes(want));
     const s = scoreOf(user);
-    if (ok) { s.played++; s.right++; s.streak++; s.best = Math.max(s.best, s.streak); await saveGame(db, user, null, s); return { text: `${pick(["Yes!", "Got it.", "Sharp.", "Correct."])} It's ${g.answer}.${s.streak > 1 ? ` That's ${s.streak} in a row.` : ""}`, buttons: again("riddle") }; }
+    if (ok) { s.played++; s.right++; s.streak++; s.best = Math.max(s.best, s.streak); await saveGame(db, user, null, s); return { text: `${pick(["Yes!", "Got it.", "Sharp.", "Correct."])} It's ${g.answer}.${s.streak > 1 ? ` That's ${s.streak} in a row.` : ""}`, buttons: again("riddle"), sticker: s.streak >= 3 ? "cheers" : undefined }; }
     const misses = (g.misses ?? 0) + 1;
     if (misses >= 3) { s.played++; s.streak = 0; await saveGame(db, user, null, s); return { text: `Three guesses down. It was ${g.answer}.`, buttons: again("riddle") }; }
     await saveGame(db, user, { ...g, misses });
@@ -153,7 +153,7 @@ export async function gameAnswer(db: Db, user: User, text: string): Promise<{ te
 }
 
 /** A game button: "t:2", "w:0", "r:hint", "r:show", "new:trivia". */
-export async function answerGame(db: Db, user: User, data: string): Promise<{ text: string; buttons?: { label: string; data: string }[] }> {
+export async function answerGame(db: Db, user: User, data: string): Promise<{ text: string; buttons?: { label: string; data: string }[]; sticker?: string }> {
   const parts = data.split(":");
   const k = parts[0];
   if (k === "new") {
@@ -175,7 +175,7 @@ export async function answerGame(db: Db, user: User, data: string): Promise<{ te
     await saveGame(db, user, null, s);
     const head = right ? pick(["Correct!", "Yes, that's it.", "Nailed it.", "Right!"]) : `Not this time. It's ${LETTERS[g.answer as number]}, ${g.options![g.answer as number]}.`;
     const streak = right && s.streak > 1 ? ` ${s.streak} in a row${s.streak >= s.best && s.streak > 2 ? ", your best yet" : ""}.` : "";
-    return { text: `${head}${streak}${g.note ? `\n\n${g.note}` : ""}\n\nYou're on ${s.right} of ${s.played}.`, buttons: again("trivia") };
+    return { text: `${head}${streak}${g.note ? `\n\n${g.note}` : ""}\n\nYou're on ${s.right} of ${s.played}.`, buttons: again("trivia"), sticker: right && s.streak >= 3 ? "cheers" : undefined };
   }
   if (k === "w" && g.kind === "wyr") {
     if (!g.options![Number(v)]) return { text: "That game's moved on. Want another?", buttons: again("wyr") };
@@ -276,7 +276,7 @@ const wrapped = defineAction({
     const lines = wrappedLines(s);
     if (!lines.length) return { reply: "Your week, wrapped: it's a blank page so far. Tell me what you spend, sleep and get done, and next week's will have numbers in it." };
     const quip = (await think(ctx.db, ctx.user, `Here is someone's week in numbers: ${lines.join("; ")}. Write one short, playful, specific line about it, warm not mean. Output the line only.`, { max: 120 }))?.trim();
-    return { reply: `**Your week, wrapped**\n${lines.map((l) => `- ${l}`).join("\n")}${quip ? `\n\n${quip}` : ""}` };
+    return { sticker: "cheers", reply: `**Your week, wrapped**\n${lines.map((l) => `- ${l}`).join("\n")}${quip ? `\n\n${quip}` : ""}` };
   },
 });
 

@@ -110,6 +110,11 @@ export async function push(
   const now = opts.now ?? new Date();
   if (!opts.exempt) {
     if (inQuietHours(now, user.tz, user.quiet_start, user.quiet_end)) return false;
+    // A quiet day the person asked for: only what they set themselves (reminders, doses, check-ins) gets through.
+    const quietUntil = Number(user.prefs?.quietUntil ?? 0);
+    if (quietUntil > now.getTime()) return false;
+    // Calm mode: nudges wait for the morning brief instead of arriving as pings.
+    if (user.prefs?.calm === true && kind !== "digest") return false;
     const day = localDay(now, user.tz);
     const c = await deps.db.one<{ n: string }>(
       `SELECT count(*)::text AS n FROM pushes WHERE user_id=$1 AND kind NOT IN ('reminder','medication') AND (sent_at AT TIME ZONE $2)::date = $3::date`,

@@ -22,9 +22,10 @@ export const PERSONAS: Record<string, { label: string; prompt: string }> = {
 
 export function personaPrompt(prefs: Record<string, unknown>): string {
   const custom = typeof prefs.personaCustom === "string" ? prefs.personaCustom : "";
-  if (custom) return `Personality (user-defined): ${custom}`;
   const key = typeof prefs.persona === "string" ? prefs.persona : "plain";
-  return `Personality: ${PERSONAS[key]?.prompt ?? PERSONAS.plain.prompt}`;
+  const base = custom ? `Personality (user-defined): ${custom}` : `Personality: ${PERSONAS[key]?.prompt ?? PERSONAS.plain.prompt}`;
+  // Calm mode overrides the edges of any personality: still them, just softer.
+  return prefs.calm === true ? `${base}\nCalm mode is on: be gentle and brief, no teasing, no roasts, no exclamation marks, no games unless they ask. One thing at a time.` : base;
 }
 
 const set = defineAction({

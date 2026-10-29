@@ -7,6 +7,7 @@
  */
 import { allActions } from "../policy/registry.js";
 import type { Action } from "../policy/types.js";
+import { pluginCues } from "../core/plugins.js";
 
 const CUES: Record<string, string[]> = {
   cycle: ["period", "cycle", "menstrual", "fertile", "ovulat", "cramps", "spotting", "flow", "pms", "late", "pregnan", "bloating", "tampon", "pad"],
@@ -56,7 +57,7 @@ export function selectTools(text: string, max = 12): Action[] {
       const mod = a.name.split(".")[0];
       let s = 0;
       if (t.includes(mod.slice(0, 6))) s += 6; // the module's own root word ("remind", "hackat", "calend") outranks shared cues like "tomorrow"
-      for (const cue of CUES[mod] ?? []) if (t.includes(cue.length > 3 || cue.includes(" ") ? cue : ` ${cue} `)) s += cue.includes(" ") ? 3 : 2;
+      for (const cue of [...(CUES[mod] ?? []), ...(pluginCues()[mod] ?? [])]) if (t.includes(cue.length > 3 || cue.includes(" ") ? cue : ` ${cue} `)) s += cue.includes(" ") ? 3 : 2;
       for (const w of a.name.replace(/[._]/g, " ").split(" ")) if (words.has(w)) s += 3;
       for (const w of a.description.toLowerCase().split(/[^a-z0-9']+/)) if (w.length > 4 && words.has(w)) s += 1;
       return { a, s };
