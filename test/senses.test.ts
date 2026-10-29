@@ -10,7 +10,7 @@ import { pipPrompt } from "../src/modules/senses.js";
 import { propose } from "../src/policy/engine.js";
 import { answerGame, gameAnswer, type Game } from "../src/modules/fun.js";
 import { bareAddress, freshText, handleInboundEmail, isForwarded, verifySvix } from "../src/channels/email.js";
-import { everythingGroup, everythingIndex, HELP_GROUPS } from "../src/intent/capabilities.js";
+import { everythingGroup, everythingIndex, helpGroups } from "../src/intent/capabilities.js";
 import { createWeb } from "../src/web/server.js";
 
 let db: Db;
@@ -337,7 +337,7 @@ describe("safety on the new paths", () => {
 describe("the menus", () => {
   it("/everything fits on a phone, and every drawer opens", () => {
     expect(everythingIndex().split("\n").length).toBeLessThan(30);
-    for (let i = 0; i < HELP_GROUPS.length; i++) expect(everythingGroup(i)).toMatch(/Try:/);
+    for (let i = 0; i < helpGroups().length; i++) expect(everythingGroup(i)).toMatch(/Try:/);
     expect(everythingGroup(99)).toBeNull();
   });
 });

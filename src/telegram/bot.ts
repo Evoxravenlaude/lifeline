@@ -21,10 +21,14 @@ import { polish, personaOf } from "../core/voice.js";
 import { pipLine } from "../core/pip.js";
 import { admit, circleSummary, FULL_MESSAGE, isOwner } from "../core/circle.js";
 import { copyButton, toPlain, toTelegramHtml } from "../core/format.js";
+import { ASKS, BACK, OK, panel, shapeAnswer, type Btn, type Style } from "./panels.js";
+import { ensurePip, pipSticker } from "./stickers.js";
+import { pluginLocationHandlers } from "../core/plugins.js";
 import { abilityLines, allow, mediaAbilities, probeVoice, speak, wantsVoice } from "../core/media.js";
 import { activePlaces, webAddress } from "../core/ways.js";
-import { everythingGroup, everythingIndex, HELP_GROUPS } from "../intent/capabilities.js";
+import { everythingGroup, everythingIndex, helpGroups } from "../intent/capabilities.js";
 import { answerWebLogin, webLoginExists } from "../core/weblogin.js";
+import { activateGroup, deactivateGroup, dueBirthdays, groupActive, groupButton, groupCommand, guestAnswer, memberOf, wordsToCommand, type GroupOut, type Person } from "./group.js";
 
 /** Telegram HTML: escape; bold the head line of a multi-line message so lists read at a glance; keep links clickable. */
 /** Telegram HTML from the reply's markdown. Kept under this name for older callers. */
@@ -35,26 +39,49 @@ export function toHtml(text: string): string { return toTelegramHtml(text); }
  * The old tiles still work if someone taps one before it disappears.
  */
 const OLD_TILES: Record<string, string> = { Today: "today", Hackathons: "any hackathons for me", Lists: "my lists", Money: "how much did I spend this week", Scout: "Scout", Pip: "Pip", "☼ Today": "today", "⚑ Hackathons": "any hackathons for me", "☐ Lists": "my lists", "¤ Money": "how much did I spend this week", "◎ Scout": "Scout", "🐢 Pip": "Pip" };
-export const ABOUT_LONG = "A personal assistant you talk to like a person. I keep your calendar, reminders and lists; your medication, period and cycle, sleep and anything you track; what you spend and the bills you pay; your trips and birthdays. If you want it, I also find jobs, companies and hackathons for you. No commands to learn. Anything that spends money or reaches someone else waits for your yes. Tap Start.";
+export const ABOUT_LONG = "A personal assistant you talk to like a person, wherever you live. I keep your calendar, reminders and lists, your medication and cycle, sleep and mood, what you spend and who owes you, documents that expire, and the people you mean to call. I can check a message that feels off and look out for you on the way home. If you build things or hold crypto, I watch your sites and wallets too. Anything that spends money or reaches someone else waits for your yes. Tap Start.";
 export const ABOUT_SHORT = "Your day, your body, your money and your work, kept by one assistant you just talk to.";
 
 /** Four ways in, under the welcome only. They scroll away with it. */
-const WAYS_IN = () => new InlineKeyboard().text("What's on today", "say:today").text("What can you do?", "say:what can you do").row().text("My lists", "say:my lists").text("Things I can track", "say:what can you track");
+const WAYS_IN = () => new InlineKeyboard().text("Open the menu ›", "p:home").primary().row().text("What can you do?", "say:what can you do").text("Things I can track", "say:what can you track");
 const COMMANDS = [
-  ["today", "Your day in one message"], ["everything", "Everything I can do, in drawers"], ["lists", "Your lists"], ["track", "Sleep, weight, mood and more"],
-  ["cycle", "Your period and cycle"], ["money", "This week's spending"], ["trips", "Trips you're planning"], ["play", "A quick game"],
-  ["voice", "Voice replies and how I sound"], ["persona", "Change how I talk"], ["link", "Use me on the web, by text, email or iMessage"], ["undo", "Take back the last thing"], ["doctor", "Check that everything's connected"],
+  ["menu", "Everything in one place"], ["today", "Your day in one message"], ["lists", "Your lists"], ["track", "Sleep, weight, mood and more"],
+  ["cycle", "Your period and cycle"], ["money", "This week's spending"], ["play", "A quick game"], ["everything", "All I can do, in drawers"],
+  ["settings", "Voice, personality, brief time"], ["link", "Use me on the web, by text, email or iMessage"], ["undo", "Take back the last thing"], ["doctor", "Check that everything's connected"],
 ] as const;
-const TZ_CHOICES: [string, string][] = [["Lagos", "Africa/Lagos"], ["Libreville", "Africa/Libreville"], ["Accra", "Africa/Accra"], ["Nairobi", "Africa/Nairobi"], ["London", "Europe/London"], ["New York", "America/New_York"], ["Dubai", "Asia/Dubai"], ["Lisbon", "Europe/Lisbon"], ["Singapore", "Asia/Singapore"]];
+const TZ_CHOICES: [string, string][] = [["London", "Europe/London"], ["New York", "America/New_York"], ["Los Angeles", "America/Los_Angeles"], ["Lagos", "Africa/Lagos"], ["Nairobi", "Africa/Nairobi"], ["Johannesburg", "Africa/Johannesburg"], ["Dubai", "Asia/Dubai"], ["Mumbai", "Asia/Kolkata"], ["Singapore", "Asia/Singapore"], ["Berlin", "Europe/Berlin"], ["São Paulo", "America/Sao_Paulo"], ["Sydney", "Australia/Sydney"]];
 
 export { getUserById } from "../core/handler.js";
+/** Telegram's party-popper message effect. */
+const CONFETTI = "5046509860389126442";
 
 /** The reply's own buttons, plus a Copy button when the reply holds one thing worth copying (a code, an address, a drafted message). */
+/** How a button should look: a yes is green, a no or a delete is red, OK is blue, everything else plain. */
+export function styleOf(data: string, label = ""): Style | undefined {
+  if (/^(?:confirm|rem:done|med:taken)/.test(data) || /^Yes\b/.test(label)) return "success";
+  if (/^(?:cancel)/.test(data) || /^(?:No|Delete|Cancel)\b/.test(label)) return "danger";
+  if (data === "p:ok") return "primary";
+  return undefined;
+}
+/** Panel rows to a Telegram keyboard, keeping each row as drawn. */
+export function toKb(rows: Btn[][]): InlineKeyboard {
+  const k = new InlineKeyboard();
+  rows.forEach((row, i) => {
+    for (const b of row) {
+      if (b.webApp) { k.webApp(b.label, b.webApp); continue; }
+      k.text(b.label, b.data); const st = b.style ?? styleOf(b.data, b.label); if (st) k.style(st);
+    }
+    if (i < rows.length - 1) k.row();
+  });
+  return k;
+}
+/** The reply's own buttons (coloured), a Copy button when there's one thing to copy, and OK to tidy away an Undo. */
 function kb(r: Reply): InlineKeyboard | undefined {
   const copy = copyButton(r.text);
   if (!r.buttons?.length && !copy) return undefined;
   const k = new InlineKeyboard();
-  (r.buttons ?? []).forEach((b, i) => { k.text(b.label, b.data); if (i % 2 === 1) k.row(); });
+  (r.buttons ?? []).forEach((b, i) => { k.text(b.label, b.data); const st = styleOf(b.data, b.label); if (st) k.style(st); if (i % 2 === 1) k.row(); });
+  if (r.buttons?.some((b) => /^undo:/.test(b.data))) k.text("OK", "p:ok").style("primary");
   if (copy) { if (r.buttons?.length) k.row(); k.copyText(copy.label, copy.text); }
   return k;
 }
@@ -71,6 +98,15 @@ export function createBot(db: Db): Bot {
     }
   });
 
+  /* Groups, channels and guest calls never reach anything personal: they're answered here and stop. */
+  bot.use(async (ctx, next) => {
+    if ((ctx.update as any).guest_message) return onGuest(ctx).catch((e) => log.warn({ err: e?.message }, "guest answer failed"));
+    const type = ctx.chat?.type;
+    if (type === "group" || type === "supergroup") return onGroup(ctx).catch((e) => log.warn({ err: e?.message }, "group message failed"));
+    if (type === "channel") return;
+    await next();
+  });
+
   bot.use(async (ctx, next) => {
     const id = ctx.from?.id;
     if (!id) return;
@@ -82,7 +118,16 @@ export function createBot(db: Db): Bot {
     await next();
   });
 
-  const userOf = (c: Context) => ensureUser(db, "telegram", String(c.from!.id), [c.from!.first_name, c.from!.last_name].filter(Boolean).join(" "));
+  /** The person, with their Telegram @handle kept current so friends can name them ("buddy up with @ana"). */
+  const userOf = async (c: Context) => {
+    const u = await ensureUser(db, "telegram", String(c.from!.id), [c.from!.first_name, c.from!.last_name].filter(Boolean).join(" "));
+    const handle = c.from!.username?.toLowerCase();
+    if (handle && u.prefs.username !== handle) {
+      await db.query(`UPDATE users SET prefs = prefs || jsonb_build_object('username', $2::text) WHERE id=$1`, [u.id, handle]);
+      u.prefs = { ...u.prefs, username: handle };
+    }
+    return u;
+  };
   /** The old tile keyboard goes away with the first reply that has no buttons of its own. */
   const clearOld = async (c: Context): Promise<{ remove_keyboard: true } | undefined> => {
     const u = await userOf(c);
@@ -111,6 +156,9 @@ export function createBot(db: Db): Bot {
   };
   const send = async (c: Context, r: Reply, spoken = false) => {
     const u = await userOf(c);
+    void ensurePip(c.api, db, c.me.username);
+    const st = u.prefs.calm === true ? null : pipSticker(r.sticker);
+    if (st) await c.replyWithSticker(st).catch(() => {});
     const remove = r.buttons?.length ? undefined : await clearOld(c);
     if (r.dice) {
       const m = await c.replyWithDice(r.dice).catch(() => null);
@@ -126,9 +174,13 @@ export function createBot(db: Db): Bot {
       if (cap) return;
     }
     const parts = chunks(r.text);
+    /* Confetti only for a real milestone, only one-to-one, never in calm mode. */
+    const effect = r.celebrate && u.prefs.calm !== true && c.chat?.type === "private" ? CONFETTI : undefined;
     for (let i = 0; i < parts.length; i++) {
       const markup = i === parts.length - 1 ? kb(r) ?? remove : undefined;
-      await c.reply(toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } }).catch(() => c.reply(toPlain(parts[i]), { reply_markup: markup }));
+      const base = { parse_mode: "HTML" as const, reply_markup: markup, link_preview_options: { is_disabled: true } };
+      await (i === 0 && effect ? c.reply(toHtml(parts[i]), { ...base, message_effect_id: effect }).catch(() => c.reply(toHtml(parts[i]), base)) : c.reply(toHtml(parts[i]), base))
+        .catch(() => c.reply(toPlain(parts[i]), { reply_markup: markup }));
     }
     if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : r.text, Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
   };
@@ -148,37 +200,40 @@ export function createBot(db: Db): Bot {
     }
     const first = u.name ? u.name.split(" ")[0] : null;
     if (!u.prefs.onboarded) {
+      await ensurePip(c.api, db, c.me.username);
+      const hi = pipSticker("hello");
+      if (hi) await c.replyWithSticker(hi).catch(() => {});
       const k = new InlineKeyboard();
       TZ_CHOICES.forEach(([l, z], i) => { k.text(l, `ob:tz:${z}`); if (i % 3 === 2) k.row(); });
+      k.text("Somewhere else", "ob:tz:other").primary();
       await say(c, [
         `${first ? `${first}, hello` : "Hello"}. I'm lifeline, a personal assistant for everyday life. I keep your calendar, reminders and lists, your medication, your period and cycle, your sleep and anything else you track, what you spend, your trips and birthdays. If you work on things, I also find jobs, companies and hackathons worth your time.`,
         `You talk to me the way you'd text a friend. No commands to learn. Anything that moves money, deletes, or reaches someone else waits for your yes.`,
-        `One thing first: where are you? That sets your clock, so "tomorrow at 9" means your 9.`,
+        `One thing first: where are you? Tap a city near you, or "Somewhere else" and type yours. That sets your clock and your currency, so "tomorrow at 9" means your 9.`,
       ].join("\n\n"), { reply_markup: k });
       return;
     }
     if (!u.prefs.kbCleared) { await db.query(`UPDATE users SET prefs = prefs || '{"kbCleared":true}'::jsonb WHERE id=$1`, [u.id]); await c.reply("…", { reply_markup: { remove_keyboard: true } }).then((m) => c.api.deleteMessage(m.chat.id, m.message_id)).catch(() => {}); }
-    await say(c, `Welcome back${first ? `, ${first}` : ""}. ${pipLine("return", u)} Just talk to me, or start here:`, { reply_markup: WAYS_IN() });
+    await showPanel(c, u, "home");
   });
+  /** Send a fresh panel (the menu, or one of its pages). */
+  const showPanel = async (c: Context, u: Awaited<ReturnType<typeof userOf>>, key: string) => {
+    const r = await panel(db, u, key);
+    if (r.panel) await c.reply(toHtml(r.panel.text), { parse_mode: "HTML", reply_markup: toKb(r.panel.rows), link_preview_options: { is_disabled: true } }).catch(() => c.reply(toPlain(r.panel!.text), { reply_markup: toKb(r.panel!.rows) }));
+  };
+  bot.command(["menu", "home"], async (c) => showPanel(c, await userOf(c), "home"));
+  bot.command("settings", async (c) => showPanel(c, await userOf(c), "settings"));
   bot.api.setMyCommands(COMMANDS.map(([command, description]) => ({ command, description }))).catch((e) => log.warn({ err: e?.message }, "setMyCommands failed"));
+  bot.api.setMyCommands([["split", "Split a bill: /split 120 dinner @ana @ben"], ["tab", "Who still owes what"], ["list", "The group's shared list"], ["when", "A poll to find a time"], ["trivia", "A quiz for everyone"], ["birthday", "Your birthday, said here on the day"], ["help", "What I do in a group"]].map(([command, description]) => ({ command, description })), { scope: { type: "all_group_chats" } }).catch((e) => log.warn({ err: e?.message }, "group commands failed"));
   /* What a stranger sees on the empty chat and when the link is shared. Telegram caps these at 512 and 120 characters. */
   bot.api.setMyDescription(ABOUT_LONG).catch((e) => log.warn({ err: e?.message }, "setMyDescription failed"));
   bot.api.setMyShortDescription(ABOUT_SHORT).catch((e) => log.warn({ err: e?.message }, "setMyShortDescription failed"));
   bot.command("scout", async (c) => say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } }));
   bot.command("help", async (c) => say(c, FULL_HELP));
-  const drawers = () => { const k = new InlineKeyboard(); HELP_GROUPS.forEach(([t], i) => { k.text(t, `ev:${i}`); if (i % 2 === 1) k.row(); }); return k; };
+  const drawers = () => { const rows: Btn[][] = []; helpGroups().forEach(([t], i) => { if (i % 2 === 0) rows.push([]); rows[rows.length - 1].push({ label: `${t} ›`, data: `ev:${i}` }); }); return toKb([...rows, [BACK("home"), OK]]); };
   bot.command(["everything", "all", "features"], async (c) => { await c.reply(toHtml(everythingIndex()), { parse_mode: "HTML", reply_markup: drawers() }); });
-  bot.command(["play", "game", "games"], async (c) => {
-    const k = new InlineKeyboard().text("Trivia", "g:new:trivia").text("Would you rather", "g:new:wyr").row().text("A riddle", "g:new:riddle").text("Surprise me", "g:new:any").row().text("Roll a dice", "say:roll a dice").text("Roast my week", "say:roast me");
-    await say(c, "What are we playing?", { reply_markup: k });
-  });
-  bot.command("voice", async (c) => {
-    const u = await userOf(c);
-    const pref = (u.prefs.voiceReplies as string) ?? "mirror";
-    const k = new InlineKeyboard().text(pref === "mirror" ? "• When I send voice" : "When I send voice", "say:voice replies on").text(pref === "always" ? "• Always" : "Always", "say:voice replies always").text(pref === "off" ? "• Never" : "Never", "say:voice replies off").row();
-    ["warm", "upbeat", "calm", "deep", "lively", "gentle"].forEach((v, i) => { k.text(v, `say:use a ${v} voice`); if (i % 3 === 2) k.row(); });
-    await say(c, `${mediaAbilities().hear ? "Send me a voice note any time and I'll act on it." : "Voice notes aren't switched on here yet."} When should I talk back, and how should I sound?`, { reply_markup: k });
-  });
+  bot.command(["play", "game", "games"], async (c) => showPanel(c, await userOf(c), "play"));
+  bot.command("voice", async (c) => showPanel(c, await userOf(c), "settings"));
   bot.command("circle", async (c) => {
     const u = await userOf(c);
     const first = await db.one<{ id: number }>(`SELECT min(id) AS id FROM users`);
@@ -189,6 +244,9 @@ export function createBot(db: Db): Bot {
   bot.command("pip", async (c) => {
     const u = await userOf(c);
     const line = await draftReply(db, u, `Time: ${new Date().toISOString()}`, "You are Pip, a small tortoise with spectacles who keeps the user's day. One line (max 16 words) in the user's chosen voice: a dry, warm remark about keeping time, carrying things, or the day. No emoji. Output the line only.");
+    await ensurePip(c.api, db, c.me.username);
+    const st = pipSticker(["hello", "noted", "ontoit", "later", "thinking"][Math.floor(Math.random() * 5)]);
+    if (st) await c.replyWithSticker(st).catch(() => {});
     await say(c, line ?? pipLine("idle", u));
   });
   bot.command("doctor", async (c) => {
@@ -205,6 +263,7 @@ export function createBot(db: Db): Bot {
       "",
       `Places: ${activePlaces()}. Email in: ${config.resendKey && config.resendWebhookSecret ? config.inboundEmail || "on, address not set (INBOUND_EMAIL)" : "off (RESEND_API_KEY and RESEND_WEBHOOK_SECRET)"}. iMessage: ${config.imessageProvider ? `${config.imessageProvider}${config.imessageAddress ? `, ${config.imessageAddress}` : ""}` : "off (see docs/IMESSAGE.md)"}.`,
       `Server address: ${config.publicUrl || "not set (PUBLIC_URL)"}. Website: ${webAddress() || "not set (WEB_URL)"}.`,
+      `Guest calls from other chats: ${(c.me as any).supports_guest_queries ? "on" : "off (turn on guest mode in @BotFather)"}. App inside Telegram: ${/^https:/.test(webAddress()) ? "on" : "off (WEB_URL must be https)"}.`,
     ];
     await c.reply(lines.join("\n"), { link_preview_options: { is_disabled: true } });
   });
@@ -274,6 +333,44 @@ export function createBot(db: Db): Bot {
     await send(c, renderDecision(await propose({ db, user: u, now: new Date(), sourceMessage: `[ics ${doc.file_name}]` }, "calendar.import_ics", { ics })));
   });
 
+  /** After "Somewhere else": a city name or a shared location finishes the first step, then the voice question. */
+  const finishPlace = async (c: Context, u: Awaited<ReturnType<typeof userOf>>, place: { name: string; tz: string; country: string | null } | null) => {
+    if (!place) return say(c, "I couldn't find that place. Try the city with its country, like \"Porto, Portugal\".");
+    const prefs = { ...u.prefs, awaitingCity: false, ...(place.country ? { country: place.country } : {}), city: place.name };
+    await db.query(`UPDATE users SET tz=$2, prefs=$3 WHERE id=$1`, [u.id, place.tz, JSON.stringify(prefs)]);
+    await db.query(`UPDATE jobs SET tz=$2 WHERE user_id=$1 AND kind='digest'`, [u.id, place.tz]);
+    const k = new InlineKeyboard();
+    Object.entries(PERSONAS).forEach(([key, v], i) => { k.text(v.label, `ob:persona:${key}`); if (i % 2 === 1) k.row(); });
+    return say(c, `${place.name} it is, on ${place.tz.split("/").pop()!.replace(/_/g, " ")} time. Now, how should I talk? You can change this any time.`, { reply_markup: k });
+  };
+  bot.on("message:location", async (c) => {
+    const u = await userOf(c);
+    const loc = c.message.location;
+    if (u.prefs.awaitingCity) {
+      const { placeAt } = await import("../core/geo.js");
+      return finishPlace(c, u, await placeAt(loc.latitude, loc.longitude));
+    }
+    for (const h of pluginLocationHandlers()) {
+      const r = await h(db, u, { lat: loc.latitude, lon: loc.longitude, live: Boolean(loc.live_period), livePeriod: loc.live_period }, new Date()).catch(() => null);
+      if (r) return send(c, r);
+    }
+    return say(c, "Got your location. I don't keep it unless you're using a safety check-in; say \"check on me\" to start one.");
+  });
+  /** Live location moving: features (a safety check-in) get every update; nothing is said unless one answers. */
+  bot.on("edited_message:location", async (c) => {
+    const u = await userOf(c);
+    const loc = c.editedMessage.location!;
+    for (const h of pluginLocationHandlers()) {
+      const r = await h(db, u, { lat: loc.latitude, lon: loc.longitude, live: true, livePeriod: loc.live_period }, new Date()).catch(() => null);
+      if (r) return send(c, r);
+    }
+  });
+  bot.on("message:text", async (c, next) => {
+    const u = await userOf(c);
+    if (!u.prefs.awaitingCity || c.message.text.startsWith("/")) return next();
+    const { findCity } = await import("../core/geo.js");
+    return finishPlace(c, u, await findCity(c.message.text));
+  });
   bot.on("message:text", async (c) => {
     const raw = c.message.text.trim();
     if (OLD_TILES[raw] === "Pip") {
@@ -282,7 +379,8 @@ export function createBot(db: Db): Bot {
       return say(c, line ?? pipLine("idle", u));
     }
     if (OLD_TILES[raw] === "Scout" || raw === "/scout") return say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } });
-    const text = OLD_TILES[raw] && !["Scout", "Pip"].includes(OLD_TILES[raw]) ? OLD_TILES[raw] : raw;
+    const asked = c.message.reply_to_message?.from?.id === c.me.id ? c.message.reply_to_message?.text : undefined;
+    const text = OLD_TILES[raw] && !["Scout", "Pip"].includes(OLD_TILES[raw]) ? OLD_TILES[raw] : shapeAnswer(asked, raw);
     const forwarded = Boolean((c.message as any).forward_origin || (c.message as any).forward_date);
     await c.replyWithChatAction("typing").catch(() => {});
     await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded }));
@@ -295,6 +393,10 @@ export function createBot(db: Db): Bot {
       const [, step, value] = data.match(/^ob:(\w+):(.+)$/) ?? ["", "", ""];
       await c.answerCallbackQuery().catch(() => {});
       await c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+      if (step === "tz" && value === "other") {
+        await db.query(`UPDATE users SET prefs = prefs || '{"awaitingCity":true}'::jsonb WHERE id=$1`, [u.id]);
+        return say(c, "Type your city, or share your location with the paperclip.", { reply_markup: { force_reply: true, input_field_placeholder: "Berlin, Toronto, Accra, Manila…" } });
+      }
       if (step === "tz") {
         await propose({ db, user: u, now: new Date(), sourceMessage: "[onboarding tz]" }, "settings.update", { tz: value });
         const k = new InlineKeyboard();
@@ -319,12 +421,24 @@ export function createBot(db: Db): Bot {
       await c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
       return say(c, r === "expired" ? "That request has expired. Press the button on the page again." : answer === "yes" ? "Done. You're signed in on the web; the page will open by itself in a moment." : "Okay, nobody was signed in.");
     }
+    if (data.startsWith("p:")) {
+      const r = await panel(db, u, data.slice(2));
+      await c.answerCallbackQuery(r.toast ? { text: r.toast } : {}).catch(() => {});
+      if (r.close) return c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+      if (r.ask) return c.reply(ASKS[r.ask].prompt, { reply_markup: { force_reply: true, input_field_placeholder: ASKS[r.ask].placeholder } }).catch(() => {});
+      if (!r.panel) return;
+      const p = r.panel;
+      return c.editMessageText(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: { is_disabled: true } }).catch((e) => {
+        if (/not modified/i.test(String(e?.description ?? e?.message ?? ""))) return;
+        return c.reply(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows) }).catch(() => {});
+      });
+    }
     if (data.startsWith("ev:")) {
       await c.answerCallbackQuery().catch(() => {});
       const v = data.slice(3);
       const text = v === "home" ? everythingIndex() : everythingGroup(Number(v));
       if (!text) return;
-      const markup = v === "home" ? drawers() : new InlineKeyboard().text("Back to everything", "ev:home");
+      const markup = v === "home" ? drawers() : toKb([[{ label: "‹ Back", data: "ev:home" }, OK]]);
       return c.editMessageText(toHtml(text), { parse_mode: "HTML", reply_markup: markup }).catch((e) => {
         if (/not modified/i.test(String(e?.description ?? e?.message ?? ""))) return;
         return c.reply(toHtml(text), { parse_mode: "HTML", reply_markup: markup }).catch(() => {});
@@ -367,6 +481,90 @@ export function createBot(db: Db): Bot {
     const md = `${m.from?.first_name ?? "Someone"} wrote: "${m.text.slice(0, 300)}"\n\nA reply you could send:\n\`\`\`\n${draft.replace(/\`\`\`/g, "")}\n\`\`\``;
     await bot.api.sendMessage(owner.telegram_id, toTelegramHtml(md), { parse_mode: "HTML", reply_markup: kb({ text: md }) }).catch(() => bot.api.sendMessage(owner.telegram_id, toPlain(md)));
   });
+
+  /* ---- groups ---- */
+  const person = (u: { id: number; first_name: string; last_name?: string; username?: string }): Person & { id: number } => ({ id: u.id, name: [u.first_name, u.last_name].filter(Boolean).join(" "), username: u.username });
+  const groupKb = (rows?: { label: string; data: string }[][]) => (rows?.length ? toKb(rows) : undefined);
+  const postGroup = async (c: Context, out: GroupOut) => {
+    const chat = c.chat!.id;
+    if (out.poll) {
+      const p = out.poll;
+      await c.api.sendPoll(chat, p.question.slice(0, 300), p.options.map((text) => ({ text: text.slice(0, 100) })), {
+        is_anonymous: false, ...(p.correct != null ? { type: "quiz" as const, correct_option_id: p.correct, explanation: p.explanation } : { allows_multiple_answers: Boolean(p.multiple) }),
+      }).catch((e) => log.warn({ err: e?.description ?? e?.message }, "group poll failed"));
+      return;
+    }
+    if (!out.text) return;
+    const opts = { parse_mode: "HTML" as const, reply_markup: groupKb(out.buttons), link_preview_options: { is_disabled: true } };
+    /* Help and mistakes go to the one person who asked, so the group's chat stays about the group. */
+    if (out.ephemeral && c.from) {
+      const ok = await c.api.sendMessage(chat, toHtml(out.text), { ...opts, ephemeral_message_parameters: { receiver_user_id: c.from.id } } as any).then(() => true, () => false);
+      if (ok) return;
+    }
+    await c.reply(toHtml(out.text), opts).catch(() => c.reply(toPlain(out.text!), { reply_markup: opts.reply_markup }).catch(() => {}));
+  };
+  const onGroup = async (c: Context) => {
+    const chat = c.chat!;
+    const title = "title" in chat ? chat.title : undefined;
+    const me = c.me.username;
+    if (c.myChatMember) {
+      const now = c.myChatMember.new_chat_member.status, was = c.myChatMember.old_chat_member.status;
+      if (["left", "kicked"].includes(now)) return deactivateGroup(db, chat.id);
+      if (["member", "administrator"].includes(now) && ["left", "kicked"].includes(was)) {
+        const m = await memberOf(db, c.myChatMember.from.id);
+        if (!m) { await c.reply("Only someone in a lifeline circle can bring me into a group. Ask one of them to add me.").catch(() => {}); return void c.leaveChat().catch(() => {}); }
+        await activateGroup(db, chat.id, title, m);
+        await c.reply(`Hello, ${title ?? "everyone"}. I'm here for things you do together: splitting bills, a shared list, finding a time, trivia and birthdays. Type /help to see how. Nothing personal of anyone's ever shows up here.`).catch(() => {});
+      }
+      return;
+    }
+    if (c.callbackQuery?.data?.startsWith("gr:")) {
+      const r = await groupButton(db, chat.id, person(c.callbackQuery.from), c.callbackQuery.data);
+      await c.answerCallbackQuery({ text: r.toast }).catch(() => {});
+      if (r.edit?.text) await c.editMessageText(toHtml(r.edit.text), { parse_mode: "HTML", reply_markup: groupKb(r.edit.buttons) }).catch(() => {});
+      return;
+    }
+    if (c.callbackQuery) return void c.answerCallbackQuery({ text: "That button works in a private chat with me." }).catch(() => {});
+    const msg = c.message;
+    if (!msg?.text || !msg.from || msg.from.is_bot) return;
+    const text = msg.text;
+    const ents = msg.entities ?? [];
+    let cmd = "", args = "";
+    const lead = ents.find((e) => e.type === "bot_command" && e.offset === 0);
+    if (lead) {
+      const [name, at] = text.slice(1, lead.length).split("@");
+      if (at && at.toLowerCase() !== me.toLowerCase()) return;
+      cmd = name.toLowerCase(); args = text.slice(lead.length).trim();
+    } else {
+      const called = new RegExp(`@${me}\\b`, "i").test(text) || msg.reply_to_message?.from?.id === c.me.id;
+      if (!called) return;
+      const w = wordsToCommand(text.replace(new RegExp(`@${me}\\b`, "ig"), " ").trim());
+      if (!w) return postGroup(c, { text: "In a group I split bills, keep a shared list, find a time, run trivia and remember birthdays. Type /help for how. For anything of your own, message me directly.", ephemeral: true });
+      cmd = w.cmd; args = w.args;
+    }
+    if (!(await groupActive(db, chat.id, title, msg.from.id))) {
+      if (lead) await postGroup(c, { text: "Someone in a lifeline circle needs to say something here first, then I can help the whole group.", ephemeral: true });
+      return;
+    }
+    const mentions: Person[] = [];
+    for (const e of ents) {
+      if (e.type === "mention") { const u = text.slice(e.offset + 1, e.offset + e.length); if (u.toLowerCase() !== me.toLowerCase()) mentions.push({ name: u, username: u }); }
+      if (e.type === "text_mention" && e.user && !e.user.is_bot) mentions.push(person(e.user));
+    }
+    const out = await groupCommand(db, { chatId: chat.id, title, from: person(msg.from), cmd, args, mentions });
+    if (out) await postGroup(c, out);
+  };
+  const onGuest = async (c: Context) => {
+    const m = (c.update as any).guest_message as { guest_query_id?: string; text?: string; from?: { id: number; first_name: string; last_name?: string; username?: string } };
+    if (!m?.guest_query_id || !m.from) return;
+    const answer = await guestAnswer(db, person(m.from), m.text ?? "", c.me.username);
+    await (c.api as any).answerGuestQuery({ guest_query_id: m.guest_query_id, result: { type: "article", id: String(Date.now()), title: "lifeline", input_message_content: { message_text: toHtml(answer), parse_mode: "HTML", link_preview_options: { is_disabled: true } } } });
+  };
+  /* Birthdays said in groups, checked every quarter hour. */
+  const birthdays = setInterval(() => {
+    dueBirthdays(db, new Date()).then((due) => Promise.all(due.map((d) => bot.api.sendMessage(d.chatId, d.text).catch(() => {})))).catch((e) => log.warn({ err: e?.message }, "group birthdays failed"));
+  }, 15 * 60_000);
+  birthdays.unref?.();
 
   bot.catch((e) => log.error({ err: e.error }, "bot error"));
   return bot;

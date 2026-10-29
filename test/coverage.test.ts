@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { pluginExamples } from "../src/core/plugins.js";
 import "../src/modules/index.js";
 import { allActions } from "../src/policy/registry.js";
 import { parseByRules } from "../src/intent/rules.js";
@@ -15,6 +16,7 @@ const SENTENCES: Record<string, string[]> = {
   "speech.say": ["read that to me", "say that out loud"],
   "email.me": ["email me my shopping list", "email me my brief", "mail me the todo list"],
   "settings.verify_email": ["verify 482913", "code 482913"],
+  "settings.city": ["I live in Berlin", "my city is Toronto", "I moved to Manila"],
   "email.send": ["email ada@example.com saying I'll be ten minutes late"],
   "game.play": ["play a game", "i'm bored", "quiz me", "trivia about football", "give me a riddle", "would you rather"],
   "fun.decide": ["flip a coin", "heads or tails?", "pick for me: jollof or fried rice", "pizza or suya, pick for me"],
@@ -91,10 +93,13 @@ const SENTENCES: Record<string, string[]> = {
   "persona.set": ["talk like a tired pirate who loves spreadsheets", "switch your voice to degen", "be more formal", "voice coach"],
   "settings.update": ["my timezone is Europe/London", "send my digest at 8", "my email is sage@example.com", "timezone Africa/Lagos"],
   "digest.now": ["what's my day looking like", "brief me", "digest"],
-  "list.add": ["I need to buy milk, eggs and bread", "I have to do taxes and call the bank", "add rice to my shopping list", "todo: ship the deck"],
+  "list.add": ["add rice and eggs to my shopping list", "add call the bank to my todo list", "I need to buy milk, eggs and bread", "I have to do taxes and call the bank", "add rice to my shopping list", "todo: ship the deck"],
   "list.done": ["bought milk", "finished taxes", "crossed off call the bank"],
   "list.show": ["what's on my shopping list", "my todos", "lists"],
 };
+
+// Modules register their own example sentences (src/core/plugins.ts addExamples); they're checked the same way.
+for (const [a, s] of Object.entries(pluginExamples())) SENTENCES[a] = [...(SENTENCES[a] ?? []), ...s];
 
 describe("every action is reachable from ordinary sentences", () => {
   const actions = allActions().filter((a) => a.tier !== 3).map((a) => a.name);

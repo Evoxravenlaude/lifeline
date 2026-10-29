@@ -6,6 +6,7 @@ import { ensureUser } from "../src/core/handler.js";
 import { admit, circleSummary } from "../src/core/circle.js";
 import { config } from "../src/core/config.js";
 import { createWeb } from "../src/web/server.js";
+import { DRAWERS } from "../src/core/plugins.js";
 
 let db: Db;
 const saved = { maxUsers: config.maxUsers, allowedUserIds: [...config.allowedUserIds] };
@@ -40,7 +41,10 @@ describe("the circle", () => {
     config.maxUsers = 15;
     const web = createWeb(db, "lifeline_bot");
     const caps = await (await web.request("/api/capabilities")).json();
-    expect(caps.groups.map((g: [string]) => g[0])).toEqual(["Your day", "Body and health", "Money", "Voice, photos and search", "Fun", "Work and growth", "Me"]);
+    const names = caps.groups.map((g: [string]) => g[0]);
+    // Drawers come in their fixed order; the ones features add appear in between.
+    expect(names).toEqual(DRAWERS.filter((d) => names.includes(d)));
+    expect(names).toEqual(expect.arrayContaining(["Your day", "Body and mind", "Money", "People", "Voice, photos and search", "Fun", "Work, code and crypto", "Me"]));
     expect(caps.capabilities.length).toBeGreaterThan(15);
     const pub = await (await web.request("/api/public")).json();
     expect(pub.places).toEqual({ taken: 3, max: 15 });
