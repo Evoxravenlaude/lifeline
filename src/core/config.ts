@@ -68,6 +68,8 @@ export const config = {
   groqVisionModel: process.env.GROQ_VISION_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct",
   /** Groq's model with web search built in, the fallback when Gemini search isn't available. */
   groqSearchModel: process.env.GROQ_SEARCH_MODEL || "groq/compound",
+  /** OpenAI model used with its web search tool (Responses API), when OPENAI_API_KEY is set. */
+  openaiSearchModel: process.env.OPENAI_SEARCH_MODEL || "gpt-4.1-mini",
   /** Drawing: Cloudflare Workers AI has a free daily allowance (about 200 pictures a day). */
   cfAccountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? "",
   cfApiToken: process.env.CLOUDFLARE_API_TOKEN ?? "",
@@ -119,8 +121,9 @@ export const config = {
   /** The return URL registered on the Services ID. Empty: the website's own address with a trailing slash. */
   appleRedirectUri: (process.env.APPLE_REDIRECT_URI ?? "").trim(),
   /* ---- the installable app: web push (src/core/webpush.ts, docs/APP.md) ---- */
-  vapidPublicKey: (process.env.VAPID_PUBLIC_KEY ?? "").trim(),
-  vapidPrivateKey: (process.env.VAPID_PRIVATE_KEY ?? "").trim(),
+  /* Keys pasted with quotes, spaces or a line break (easy to do from a terminal) still work. */
+  vapidPublicKey: (process.env.VAPID_PUBLIC_KEY ?? "").replace(/["'\s]/g, ""),
+  vapidPrivateKey: (process.env.VAPID_PRIVATE_KEY ?? "").replace(/["'\s]/g, ""),
   /** mailto:you@example.com, so push services can reach whoever runs lifeline. */
   vapidSubject: (process.env.VAPID_SUBJECT ?? "").trim(),
 };
