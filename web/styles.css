@@ -340,6 +340,80 @@ code.cp.copied { background: var(--k-dose); border-color: var(--ink); }
 .spark { flex: none; color: var(--accent); }
 @media (max-width: 520px) { .spark { display: none; } .cycle { grid-template-columns: repeat(14, minmax(0, 1fr)); } .cy { min-width: 0; height: 18px; } }
 
+/* today: the day as a timeline. A 24-hour strip on top, then the day in order on a rail, with a now marker. */
+.day-card { --dl-x: 20px; }
+.day-nav { display: inline-flex; align-items: center; gap: 2px; margin: -6px -8px -6px 0; }
+.day-nav .icon-btn { width: 38px; height: 38px; color: var(--ink); }
+.day-nav .icon-btn:hover { background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--ink); }
+.day-nav .icon-btn[disabled] { opacity: .35; pointer-events: none; }
+.day-nav .btn.ghost { color: var(--ink); min-height: 32px; padding: 4px 10px; }
+.day-nav .btn.ghost:hover { background: color-mix(in srgb, var(--panel) 55%, transparent); }
+.dl-strip { position: relative; height: 30px; margin: 16px var(--dl-x) 4px; border: var(--edge); border-radius: var(--r-pill); background: var(--field); overflow: hidden; }
+.dl-past { position: absolute; left: 0; top: 0; bottom: 0; background: var(--sunk); }
+.dl-mark { position: absolute; top: 50%; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 50%; background: var(--k); border: 1px solid var(--ink); }
+.dl-mark.done, .dl-mark.passed { opacity: .55; }
+.dl-needle { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1.5px; background: var(--metal); }
+.dl-hours { display: flex; justify-content: space-between; margin: 0 var(--dl-x); font-size: var(--t-13); color: var(--ink-3); font-feature-settings: "lnum" 1, "tnum" 1; }
+.dl-lead { padding: 10px var(--dl-x) 2px; color: var(--ink-2); font-style: italic; font-size: 1.0625rem; }
+.dl-allday { padding: 8px var(--dl-x) 0; margin: 0; }
+.dayline { list-style: none; margin: 8px 0 0; padding: 0 0 8px; }
+.dayline li { position: relative; display: grid; grid-template-columns: 3.4em 16px minmax(0, 1fr) auto; column-gap: 14px; align-items: center; padding: 9px var(--dl-x); min-height: 50px; }
+.dayline li::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--dl-x) + 3.4em + 21px); border-left: 2px solid var(--line); }
+.dayline li:first-child::before { top: 50%; }
+.dayline li:last-child::before { bottom: 50%; }
+.dayline li:only-child::before { display: none; }
+.dayline .t { color: var(--ink-2); font-weight: 600; font-size: .9375rem; font-feature-settings: "lnum" 1, "tnum" 1; }
+.dayline .node { position: relative; z-index: 1; width: 16px; height: 16px; border-radius: 50%; border: var(--edge); background: var(--k, var(--metal)); display: grid; place-items: center; }
+.dayline .node .ico { width: 11px; height: 11px; stroke-width: 2.6; }
+.dayline .done .node { background: var(--field); }
+.dayline .passed .node { background: var(--field); border-style: dashed; border-color: var(--ink-3); }
+.dayline .w { min-width: 0; overflow-wrap: anywhere; }
+.dayline .w small { display: block; color: var(--ink-3); font-size: var(--t-13); }
+.dayline .done .w, .dayline .passed .w { color: var(--ink-2); }
+.dl-note { display: inline-block; margin-left: 8px; padding: 0 8px; font: 600 12.5px/1.6 var(--body); color: var(--ink); background: var(--k); border: 1px solid var(--ink); border-radius: var(--r-pill); }
+.dayline .done .dl-note { background: var(--sunk); }
+.dayline .a { display: flex; gap: 6px; flex-wrap: wrap; justify-content: end; }
+.dayline .dl-now { min-height: 34px; padding-top: 3px; padding-bottom: 3px; }
+.dl-now .t { color: var(--ink); }
+.dl-now .node { width: 11px; height: 11px; justify-self: center; border-radius: 2px; background: var(--metal); transform: rotate(45deg); }
+.dl-now .w { display: flex; align-items: center; gap: 10px; font-family: var(--display); color: var(--ink); }
+.dl-now .w::after { content: ""; flex: 1; border-top: 2px solid var(--metal); }
+@media (max-width: 520px) {
+  .day-card { --dl-x: 14px; }
+  .dayline li { grid-template-columns: 3em 16px minmax(0, 1fr); column-gap: 12px; }
+  .dayline li::before { left: calc(var(--dl-x) + 3em + 19px); }
+  .dayline .a { grid-column: 3; justify-content: start; margin-top: 8px; }
+}
+
+/* health: the cycle as a month */
+.cal-label { min-width: 8.5em; text-align: center; font-weight: 600; }
+.cal-body { display: grid; gap: 12px; }
+.cal-dow, .cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+.cal-dow span { text-align: center; font-size: var(--t-13); color: var(--ink-3); font-weight: 600; }
+.cal-day { position: relative; aspect-ratio: 1 / 1; min-height: 36px; display: grid; place-items: center; border: var(--edge-w) solid var(--line); border-radius: 8px; background: var(--field); color: var(--ink); font-size: 1rem; font-feature-settings: "lnum" 1, "tnum" 1; transition: border-color var(--fill); }
+.cal-day:hover { border-color: var(--ink); }
+.cal-day.period { background: var(--k-hack); border-color: var(--ink); }
+.cal-day.predicted, .cal-sw.predicted { background: repeating-linear-gradient(135deg, var(--k-hack) 0 3px, var(--field) 3px 7px); border: var(--edge-w) dashed var(--ink); }
+.cal-day.fertile { background: var(--k-dose); border-color: var(--ink); }
+.cal-day.today { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--ink); font-weight: 700; }
+.cal-day.noted::after, .cal-sw.noted::after { content: ""; position: absolute; bottom: 4px; left: 50%; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--ink); }
+.cal-day.picked { outline: 2.5px solid var(--metal); outline-offset: 1px; }
+.cal-key { gap: 14px; }
+.cal-key span { display: inline-flex; align-items: center; gap: 6px; }
+.cal-sw { position: relative; display: inline-block; width: 14px; height: 14px; border-radius: 4px; border: var(--edge-w) solid var(--ink); background: var(--field); }
+.cal-sw.period { background: var(--k-hack); }
+.cal-sw.fertile { background: var(--k-dose); }
+.cal-sw.noted { border-color: var(--line); }
+.cal-sw.noted::after { bottom: 3.5px; width: 4px; height: 4px; margin-left: -2px; }
+.cal-said { font-style: italic; color: var(--ink-2); min-height: 1.55em; }
+@media (max-width: 520px) { .cal, .cal-dow { gap: 3px; } .cal-day { min-height: 0; border-radius: 6px; font-size: .9375rem; } .cal-label { min-width: 0; } }
+
+/* the emergency card, and files in chat */
+.ice { display: grid; gap: 12px; }
+.ice-text pre { font-style: normal; }
+.file-save { margin-top: 10px; }
+.file-save .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+
 /* hackathons */
 .odds { font-family: var(--display); font-size: var(--t-39); line-height: 1; font-variant-numeric: tabular-nums lining-nums; min-width: 2.1ch; text-align: right; }
 .board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
@@ -535,6 +609,7 @@ code.cp.copied { background: var(--k-dose); border-color: var(--ink); }
   .chip { min-height: 38px; padding: 7px 14px; }
   .btn.sm { min-height: 40px; }
   .icon-btn { width: 44px; height: 44px; }
+  .day-nav .icon-btn { width: 40px; height: 40px; }
 }
 @media (max-width: 360px) {
   :root { --gutter: 14px; }

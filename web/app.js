@@ -38,6 +38,7 @@ window.App = (function () {
     box.className = "wrap"; box.style.padding = "24px var(--gutter)";
     box.innerHTML = `<div class="card k-hack" role="alert"><div class="card-head">${ico("x")}<span>This page can't reach the lifeline server</span></div><div class="card-body" style="display:grid;gap:10px"><p>The site loaded, but the server that keeps your day didn't answer.</p>${onVercel ? `<p class="muted">If this is the Vercel site, <b>web/vercel.json</b> must send <b>/api</b> and <b>/auth</b> to your Railway address (Railway, your service, Settings, Networking). Push the fix and Vercel redeploys.</p>` : `<p class="muted">The server may be restarting. Try again in a minute.</p>`}<div class="row"><button class="btn sm" onclick="location.reload()">Try again</button></div></div></div>`;
     document.body.insertBefore(box, document.body.firstChild.nextSibling);
+    return box;
   }
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   /* Replies come in a small markdown (see src/core/format.ts). Render it here so nobody sees a raw asterisk,
@@ -134,7 +135,8 @@ window.App = (function () {
     paintBar();
     registerSW();
     $("#modeBtnL").addEventListener("click", toggleMode);
-    if (!(await reachable())) { cantReach(); window.__bootDone && window.__bootDone(); return landing(true); }
+    if (tgLaunch) loadTelegram();
+    if (!(await reachable())) { const box = cantReach(); if (tgLaunch) keptCardOffline(box); window.__bootDone && window.__bootDone(); return landing(true); }
     if (tgLaunch) await openedInTelegram();
     me = await api("/api/me");
     if (me.error || typeof me.id !== "number") { me = null; return landing(); }
@@ -164,12 +166,24 @@ window.App = (function () {
     setInterval(refresh, 30000);
     setTimeout(offerInstallOnce, 6000);
   }
+  /**
+   * Telegram's own script, only inside its app (the Mini App), and first thing, so its secure storage can show the
+   * emergency card even when the server can't be reached. Resolves to Telegram.WebApp, or null.
+   */
+  let tgReady = Promise.resolve(null);
+  function loadTelegram() {
+    document.documentElement.classList.add("in-telegram");
+    tgReady = new Promise((res) => {
+      const s = document.createElement("script"); s.src = "https://telegram.org/js/telegram-web-app.js?59";
+      s.onload = () => { let w = null; try { w = window.Telegram.WebApp; w.ready(); w.expand(); let saved = null; try { saved = localStorage.getItem("ll_mode"); } catch {} if (w.colorScheme && !saved) setMode(w.colorScheme === "dark" ? "night" : "day", null, false); } catch {} res(w || null); };
+      s.onerror = () => res(null);
+      setTimeout(() => res(null), 8000);
+      document.head.appendChild(s);
+    });
+    return tgReady;
+  }
   /** Opened from the bot's "Open the app" button: sign in from Telegram's launch data and settle into its frame. */
   async function openedInTelegram() {
-    document.documentElement.classList.add("in-telegram");
-    const s = document.createElement("script"); s.src = "https://telegram.org/js/telegram-web-app.js?59";
-    s.onload = () => { try { const w = window.Telegram.WebApp; w.ready(); w.expand(); if (w.colorScheme && !localStorage.getItem("ll_mode")) setMode(w.colorScheme === "dark" ? "night" : "day", null, false); } catch {} };
-    document.head.appendChild(s);
     if (tgToken && !(await api("/api/me")).error) return;
     /* Already signed in on this browser? Keep that, and ignore launch data in the address. */
     const own = await fetch("/api/me", { credentials: "same-origin" }).then((r) => r.ok).catch(() => false);
@@ -206,7 +220,7 @@ window.App = (function () {
     state.meds.forEach((m) => m.times.forEach((t) => { const [h, mm] = t.split(":").map(Number); items.push({ min: h * 60 + mm, time: t.slice(0, 5), label: cap(m.name), sub: m.dose || "dose", kind: "dose" }); }));
     return items.sort((a, b) => a.min - b.min);
   }
-  const KIND_WORD = { event: "Event", rem: "Reminder", class: "Class", dose: "Dose" };
+  const KIND_WORD = { event: "Event", rem: "Reminder", class: "Class", dose: "Dose", trip: "Trip" };
 
   function mountScene(host, items, opts = {}) {
     const tip = $("#tip");
@@ -295,9 +309,7 @@ window.App = (function () {
         <div class="stack">
           ${pendingCards()}
           ${next ? `<div class="card k-${next.kind}"><div class="card-body next"><div class="when">${hhmm(next.at)}</div><div><div class="what">${esc(next.label)}</div><div class="sub">${esc(cap(when(next.at)))}, ${inMins(next.at)}${next.sub ? `. ${esc(next.sub)}` : ""}</div></div>${next.id ? `<div class="row"><button class="btn sm" data-btn="rem:done:${next.id}">Done</button><button class="btn sm ghost" data-btn="rem:snooze:${next.id}">Snooze</button></div>` : ""}</div></div>` : ""}
-          <div class="card k-event"><div class="card-head">${ico("clock")}<span>On the clock today</span></div>
-            ${items.length ? `<ul class="lines" id="clock">${items.map((i) => `<li data-min="${i.min}" class="${i.min < nowMin ? "done" : ""}"><span class="t">${i.time}</span><span class="dot k-${i.kind}"></span><span class="w">${esc(i.label)}<small>${KIND_WORD[i.kind]}${i.sub && i.kind !== "dose" ? `, ${esc(i.sub)}` : i.kind === "dose" && i.sub !== "dose" ? `, ${esc(i.sub)}` : ""}</small></span><span class="a">${(i.actions || []).map(([l, d]) => `<button class="btn sm" data-btn="${d}">${l}</button>`).join("")}</span></li>`).join("")}</ul>` : `<div id="clock">${empty(`Nothing on the clock. Tell me what's on: ${tryLink("dentist at 3pm")}, ${tryLink("class Algorithms tuesday 10 to 12")}.`)}</div>`}
-          </div>
+          ${dayCard()}
           <div class="card k-list"><div class="card-head">${ico("today")}<span>The morning note</span><span class="sp"></span><button class="btn ghost sm" id="briefBtn">Rebuild from now</button></div><div class="card-body"><p id="brief" class="serif" style="white-space:pre-wrap;font-size:1.1875rem;line-height:1.55">Writing it.</p></div></div>
         </div>
         <div class="stack">
@@ -312,9 +324,61 @@ window.App = (function () {
     mountPip($("#pipHome"));
     const pl = $("#pipLine"); const lineEl = $("#pipHome .pip-line"); if (lineEl) { lineEl.hidden = true; const sync = () => (pl.textContent = lineEl.textContent); sync(); new MutationObserver(sync).observe(lineEl, { childList: true, characterData: true, subtree: true }); }
     wireButtons(main); wireTries(main);
+    wireDay();
     $$("[data-habit]", main).forEach((b) => b.addEventListener("click", () => act("habit.checkin", { name: b.dataset.habit }, "money").then(() => route())));
     const loadBrief = () => api("/api/digest").then((d) => { const b = $("#brief"); if (b) b.textContent = d.text || "Nothing to say yet."; });
     loadBrief(); $("#briefBtn").addEventListener("click", () => { $("#brief").textContent = "Writing it."; loadBrief(); });
+  }
+  /* ---------- the day as a timeline: what's done and what's left, placed by time, with a now marker (GET /api/day) ---------- */
+  const DAY_REACH = 7;
+  let dayAt = 0;
+  const dayCache = {};
+  /** The ISO day `off` days from today, in the person's zone. */
+  const isoDay = (off) => { const d = new Date(dayKey(Date.now()) + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + off); return d.toISOString().slice(0, 10); };
+  const things = (n) => (n === 1 ? "one thing" : `${n} things`);
+  const dayLabel = (off) => off === 0 ? "Today" : off === -1 ? "Yesterday" : off === 1 ? "Tomorrow" : new Date(isoDay(off) + "T12:00:00Z").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+  function dayCard() {
+    const d = dayCache[isoDay(dayAt)];
+    return `<div class="card k-event day-card" id="dayCard"><div class="card-head">${ico("clock")}<span id="dayTitle">${esc(d ? d.label : dayLabel(dayAt))}</span><span class="sp"></span>
+      <div class="day-nav" role="group" aria-label="Choose a day"><button class="icon-btn" type="button" data-step="-1" aria-label="The day before">${ico("prev", "sm")}</button><button class="btn ghost sm" type="button" data-step="0" hidden>Back to today</button><button class="icon-btn" type="button" data-step="1" aria-label="The day after">${ico("next", "sm")}</button></div></div>
+      <div id="dayBody" aria-live="polite">${d ? dayHtml(d) : empty("Laying out the day.")}</div></div>`;
+  }
+  function dayHtml(d) {
+    const pct = (m) => `${Math.max(0, Math.min(100, (m / 1440) * 100)).toFixed(2)}%`;
+    const nowMs = Date.now(), nowM = minsOf(nowMs);
+    const strip = `<div class="dl-strip" aria-hidden="true">${d.offset < 0 ? `<i class="dl-past" style="width:100%"></i>` : d.offset === 0 ? `<i class="dl-past" style="width:${pct(nowM)}"></i>` : ""}${d.items.map((i) => `<i class="dl-mark k-${i.kind} ${i.state}" style="left:${pct(minsOf(i.at))}"></i>`).join("")}${d.offset === 0 ? `<i class="dl-needle" style="left:${pct(nowM)}"></i>` : ""}</div><div class="dl-hours" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>`;
+    const { done, left } = d.counts;
+    const lead = !d.items.length ? (d.offset === 0 ? "Nothing on the clock today." : d.offset < 0 ? "Nothing was on the clock that day." : "Nothing booked yet.")
+      : d.offset === 0 ? (!left ? "Everything on today's line is behind you." : done ? `${cap(things(done))} behind you, ${things(left)} still to come.` : `${cap(things(left))} still to come.`)
+      : d.offset < 0 ? `${cap(things(d.items.length))} on the day.` : `${cap(things(d.items.length))} ahead.`;
+    const allDay = d.allDay.length ? `<div class="chips dl-allday">${d.allDay.map((a) => `<span class="chip on k-trip">${esc(a.title)}${a.sub ? `, ${esc(a.sub.charAt(0).toLowerCase() + a.sub.slice(1))}` : ""}</span>`).join("")}</div>` : "";
+    const nowRow = () => `<li class="dl-now"><span class="t">${hhmm(nowMs)}</span><span class="node"></span><span class="w">Now</span></li>`;
+    const row = (i) => `<li class="dl k-${i.kind} ${i.state}" data-min="${minsOf(i.at)}"><span class="t">${esc(i.time)}</span><span class="node">${i.state === "done" ? ico("check") : ""}</span><span class="w">${esc(i.title)}<small>${KIND_WORD[i.kind] || ""}${i.end ? `, until ${esc(i.end)}` : ""}${i.sub ? `, ${esc(i.sub)}` : ""}${i.note ? `<em class="dl-note">${esc(i.note)}</em>` : ""}</small></span>${i.actions && i.actions.length ? `<span class="a">${i.actions.map((a) => `<button class="btn sm" type="button" data-btn="${esc(a.data)}">${esc(a.label)}</button>`).join("")}</span>` : ""}</li>`;
+    const rows = []; let placed = d.offset !== 0;
+    for (const i of d.items) { if (!placed && Date.parse(i.at) > nowMs) { rows.push(nowRow()); placed = true; } rows.push(row(i)); }
+    if (!placed) rows.push(nowRow());
+    const list = d.items.length ? `<ol class="dayline"${d.offset === 0 ? ' id="clock"' : ""}>${rows.join("")}</ol>` : d.offset >= 0 ? empty(`Tell me what's on: ${tryLink(d.offset === 0 ? "dentist at 3pm" : "dentist tomorrow at 3pm")}, ${tryLink("class Algorithms tuesday 10 to 12")}.`) : "";
+    return `${strip}<p class="dl-lead">${esc(lead)}</p>${allDay}${list}`;
+  }
+  function paintDay() {
+    const date = isoDay(dayAt), d = dayCache[date], card = $("#dayCard");
+    if (!card) return;
+    $("#dayTitle").textContent = d ? d.label : dayLabel(dayAt);
+    $('[data-step="-1"]', card).disabled = dayAt <= -DAY_REACH; $('[data-step="1"]', card).disabled = dayAt >= DAY_REACH; $('[data-step="0"]', card).hidden = dayAt === 0;
+    if (d) { $("#dayBody").innerHTML = dayHtml(d); wireButtons($("#dayBody")); wireTries($("#dayBody")); }
+  }
+  async function loadDay() {
+    const date = isoDay(dayAt);
+    paintDay();
+    const d = await api(`/api/day?date=${date}`);
+    if (!$("#dayCard") || isoDay(dayAt) !== date) return; // moved on meanwhile
+    if (d.error || !Array.isArray(d.items)) { if (!dayCache[date]) $("#dayBody").innerHTML = empty(esc(d.text || "I couldn't lay out that day just now.")); return; }
+    dayCache[date] = d; paintDay();
+  }
+  function wireDay() {
+    const card = $("#dayCard"); if (!card) return;
+    $$("[data-step]", card).forEach((b) => b.addEventListener("click", () => { const s = Number(b.dataset.step); dayAt = s === 0 ? 0 : Math.max(-DAY_REACH, Math.min(DAY_REACH, dayAt + s)); if (!dayCache[isoDay(dayAt)]) $("#dayBody").innerHTML = empty("Laying out the day."); loadDay(); }));
+    loadDay();
   }
   function deadlines() {
     const open = state.ledger.filter((h) => h.deadline && !["won", "lost", "withdrawn"].includes(h.status)).slice(0, 4);
@@ -358,9 +422,28 @@ window.App = (function () {
       const mime = /^image\/(png|jpeg|webp)$/.test(x.image.mime) ? x.image.mime : "image/jpeg";
       h += `<figure class="gen"><img src="data:${mime};base64,${b64(x.image.data)}" alt="A picture I drew"><a class="btn sm" download="lifeline.${mime.split("/")[1]}" href="data:${mime};base64,${b64(x.image.data)}">${ico("out", "sm")}Save</a></figure>`;
     }
+    if (x.file && b64(x.file.data)) {
+      const name = String(x.file.name || "").split(/[\\/]/).pop().replace(/[\u0000-\u001f<>:"|?*]/g, "-").replace(/^[.\s]+/, "").slice(0, 120) || "lifeline-file";
+      const mime = fileType(x.file.mime);
+      h += `<div class="file-save"><a class="btn sm" data-file download="${esc(name)}" href="data:${mime};base64,${b64(x.file.data)}">${ico("out", "sm")}Save ${esc(name)}</a></div>`;
+    }
     if (b64(x.audio)) h += `<audio class="say" controls ${x.autoplay ? "autoplay" : ""} src="data:audio/wav;base64,${b64(x.audio)}"></audio>`;
     return h;
   }
+  /** Types a browser can be handed safely. Anything that could run as a page (HTML, SVG, XML, scripts) is saved as plain bytes. */
+  const fileType = (m) => { const t = String(m || "").toLowerCase(); return /^[a-z]+\/[a-z0-9.+-]+$/.test(t) && !/html|xml|svg|javascript|ecmascript/.test(t) ? t : "application/octet-stream"; };
+  /* Saving a file: through a blob, which works where long data addresses don't. The link's own address is the fallback. */
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest("a[data-file]"); if (!a) return;
+    try {
+      const m = /^data:([^;,]+);base64,(.*)$/.exec(a.getAttribute("href") || ""); if (!m) return;
+      const bin = atob(m[2]); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: fileType(m[1]) }));
+      e.preventDefault();
+      const t = document.createElement("a"); t.href = url; t.download = a.getAttribute("download") || "lifeline-file"; t.rel = "noopener"; document.body.appendChild(t); t.click(); t.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch {}
+  });
   /* Photos and voice notes from the composer. */
   function wireMedia() {
     $("#attach").addEventListener("click", () => $("#photoIn").click());
@@ -478,7 +561,7 @@ window.App = (function () {
       e.preventDefault(); const text = input.value.trim(); if (!text) return;
       out.hidden = false; out.innerHTML = `<p class="faint serif"><i>Reading that properly.</i></p>`;
       const r = await api("/api/chat", { text });
-      out.innerHTML = `<p>${linkify(r.text || "I couldn't reach the server just now, so that wasn't kept.")}</p>${r.buttons && r.buttons.length ? `<div class="row">${r.buttons.map((b) => `<button class="btn sm ${/^confirm:/.test(b.data) ? "metal" : ""}" data-btn="${esc(b.data)}">${esc(b.label)}</button>`).join("")}</div>` : ""}`;
+      out.innerHTML = `<p>${linkify(r.text || "I couldn't reach the server just now, so that wasn't kept.")}</p>${media(r.error ? null : r)}${r.buttons && r.buttons.length ? `<div class="row">${r.buttons.map((b) => `<button class="btn sm ${/^confirm:/.test(b.data) ? "metal" : ""}" data-btn="${esc(b.data)}">${esc(b.label)}</button>`).join("")}</div>` : ""}`;
       $$("[data-btn]", out).forEach((b) => b.addEventListener("click", async () => { const rr = await api("/api/button", { data: b.dataset.btn }); out.innerHTML = `<p>${linkify(rr.text)}</p>`; state = await api("/api/state"); if (view === "today" || view === "lists") route(); }));
       input.value = ""; state = await api("/api/state"); if (view === "today" || view === "lists") { const keep = o; route(); document.body.appendChild(keep); } updatePip();
     });
@@ -515,15 +598,18 @@ window.App = (function () {
   async function renderHealth() {
     const main = $("#main");
     main.innerHTML = `<div class="wrap page"><div class="page-head"><h2>Health</h2><p>Your cycle, your doses, and anything you keep a record of. It stays in your account; say "forget" about any of it and it's gone.</p></div><div id="hl">${empty("Gathering it.")}</div></div>`;
-    const h = await api("/api/health");
+    const [h, cal] = await Promise.all([api("/api/health"), api(calMonth ? `/api/cycle?month=${calMonth}` : "/api/cycle")]);
     const c = (h && h.cycle) || { tracking: false };
     const measures = (h && Array.isArray(h.measures)) ? h.measures : [];
-    $("#hl").innerHTML = `<div class="home-grid"><div class="stack">${cycleCard(c)}${measuresCard(measures)}</div><div class="stack">
+    $("#hl").innerHTML = `<div class="home-grid"><div class="stack">${cycleCard(c)}${cal && cal.shown ? `<div class="card k-hack cal-card" id="calCard">${calHtml(cal)}</div>` : ""}${measuresCard(measures)}</div><div class="stack">
       <div class="card k-dose">${cardHead("pill", "Doses")}${state.meds.length ? `<ul class="lines">${state.meds.map((m) => `<li><span class="w">${esc(cap(m.name))}<small>${m.times.join(" and ")}${m.days_left != null ? `, about ${m.days_left} days left` : ""}</small></span></li>`).join("")}</ul>` : empty(`None kept. Say ${tryLink("I take vitamin D at 8am and 8pm")}.`)}</div>
       <div class="card k-money">${cardHead("check", "Habits this week")}${state.habits.length ? `<div class="card-body chips" style="margin:0">${state.habits.map((x) => `<button class="chip" data-habit="${esc(x.name)}">${esc(cap(x.name))}, ${x.n} of ${x.target_per_week}</button>`).join("")}</div>` : empty(`Nothing counted yet. Say ${tryLink("did gym")} or ${tryLink("track reading every day")}.`)}</div>
+      <div class="card k-rem">${cardHead("aid", "Emergency card")}<div id="iceHost">${empty("Fetching it.")}</div></div>
       <div class="card k-event"><div class="card-body" style="display:grid;gap:10px"><h4>Log anything</h4><form class="row" id="logAny" style="flex-wrap:nowrap"><input placeholder="slept 7 hours, weight 72kg, mood 4/5" aria-label="Log something"><button class="btn sm primary" type="submit">Log</button></form><p class="faint small">Sleep, water, weight, mood, steps, blood pressure, lifts, skincare, symptoms. Anything with a number or a yes.</p></div></div>
     </div></div>`;
     wireTries(main); wireButtons(main);
+    if (cal && cal.shown) wireCal(cal);
+    renderIce($("#iceHost"));
     $$("[data-habit]", main).forEach((b) => b.addEventListener("click", () => act("habit.checkin", { name: b.dataset.habit }, "money").then(renderHealth)));
     $$("[data-say]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: b.dataset.say }); tell(r, "Done.", "hack"); renderHealth(); }));
     $$("[data-ask]", main).forEach((b) => b.addEventListener("click", () => openSay(b.dataset.ask)));
@@ -551,6 +637,100 @@ window.App = (function () {
       <p class="faint small">${c.irregular ? "Your cycles vary a fair bit, so these dates are rougher than usual. A doctor or nurse can look properly if that worries you. " : ""}Estimates from your own history, not birth control. <button class="btn ghost sm" data-ask="forget my cycle data" style="padding:0 4px;min-height:0">Forget my cycle data</button></p>
     </div></div>`;
   }
+  /* ---------- the cycle as a month (GET /api/cycle): only for someone who tracks it, and only ever their own ---------- */
+  let calMonth = null;
+  const CAL_WORDS = { period: "period", predicted: "period likely", fertile: "likely fertile", today: "today" };
+  const calWords = (d) => [d.period && CAL_WORDS.period, d.predicted && CAL_WORDS.predicted, d.fertile && CAL_WORDS.fertile, d.today && CAL_WORDS.today, d.notes ? (d.notes === 1 ? "one thing noted" : `${d.notes} things noted`) : ""].filter(Boolean);
+  function calHtml(m) {
+    const cells = Array.from({ length: m.lead }, () => `<span class="cal-pad" aria-hidden="true"></span>`).join("") + m.days.map((d) => {
+      const k = ["period", "predicted", "fertile", "today"].filter((x) => d[x]).concat(d.notes ? ["noted"] : []);
+      const w = calWords(d);
+      return `<button type="button" class="cal-day ${k.join(" ")}" data-cal="${d.date}" aria-label="${esc(dayName(d.date))}${w.length ? `, ${esc(w.join(", "))}` : ""}"${d.today ? ' aria-current="date"' : ""}>${d.day}</button>`;
+    }).join("");
+    const p = m.picture;
+    const said = !m.tracking ? "Tell me when your period starts and the days fill in here." : p && p.lateBy > 0 ? `Your period is ${p.lateBy} day${p.lateBy > 1 ? "s" : ""} later than I'd expect, so I've left the guesses off for now.` : "Tap a day to see what you noted.";
+    return `<div class="card-head">${ico("cal")}<span>Your month</span><span class="sp"></span><div class="day-nav" role="group" aria-label="Choose a month"><button class="icon-btn" type="button" data-mstep="${esc(m.prev)}" aria-label="The month before">${ico("prev", "sm")}</button><span class="cal-label">${esc(m.label)}</span><button class="icon-btn" type="button" data-mstep="${esc(m.next)}" aria-label="The month after">${ico("next", "sm")}</button></div></div>
+      <div class="card-body cal-body">
+        <div class="cal-dow" aria-hidden="true">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((x) => `<span>${x}</span>`).join("")}</div>
+        <div class="cal" role="group" aria-label="${esc(m.label)}">${cells}</div>
+        <div class="row small muted cal-key"><span><i class="cal-sw period"></i>period</span>${m.tracking ? `<span><i class="cal-sw predicted"></i>period likely</span><span><i class="cal-sw fertile"></i>likely fertile</span>` : ""}<span><i class="cal-sw noted"></i>something noted</span></div>
+        <p class="cal-said" id="calSaid" aria-live="polite">${esc(said)}</p>
+        <p class="faint small">Estimates from your own history, not birth control. Only you can see this.</p>
+      </div>`;
+  }
+  function wireCal(m) {
+    const card = $("#calCard"); if (!card) return;
+    $$("[data-mstep]", card).forEach((b) => b.addEventListener("click", async () => {
+      $$("[data-mstep]", card).forEach((x) => (x.disabled = true));
+      const r = await api(`/api/cycle?month=${encodeURIComponent(b.dataset.mstep)}`);
+      if (!$("#calCard")) return;
+      if (r.error || !r.shown) { $$("[data-mstep]", card).forEach((x) => (x.disabled = false)); return tell(r, "That month isn't there."); }
+      calMonth = r.month; card.innerHTML = calHtml(r); wireCal(r);
+    }));
+    $$("[data-cal]", card).forEach((b) => b.addEventListener("click", () => {
+      const d = m.days.find((x) => x.date === b.dataset.cal); if (!d) return;
+      $$("[data-cal]", card).forEach((x) => x.classList.toggle("picked", x === b));
+      const noted = m.logs.filter((l) => l.day === d.date).map((l) => l.value || l.kind);
+      const w = calWords(d).filter((x) => !/noted$/.test(x));
+      $("#calSaid", card).textContent = `${dayName(d.date)}${w.length ? `, ${w.join(", ")}` : ""}. ${noted.length ? `You noted ${noted.join(", ")}.` : "Nothing noted."}`;
+    }));
+  }
+
+  /* ---------- the emergency card, and a copy kept on this phone inside Telegram (its SecureStorage, Bot API 9.0) ---------- */
+  const ICE_KEY = "ll_ice";
+  /** Telegram's secure storage, only inside Telegram's app on a version that has it. Never localStorage: outside Telegram there's no copy. */
+  async function secureStore() {
+    const w = await tgReady;
+    try { return w && typeof w.isVersionAtLeast === "function" && w.isVersionAtLeast("9.0") && w.SecureStorage ? w.SecureStorage : null; } catch { return null; }
+  }
+  const ssCall = (fn) => new Promise((res) => { let over = false; const end = (v) => { if (!over) { over = true; res(v); } }; setTimeout(() => end({ error: "timeout" }), 5000); try { fn((err, value) => end(err ? { error: String(err) } : { value })); } catch { end({ error: "failed" }); } });
+  /** What this phone keeps. `usable` is false where Telegram has no secure storage (its desktop and web apps say so). */
+  async function iceCopy() {
+    const s = await secureStore(); if (!s) return { usable: false, copy: null };
+    const r = await ssCall((cb) => s.getItem(ICE_KEY, cb));
+    if (r.error) return { usable: !/unsupported|timeout|failed/i.test(r.error), copy: null };
+    let copy = null; try { const j = JSON.parse(r.value || "null"); if (j && typeof j.t === "string") copy = j; } catch {}
+    return { usable: true, copy };
+  }
+  async function keepIce(text) { const s = await secureStore(); if (!s) return false; const r = await ssCall((cb) => s.setItem(ICE_KEY, JSON.stringify({ u: me && me.id, t: text, at: Date.now() }), cb)); return !r.error && r.value !== false; }
+  async function dropIce() { const s = await secureStore(); if (!s) return false; const r = await ssCall((cb) => s.removeItem(ICE_KEY, cb)); return !r.error; }
+  const icePre = (t) => `<div class="draft ice-text"><pre>${esc(t)}</pre><button class="btn sm" type="button" data-copy="${esc(t)}">${ico("copy", "sm")}Copy</button></div>`;
+  async function renderIce(host) {
+    if (!host) return;
+    const [r, kept] = await Promise.all([api("/api/emergency"), iceCopy()]);
+    if (!document.body.contains(host)) return;
+    const mine = kept.copy && (!kept.copy.u || !me || kept.copy.u === me.id) ? kept.copy : null;
+    const away = r.error && ["offline", "unreachable", "server"].includes(r.error) || (r.error && r.status >= 500);
+    let h;
+    if (away) h = mine ? `<div class="card-body ice"><p class="small muted">I can't reach lifeline right now, so this is the copy kept on this phone.</p>${icePre(mine.t)}</div>` : empty("I can't reach lifeline right now. Try again in a minute.");
+    else if (r.error) h = empty(esc(r.text || "I couldn't fetch your card just now."));
+    else if (r.card) {
+      const same = mine && mine.t === r.card;
+      h = `<div class="card-body ice"><p class="small muted">Screenshot it, or copy it into your phone's medical ID.</p>${icePre(r.card)}`;
+      if (kept.usable) h += `<div class="row">${same ? "" : `<button class="btn sm" type="button" data-ice="keep">${mine ? "Update the copy" : "Keep a copy on this phone"}</button>`}${mine ? `<button class="btn sm ghost" type="button" data-ice="drop">Remove the copy</button>` : ""}</div>
+        <p class="small faint">${same ? "A copy is kept on this phone, in Telegram's secure storage. It opens here even when lifeline can't be reached." : mine ? "The copy on this phone is older than your card." : "The copy goes in Telegram's secure storage on this phone, so it opens here even when lifeline can't be reached."}</p>`;
+      h += `</div>`;
+    } else {
+      h = empty(`No emergency card yet. Say ${tryLink("set up my emergency card")} and I'll ask a few questions. Every one is optional.`);
+      if (mine && kept.usable) h += `<div class="card-body ice"><p class="small muted">There's still a copy on this phone.</p><div class="row"><button class="btn sm" type="button" data-ice="drop">Remove the copy</button></div></div>`;
+    }
+    host.innerHTML = h;
+    wireTries(host);
+    $$("[data-ice]", host).forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      if (b.dataset.ice === "keep") toast((await keepIce(r.card)) ? "A copy is on this phone now." : "This Telegram app can't keep a copy. Telegram on your phone can.", "rem");
+      else toast((await dropIce()) ? "The copy is gone from this phone." : "I couldn't remove the copy. Try once more?", "rem");
+      renderIce(host);
+    }));
+  }
+  /** The server can't be reached, inside Telegram: the copy kept on this phone, under the notice. */
+  async function keptCardOffline(after) {
+    const kept = await iceCopy(); if (!kept.copy) return;
+    const box = document.createElement("div"); box.className = "wrap"; box.style.padding = "0 var(--gutter) 24px";
+    box.innerHTML = `<div class="card k-rem">${cardHead("aid", "Your emergency card")}<div class="card-body ice"><p class="small muted">Kept on this phone, so it's here while lifeline can't be reached.</p>${icePre(kept.copy.t)}</div></div>`;
+    if (after && after.parentNode) after.after(box); else document.body.insertBefore(box, document.body.firstChild);
+  }
+
   function spark(points) {
     const v = points.map((p) => Number(p.value)).filter((x) => !isNaN(x)); if (v.length < 2) return "";
     const lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1, w = 140, h = 36;
