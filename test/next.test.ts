@@ -325,3 +325,148 @@ describe("the menu and the website, caught up", () => {
   });
 
 });
+
+describe("lifeline is lifeline", () => {
+  it("answers 'what model are you' as itself, without naming any", async () => {
+    const u = await ensureUser(db, "telegram", "7601", "Remi");
+    for (const q of ["what model are you?", "are you chatgpt?", "is this claude or gemini", "who built you"]) {
+      const r = await handleMessage(db, u, q, { channel: "telegram" });
+      expect(r.text, q).toMatch(/lifeline/);
+      expect(r.text, q).not.toMatch(/\b(?:GPT|Claude|Gemini|Llama|OpenAI|Anthropic|Groq|Google)\b/);
+    }
+  });
+  it("puts a model that names itself back to being lifeline, and leaves the topic alone", async () => {
+    const { keepIdentity } = await import("../src/intent/model.js");
+    expect(keepIdentity("I'm Claude, an AI model made by Anthropic. Happy to help.")).toBe("I'm lifeline. Happy to help.");
+    expect(keepIdentity("As an AI language model, I think so.")).toBe("I think so.");
+    expect(keepIdentity("Claude is a model by Anthropic; Gemini is Google's.")).toBe("Claude is a model by Anthropic; Gemini is Google's.");
+  });
+});
+
+describe("one conversation, whichever model answers", () => {
+  it("picks the tier from the message, and stays smart for a follow-up", async () => {
+    const { tierFor } = await import("../src/intent/route.js");
+    const now = new Date("2026-10-30T10:00:00Z");
+    expect(tierFor("thanks!", { prefs: {} }, now).tier).toBe("fast");
+    expect(tierFor("slept 7 hours", { prefs: {} }, now).tier).toBe("fast");
+    expect(tierFor("should I move my savings to a money market fund or pay off my loan first?", { prefs: {} }, now).tier).toBe("smart");
+    expect(tierFor("x".repeat(300), { prefs: {} }, now).tier).toBe("smart");
+    const after = { prefs: { lastTier: { tier: "smart", at: now.getTime() - 60_000 } } };
+    expect(tierFor("and the second option?", after, now)).toEqual({ tier: "smart", why: "follow-up to a thinking turn" });
+    expect(tierFor("ok", after, now).tier).toBe("fast");
+  });
+
+  it("asks the stronger model when the quick one falls short, with the same prompt and history", async () => {
+    Object.assign(config, { anthropicKey: "", geminiKey: "", openaiCompatKey: "k", openaiCompatBaseUrl: "https://api.groq.com/openai/v1", modelProvider: "openai", openaiCompatModel: "big-model", openaiCompatFastModel: "small-model" });
+    const seen: { model: string; system: string; n: number }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: any, init: any) => {
+      const b = JSON.parse(init.body);
+      seen.push({ model: b.model, system: b.messages[0].content, n: b.messages.length });
+      const content = b.model === "small-model" ? "I'm not sure." : "Start with the loan: at 24% it costs more than the fund earns.";
+      return new Response(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 3, completion_tokens: 3 } }), { headers: { "content-type": "application/json" } });
+    }));
+    const u = await ensureUser(db, "telegram", "7602", "Dayo");
+    await handleMessage(db, u, "hi", { channel: "telegram" });
+    const r = await handleMessage(db, (await db.one<any>(`SELECT * FROM users WHERE id=$1`, [u.id]))!, "what is the cheapest way to clear a loan at 24%?", { channel: "telegram" });
+    expect(r.text).toMatch(/Start with the loan/);
+    const last2 = seen.slice(-2);
+    expect(last2.map((x) => x.model)).toEqual(["small-model", "big-model"]);
+    expect(last2[0].system).toBe(last2[1].system);
+    expect(last2[0].n).toBe(last2[1].n);
+    expect(last2[0].system).toMatch(/Never name, confirm or hint at which model/);
+  });
+
+  it("keeps what each turn did, and what a picture showed, in the history every model gets", async () => {
+    const { historyFor, rollSummary } = await import("../src/intent/route.js");
+    const u = await ensureUser(db, "telegram", "7603", "Halima");
+    await handleMessage(db, u, "remind me to call mum on Sunday at 5", { channel: "telegram" });
+    await db.query(`INSERT INTO messages (user_id, role, content, meta) VALUES ($1,'user','[picture: a receipt from Shoprite, 12,400 naira] keep this','{"picture":true}')`, [u.id]);
+    const h = await historyFor(db, u.id);
+    expect(h.find((m) => m.role === "assistant")!.content).toMatch(/^\[did reminder\.create\] /);
+    expect(h.at(-1)!.content).toMatch(/\[picture: a receipt from Shoprite/);
+    for (let i = 0; i < 26; i++) await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,$2,$3)`, [u.id, i % 2 ? "assistant" : "user", `turn ${i}`]);
+    const fresh = (await db.one<any>(`SELECT * FROM users WHERE id=$1`, [u.id]))!;
+    let prompt = "";
+    expect(await rollSummary(db, fresh, async (p) => { prompt = p; return "Halima set a Sunday call with her mum and kept a Shoprite receipt."; })).toBe(true);
+    expect(prompt).toMatch(/\(did reminder\.create\)/);
+    expect((await db.one<any>(`SELECT prefs FROM users WHERE id=$1`, [u.id]))!.prefs.convo.summary).toMatch(/Sunday call/);
+    expect(await rollSummary(db, fresh, async () => "x")).toBe(false); // nothing new to fold yet
+  });
+});
+
+describe("email: one tap to link, and nothing sent until it's linked", () => {
+  const on = () => Object.assign(config, { resendKey: "re_x", resendWebhookSecret: "whsec_x", inboundEmail: "lifeline@mail.example.com", webUrl: "https://lifeline.example.com", smtpUrl: "" });
+  it("gives a button that writes the email for you, and a line to copy", async () => {
+    on();
+    const u = await ensureUser(db, "telegram", "7701", "Obi");
+    const r = await handleMessage(db, u, "link my email", { channel: "telegram" });
+    const code = /`link ([A-Z0-9]{6})`/.exec(r.text)![1];
+    expect(r.buttons?.[0]).toEqual({ label: "Link my email", data: `url:https://lifeline.example.com/mail-link?to=lifeline%40mail.example.com&c=${code}` });
+    expect(r.text).toMatch(/To: lifeline@mail\.example\.com/);
+    const { buttonsAsText } = await import("../src/core/handler.js");
+    expect(buttonsAsText(r)).toMatch(/Link my email: https:\/\/lifeline\.example\.com\/mail-link\?/);
+  });
+
+  it("won't ask for a yes to send an email until your own email is linked, and keeps the draft", async () => {
+    on();
+    const { canEmail } = await import("../src/core/email.js");
+    if (!canEmail()) return; // sending isn't configured in this test setup; the gate still covers it below
+    const u = await ensureUser(db, "telegram", "7702", "Kemi");
+    const { propose } = await import("../src/policy/engine.js");
+    const d = await propose({ db, user: u, now: new Date() }, "email.send", { to: "ana@example.com", subject: "Saturday", body: "See you at 4." });
+    expect(d.kind).toBe("ran");
+    expect((d as any).reply).toMatch(/Link your email first/);
+    expect((d as any).reply).toMatch(/To: ana@example\.com/);
+  });
+
+  it("gates on the linked address whatever the email setup", async () => {
+    const { propose } = await import("../src/policy/engine.js");
+    const u = await ensureUser(db, "telegram", "7703", "Tari");
+    const d = await propose({ db, user: u, now: new Date() }, "email.send", { to: "ana@example.com", subject: "Saturday", body: "See you at 4." });
+    expect(d.kind).toBe("ran"); // never a pending yes for something that can't go
+    await db.query(`INSERT INTO identities (user_id, channel, external_id) VALUES ($1,'email','tari@example.com')`, [u.id]);
+    const { linkedEmail } = await import("../src/modules/emaillink.js");
+    expect(await linkedEmail({ db, user: u })).toBe("tari@example.com");
+  });
+});
+
+describe("voice notes", () => {
+  it("reads short replies as they are, and long ones as a gist that points to the chat", async () => {
+    const { spokenVersion, forSpeech } = await import("../src/core/spoken.js");
+    expect(forSpeech("**Done.** See https://x.com/a for more.")).toBe("Done. See the link in the chat for more.");
+    expect(await spokenVersion({ text: "Logged. 7 hours of sleep." })).toBe("Logged. 7 hours of sleep.");
+    const long = "First point. ".repeat(80);
+    expect(await spokenVersion({ text: long }, async () => "Short version: you're fine.")).toBe("Short version: you're fine. The full version is in the chat.");
+    expect(await spokenVersion({ text: long })).toMatch(/The full version is in the chat\.$/);
+    expect(await spokenVersion({ text: "This emails Ana.\n\nGo ahead? This waits ten minutes for a yes.", buttons: [{ data: "confirm:3" }] })).toMatch(/I need your yes on the button in the chat/);
+  });
+});
+
+describe("knowing its limits", () => {
+  it("says plainly what it can't do and offers the nearest thing", async () => {
+    const u = await ensureUser(db, "telegram", "7801", "Zino");
+    const r = await handleMessage(db, u, "delete all my emails containing unsubscribe", { channel: "telegram" });
+    expect(r.text).toMatch(/^I can't open your inbox/);
+    expect(r.text).toMatch(/Gmail, in under a minute/);
+    expect(r.buttons?.map((b) => b.label)).toEqual(["Remind me Sunday", "Link my email"]);
+    expect((await handleMessage(db, u, "call mum every Sunday", { channel: "telegram" })).text).not.toMatch(/can't make phone calls/);
+    expect((await handleMessage(db, u, "can you call my landlord", { channel: "telegram" })).text).toMatch(/can't make phone calls/);
+  });
+
+  it("finds where your details show up, and hands you removal requests", async () => {
+    Object.assign(config, { geminiKey: "g", anthropicKey: "", openaiCompatKey: "" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: "Found some." }] }, groundingMetadata: { groundingChunks: [{ web: { uri: "https://www.spokeo.com/Sage-Rav3n", title: "Sage Rav3n - Spokeo" } }, { web: { uri: "https://github.com/sagerav3n", title: "sagerav3n on GitHub" } }] } }],
+    }), { headers: { "content-type": "application/json" } })));
+    const u = await ensureUser(db, "telegram", "7802", "Sage Rav3n");
+    await db.query(`UPDATE users SET prefs = prefs || '{"country":"NG"}'::jsonb WHERE id=$1`, [u.id]);
+    const fresh = (await db.one<any>(`SELECT * FROM users WHERE id=$1`, [u.id]))!;
+    const steps: string[] = [];
+    const r = await handleMessage(db, fresh, "find my personal data online", { channel: "telegram", progress: (s) => { steps.push(s); } });
+    expect(steps[0]).toMatch(/^Searching: /);
+    expect(r.text).toMatch(/People-search and data-broker sites[\s\S]*spokeo\.com/);
+    expect(r.text).toMatch(/Social profiles[\s\S]*github\.com/);
+    expect(r.text).toMatch(/Nigeria Data Protection Act 2023/);
+    expect(r.text).toMatch(/Results about you/);
+  });
+});
