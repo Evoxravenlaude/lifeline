@@ -70,3 +70,11 @@ The page lives at `/plan/<id>` on the website (unlisted, not indexed; "delete my
 - **Files.** A reply can carry a file (a PDF export, a calendar invite, a full-size lock-screen picture); Telegram gets it as a document.
 - **Pip grows with you.** Days kept (a habit, a dose, three good things) add up, and Pip picks up a scarf at 7, a lantern at 21, a cap at 45, a satchel at 75, a flower at 120 and a pennant at 200. Counted in total, never as a run, so nothing is ever taken away. He wears them on the dashboard and the menu pictures; "Pip's things" shows them; a new one is announced once (right after the log that earned it, or in the brief), never in calm mode. `src/core/pipthings.ts`.
 - Trivia polls now send `correct_option_ids` (Bot API 9.6 replaced `correct_option_id`).
+
+## Voice notes
+
+A voice note in gets three things back: **You said** (the transcript, folded into an expandable quote when it's long), the answer in text, then a voice note of the spoken version. Short answers are read clean (no marks, links or code). Long ones become a gist of about 60 words from the fast model, ending "The full version is in the chat". Something waiting on a yes says the button is in the chat. "voice replies never" or "always" changes it.
+
+## Who it is
+
+lifeline never names the models behind it. "What model are you?" gets a warm answer as lifeline (`src/modules/identity.ts`), and a reply where a model names itself is put right (`keepIdentity`). `/doctor` is for the owner only.
