@@ -618,3 +618,10 @@ code.cp.copied { background: var(--k-dose); border-color: var(--ink); }
   .card-body { padding: 16px; }
   .lines li { padding: 10px 14px; gap: 10px; }
 }
+
+/* Safety page and the data card */
+.sf-out:not(:empty) { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.btn.danger, .btn.ghost.danger { color: var(--warn); }
+.btn.danger:not(.ghost) { border-color: currentColor; }
+.land-foot { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; padding: 28px 16px 40px; }
+.land-foot a { color: var(--ink-2); }

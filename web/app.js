@@ -70,6 +70,7 @@ window.App = (function () {
       .replace(/\u0000B(\d+)\u0000/g, (_, k) => `<div class="draft"><pre>${esc(blocks[+k])}</pre><button class="btn sm" type="button" data-copy="${esc(blocks[+k])}">${ico("copy", "sm")}Copy</button></div>`);
   }
   /** The same reply as plain words, for toasts. */
+  const b64s = (v) => (/^[A-Za-z0-9+/=]+$/.test(String(v || "")) ? String(v) : "");
   const plain = (src) => untable(String(src ?? "")).replace(/```[^\n]*\n?([\s\S]*?)```/g, "$1").replace(/`([^`\n]+)`/g, "$1").replace(/^\s*#{1,6}\s+/gm, "").replace(/^\s*[-*+]\s+/gm, "• ").replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1");
   const linkify = (s) => md(s);
   async function copyText(text) {
@@ -122,11 +123,11 @@ window.App = (function () {
 
   /* ---------- state ---------- */
   let me = null, state = null, view = "today", pip = null, scenes = [], lastMsgId = 0;
-  const VIEWS = [["today", "Today", "today"], ["chat", "Chat", "chat"], ["lists", "Lists", "list"], ["health", "Health", "heart"], ["trips", "Trips", "case"], ["money", "Money", "coin"], ["hackathons", "Hackathons", "flag"], ["scout", "Scout", "compass"], ["what", "What I do", "shell"], ["settings", "Settings", "sliders"], ["more", "More", "more"]];
+  const VIEWS = [["today", "Today", "today"], ["chat", "Chat", "chat"], ["lists", "Lists", "list"], ["health", "Health", "heart"], ["trips", "Trips", "case"], ["money", "Money", "coin"], ["safety", "Safety", "aid"], ["hackathons", "Hackathons", "flag"], ["scout", "Scout", "compass"], ["what", "What I do", "shell"], ["settings", "Settings", "sliders"], ["more", "More", "more"]];
   const PHONE = ["today", "chat", "lists", "health", "more"];
   /** Work tools (hackathons, scout) sit in the bar only for people who use them; everyone else finds them under More. */
   const workOn = () => me && (me.work === true || (me.work == null && ((state && state.ledger && state.ledger.length) || (me.tags && me.tags.length))));
-  const tabs = () => ["today", "chat", "lists", "health", "trips", "money", ...(workOn() ? ["hackathons", "scout"] : [])];
+  const tabs = () => ["today", "chat", "lists", "health", "trips", "money", "safety", ...(workOn() ? ["hackathons", "scout"] : [])];
 
   function repaintScenes() { scenes.forEach((s) => s.update({ accent: getComputedStyle(root).getPropertyValue("--accent").trim() })); }
 
@@ -206,7 +207,7 @@ window.App = (function () {
     scenes.forEach((s) => s.destroy()); scenes = []; pip = null;
     const main = $("#main"); main.innerHTML = "";
     window.scrollTo(0, 0);
-    ({ today: renderToday, chat: renderChat, lists: renderLists, health: renderHealth, trips: renderTrips, hackathons: renderHackathons, scout: renderScout, money: renderMoney, what: renderWhat, settings: renderSettings, more: renderMore }[view])();
+    ({ today: renderToday, chat: renderChat, lists: renderLists, health: renderHealth, trips: renderTrips, hackathons: renderHackathons, scout: renderScout, money: renderMoney, safety: renderSafety, what: renderWhat, settings: renderSettings, more: renderMore }[view])();
     document.title = view === "today" ? "lifeline" : `${VIEWS.find((v) => v[0] === view)[1]} · lifeline`;
   }
 
@@ -313,7 +314,7 @@ window.App = (function () {
           <div class="card k-list"><div class="card-head">${ico("today")}<span>The morning note</span><span class="sp"></span><button class="btn ghost sm" id="briefBtn">Rebuild from now</button></div><div class="card-body"><p id="brief" class="serif" style="white-space:pre-wrap;font-size:1.1875rem;line-height:1.55">Writing it.</p></div></div>
         </div>
         <div class="stack">
-          <div class="card k-trip"><div class="pip-card"><div id="pipHome"></div><p class="pip-line" id="pipLine"></p></div></div>
+          <div class="card k-trip"><div class="pip-card"><div id="pipHome"></div><p class="pip-line" id="pipLine"></p><p class="small muted" id="pipThings" hidden></p></div></div>
           <div class="card k-dose">${cardHead("pill", "Doses")}${state.meds.length ? `<ul class="lines">${state.meds.map((m) => `<li><span class="w">${esc(cap(m.name))}<small>${m.times.join(" and ")}${m.days_left != null ? `, about ${m.days_left} days left` : ""}</small></span></li>`).join("")}</ul>` : empty(`None kept. Say ${tryLink("I take vitamin D at 8am and 8pm")}.`)}</div>
           <div class="card k-hack">${cardHead("flag", "Deadlines")}${deadlines()}</div>
           <div class="card k-list">${cardHead("list", "Lists", `<a class="small" href="#lists">Open</a>`)}${listsSummary()}</div>
@@ -322,6 +323,13 @@ window.App = (function () {
       </div></div>`;
     mountScene($("#todayPath"), items);
     mountPip($("#pipHome"));
+    api("/api/you").then((y) => {
+      const el = $("#pipThings"); if (!el || !y || y.error) return;
+      const names = (y.things || []).map((t) => t.name);
+      const has = names.length ? `Pip carries ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`}.` : "";
+      const next = y.next ? ` ${Math.max(0, y.next.at - y.days)} more days kept and he picks up ${y.next.name}.` : "";
+      if (has || (y.days && next)) { el.textContent = `${has}${next}`.trim(); el.hidden = false; }
+    }).catch(() => {});
     const pl = $("#pipLine"); const lineEl = $("#pipHome .pip-line"); if (lineEl) { lineEl.hidden = true; const sync = () => (pl.textContent = lineEl.textContent); sync(); new MutationObserver(sync).observe(lineEl, { childList: true, characterData: true, subtree: true }); }
     wireButtons(main); wireTries(main);
     wireDay();
@@ -869,10 +877,34 @@ window.App = (function () {
         <div class="card k-metal">${cardHead("key", "Ways to sign in")}<div id="waysHost">${empty("Gathering them.")}</div></div>
         <div class="card k-dose">${cardHead("bell", "This app")}<div id="appHost">${empty("Checking this device.")}</div></div>
         <div class="card k-hack">${cardHead("flag", "Work tools")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Hackathons, grants and scouting for companies and people. Handy if you build or job-hunt; out of the way if not. They're always under More.</p><div class="seg" role="group" aria-label="Work tools in the bar"><button data-work="true" aria-pressed="${!!workOn()}">In the bar</button><button data-work="false" aria-pressed="${!workOn()}">Under More</button></div></div></div>
+        <div class="card k-event">${cardHead("moon", "Calm")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Calm mode keeps nudges for your morning note. A quiet day holds everything except what you set yourself, until tomorrow.</p><div class="seg" role="group" aria-label="Calm mode"><button data-calm="true" aria-pressed="${s.calm === true}">Calm on</button><button data-calm="false" aria-pressed="${s.calm !== true}">Calm off</button></div><div class="row"><button class="btn sm" data-say="quiet day">Quiet day today</button></div></div></div>
+        <div class="card k-trip">${cardHead("chat", "On Telegram")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Quick logs like "took my meds" get a reaction instead of a reply. Topics split the chat into Money, Health, Trips, Work and Home.</p><div class="seg" role="group" aria-label="Quick logs"><button data-react="true" aria-pressed="${s.reactions !== false}">React</button><button data-react="false" aria-pressed="${s.reactions === false}">Reply in words</button></div><div class="row"><button class="btn sm" data-say="${s.topics ? "stop using topics" : "use topics"}">${s.topics ? "Stop using topics" : "Use topics"}</button></div></div></div>
+        <div class="card k-dose">${cardHead("key", "Your data")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Everything you keep here is yours. Take a copy any time, or delete it all, on every channel. Chat history is kept 180 days.</p><div class="row"><button class="btn sm" id="exportBtn">${ico("out", "sm")}Export my data</button><button class="btn sm ghost danger" id="deleteBtn">Delete my account</button><a class="btn sm ghost" href="/privacy" target="_blank" rel="noopener">Privacy</a></div><div id="dataOut"></div></div></div>
         <div class="card k-list">${cardHead("sliders", "Under the hood")}<div class="card-body"><dl class="kv"><dt>Model</dt><dd>${esc(s.provider || "plain language only, no model key")}</dd><dt>Spend today</dt><dd>$${Number(s.spend || 0).toFixed(3)} of $${s.budget}</dd></dl></div></div>
       </div></div>`;
     waysCard($("#waysHost"));
     appCard($("#appHost"), s);
+    $$("[data-calm]", main).forEach((b) => b.addEventListener("click", async () => { const on = b.dataset.calm === "true"; const r = await api("/api/chat", { text: `calm mode ${on ? "on" : "off"}` }); tell(r, "Done."); $$("[data-calm]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
+    $$("[data-react]", main).forEach((b) => b.addEventListener("click", async () => { const on = b.dataset.react === "true"; const r = await api("/api/chat", { text: on ? "react to my logs" : "reply to my logs" }); tell(r, "Done."); $$("[data-react]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
+    $$("[data-say]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: b.dataset.say }); tell(r, "Done."); }));
+    $("#exportBtn").addEventListener("click", async (e) => {
+      e.currentTarget.disabled = true;
+      const r = await api("/api/do", { action: "account.export", args: {} });
+      e.currentTarget.disabled = false;
+      if (r.error || !r.file) return tell(r);
+      const a = document.createElement("a"); a.href = `data:application/json;base64,${b64s(r.file.data)}`; a.download = r.file.name; document.body.appendChild(a); a.click(); a.remove();
+      toast("Your copy is downloading.");
+    });
+    $("#deleteBtn").addEventListener("click", async () => {
+      const r = await api("/api/do", { action: "account.delete", args: {} });
+      const out = $("#dataOut");
+      out.innerHTML = `<p class="small" style="margin-top:8px">${esc(plain(r.text || ""))}</p>${(r.buttons || []).length ? `<div class="row">${r.buttons.map((b) => `<button class="btn sm ${/^confirm:/.test(b.data) ? "danger" : ""}" data-btn="${esc(b.data)}">${/^confirm:/.test(b.data) ? "Yes, delete everything" : "Keep my account"}</button>`).join("")}</div>` : ""}`;
+      $$("[data-btn]", out).forEach((b) => b.addEventListener("click", async () => {
+        const rr = await api("/api/button", { data: b.dataset.btn });
+        if (/^confirm:/.test(b.dataset.btn) && !rr.error) { toast("Your account is being deleted."); setTimeout(signOut, 1500); }
+        else { out.innerHTML = ""; tell(rr, "Kept."); }
+      }));
+    });
     $$("[data-work]", main).forEach((b) => b.addEventListener("click", async () => { me.work = b.dataset.work === "true"; await api("/api/settings", { work: me.work }, "PATCH"); drawTabs(); $$("[data-work]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); toast(me.work ? "Work tools are in the bar." : "Work tools moved under More."); }));
     $$("[data-mode]", main).forEach((b) => b.addEventListener("click", (e) => { setMode(b.dataset.mode, e.currentTarget); $$("[data-mode]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
     $$("[data-palette]", main).forEach((b) => b.addEventListener("click", (e) => { setPalette(b.dataset.palette, e.currentTarget); $$("[data-palette]", main).forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
@@ -888,6 +920,29 @@ window.App = (function () {
     });
   }
 
+  /* ---------- Safety ---------- */
+  async function renderSafety() {
+    const main = $("#main");
+    main.innerHTML = `<div class="wrap page"><div class="page-head"><h2>Safety</h2><p>A second look at messages that feel off, someone looking out on the way home, and the things you'd want a stranger to know.</p></div><div id="sf">${empty("Gathering it.")}</div></div>`;
+    const s = await api("/api/safety");
+    if (!s || s.error) { $("#sf").innerHTML = empty("I couldn't load this just now. Try again in a moment."); return; }
+    const due = s.checkin ? new Date(s.checkin.due_at) : null;
+    $("#sf").innerHTML = `<div class="grid two">
+      <div class="card k-rem">${cardHead("chat", "Does this look right?")}<div class="card-body"><p class="muted">Paste a message, a link or a number that feels off. I'll look for the usual tricks and check links where I can. No red flags never means safe, so check your balance in your bank's own app.</p><form id="scamForm" style="display:grid;gap:10px;margin-top:12px"><textarea id="scamText" rows="4" placeholder="You've been credited 250,000. Click to confirm..." aria-label="The message to check"></textarea><button class="btn primary" type="submit" style="justify-self:start">Check it</button></form><div id="scamOut" class="sf-out"></div></div></div>
+      <div class="card k-event">${cardHead("clock", "Check on me")}<div class="card-body">${due ? `<p><b>Check-in due at ${hhmm(s.checkin.due_at)}</b>${s.checkin.about ? `, ${esc(s.checkin.about)}` : ""}.</p><p class="muted small">If you don't say you're safe by then, your safety contacts get your last shared location and what you told me.</p><div class="row" style="margin-top:12px"><button class="btn metal" data-say="I'm safe">I'm safe</button><button class="btn" data-say="give me 15 more minutes">15 more minutes</button><button class="btn ghost" data-say="cancel the check-in">Cancel</button></div>` : `<p class="muted">Heading somewhere late? Tell me how long, and if you don't check in, I tell the people you trust.</p><form id="ckForm" class="row" style="margin-top:12px;flex-wrap:nowrap"><input id="ckWhat" placeholder="walking home, 25 minutes" aria-label="Where and how long"><button class="btn primary" type="submit">Start</button></form><p class="faint small" style="margin-top:8px">On Telegram you can share your live location too.</p>`}<dl class="kv" style="margin-top:16px"><dt>Safety contacts</dt><dd>${s.contacts}${s.waiting ? `, ${s.waiting} waiting to agree` : ""}</dd></dl><div class="row" style="margin-top:10px"><button class="btn sm" data-say="my safety contacts">See them</button><button class="btn sm ghost" data-try-say="add my safety contact ">Add one</button></div></div></div>
+      <div class="card k-dose">${cardHead("aid", "Emergency card")}<div class="card-body"><p class="muted">${s.card ? "Your card is ready. Keep it as your lock screen so a stranger or a medic can see it." : "Blood group, allergies, medication and who to call, ready for a stranger or a medic. Only what you choose goes on it."}</p><div class="row" style="margin-top:12px">${s.card ? `<a class="btn" href="#health">See it</a><button class="btn primary" data-do="emergency.card_picture">Lock-screen picture</button>` : `<button class="btn primary" data-say="set up my emergency card">Set it up</button>`}</div><div id="iceOut" class="sf-out"></div></div></div>
+      <div class="card k-list">${cardHead("key", "Incident log")}<div class="card-body"><p class="muted">A private, dated record for a workplace, a landlord or a bad deal. Each entry is sealed to the one before it, so you can show nothing was changed. ${s.incidents ? `${s.incidents} entr${s.incidents === 1 ? "y" : "ies"} so far.` : "Nothing logged yet."}</p><form id="incForm" style="display:grid;gap:10px;margin-top:12px"><textarea id="incText" rows="3" placeholder="What happened, in your words" aria-label="What happened"></textarea><div class="row"><button class="btn primary" type="submit">Log it</button>${s.incidents ? `<button class="btn" type="button" data-do="incident.export">Export as PDF</button>` : ""}</div></form><div id="incOut" class="sf-out"></div></div></div>
+      <div class="card k-trip">${cardHead("heart", "If something happens to me")}<div class="card-body"><p class="muted">Messages for the people you love, sent only after a long silence and several pings to you first. Never passwords or seed phrases.</p><dl class="kv" style="margin-top:12px"><dt>Plan</dt><dd>${esc(s.legacy === "off" ? "off" : s.legacy)}</dd></dl><div class="row" style="margin-top:10px"><button class="btn sm" data-say="legacy status">How it works</button></div></div></div>
+    </div>`;
+    const show = (host, r) => { const h = $(host); if (!h) return; h.innerHTML = r && r.text ? `<div class="msg-body">${md(r.text)}</div>${r.file ? `<div class="file-save"><a class="btn sm" download="${esc(r.file.name)}" href="data:${/^(application\/pdf|image\/png|application\/json)$/.test(r.file.mime) ? r.file.mime : "application/octet-stream"};base64,${b64s(r.file.data)}">${ico("out", "sm")}Save ${esc(r.file.name)}</a></div>` : ""}${r.buttons && r.buttons.length ? `<div class="row">${r.buttons.map((b) => `<button class="btn sm" data-btn="${esc(b.data)}">${esc(b.label)}</button>`).join("")}</div>` : ""}` : ""; wireButtons(h); };
+    $("#scamForm").addEventListener("submit", async (e) => { e.preventDefault(); const t = $("#scamText").value.trim(); if (!t) return; $("#scamOut").innerHTML = empty("Taking a look."); show("#scamOut", await api("/api/chat", { text: `is this a scam: ${t}` })); });
+    const ck = $("#ckForm"); if (ck) ck.addEventListener("submit", async (e) => { e.preventDefault(); const t = $("#ckWhat").value.trim(); const r = await api("/api/chat", { text: t ? `check on me: ${t}` : "check on me" }); tell(r, "Started."); renderSafety(); });
+    $("#incForm").addEventListener("submit", async (e) => { e.preventDefault(); const t = $("#incText").value.trim(); if (!t) return; show("#incOut", await api("/api/chat", { text: `log incident: ${t}` })); $("#incText").value = ""; });
+    $$("[data-do]", main).forEach((b) => b.addEventListener("click", async () => { b.disabled = true; const r = await api("/api/do", { action: b.dataset.do, args: {} }); b.disabled = false; show(b.dataset.do.startsWith("incident") ? "#incOut" : "#iceOut", r); }));
+    $$("[data-say]", main).forEach((b) => b.addEventListener("click", async () => { const r = await api("/api/chat", { text: b.dataset.say }); tell(r, "Done."); if (/safe|more minutes|cancel/.test(b.dataset.say)) renderSafety(); }));
+    $$("[data-try-say]", main).forEach((b) => b.addEventListener("click", () => openSay(b.dataset.trySay)));
+  }
+
   /* ---------- More (phone) ---------- */
   function renderMore() {
     $("#main").innerHTML = `<div class="wrap page"><div class="page-head"><h2>More</h2></div><div class="stack">${VIEWS.filter((v) => !PHONE.includes(v[0])).map(([k, l, i]) => `<a class="card press" href="#${k}" style="text-decoration:none"><div class="card-body row">${ico(i, "lg")}<span class="serif" style="font-size:1.4rem">${l}</span><span class="sp"></span></div></a>`).join("")}<button class="btn" id="logout2">${ico("logout", "sm")}Sign out</button></div></div>`;
@@ -898,16 +953,16 @@ window.App = (function () {
   const GROUP_KIND = { "Your day": "event", "Body and mind": "dose", "Money": "money", "Home and paperwork": "trip", "Safety": "rem", "People": "list", "Voice, photos and search": "class", "Fun": "hack", "Work, code and crypto": "scout", "Creative and NFTs": "hack", "Me": "list" };
   const GROUP_LINE = {
     "Your day": "Plans, lists and the dates that matter, brought back at the right moment, mostly in one morning note.",
-    "Body and mind": "Doses, your cycle, sleep, mood and habits, kept privately. Gentle check-ins only if you ask for them.",
+    "Body and mind": "Doses, your cycle, sleep, mood and habits, kept privately. Streaks that forgive you, and gentle check-ins only if you ask.",
     "Money": "What you spend in any currency, who owes you, subscriptions and renewals, and nothing paid without your yes.",
     "Home and paperwork": "Document expiry dates, rent, warranties, gas and power refills, and the jobs a home needs.",
-    "Safety": "A second look at messages that feel off, a check-in when you're heading home, and your emergency card.",
-    "People": "Keep in touch with the people who matter, share a habit with a friend, and split bills in a group.",
+    "Safety": "A second look at messages that feel off, a check-in when you're heading home, an emergency card for your lock screen, and a private incident log you can export.",
+    "People": "Keep in touch with the people who matter, share a habit with a friend, and in a group: split bills, find a time, and send a birthday voice card from everyone.",
     "Voice, photos and search": "Talk instead of typing, send a photo of a receipt or a flyer, ask for a picture, search the web, send an email.",
-    "Fun": "Trivia, riddles, would you rather, dice, decisions and your week or year, wrapped.",
+    "Fun": "Trivia, riddles, would you rather, dice, decisions, your year wrapped, and Pip, who picks up small things as you keep your days.",
     "Work, code and crypto": "If you want it: jobs and companies, site and release watching, dev tools, gas, wallets and token checks. Read-only, never trades.",
     "Creative and NFTs": "Commissions, open calls and release dates for people who make things, and a tab on every mint you hold.",
-    "Me": "Calm mode and quiet days, the voice it talks in, where it reaches you, and what it never does.",
+    "Me": "Calm mode and quiet days, the voice it talks in, where it reaches you, and your data: export it or delete it any time.",
   };
   async function everything() {
     const r = await api("/api/capabilities");
