@@ -92,7 +92,7 @@ export async function handleInboundEmail(db: Db, rawBody: string, headers: Recor
   const body = String(mail.text ?? "").trim() || String(mail.html ?? "").replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/[ \t]+/g, " ");
   const forwarded = isForwarded(subject, body);
   const words = freshText(body, forwarded);
-  const message = forwarded ? `${subject}\n\n${words}` : (words || subject);
+  const message = /^\s*link\s+[a-z0-9]{6}\s*$/i.test(subject) ? subject.trim() : forwarded ? `${subject}\n\n${words}` : (words || subject);
   const reply = await handleTextChannel(db, "email", from, message, { forwarded });
   if (!reply) return { status: 200, body: { ignored: "not linked" } };
   if (canEmail()) await sendEmail(from, subject ? (/^re:/i.test(subject) ? subject : `Re: ${subject.replace(/^(?:fwd?|fw)\s*:\s*/i, "")}`) : "lifeline", reply);

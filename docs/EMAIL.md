@@ -38,3 +38,9 @@ Gmail is the simplest way to send to anyone. Resend can send too, but without yo
 - Mail that fails both SPF and DKIM is ignored, so nobody can pretend to be you.
 - Addresses that aren't linked get no reply unless they mention lifeline or send a link code.
 - Emails to other people always wait for your yes.
+
+## Linking an email in one tap
+
+"link my email" (or "link" for any code) replies with a **Link my email** button. It opens `/mail-link` on the website (`web/mail-link.html`), which hands over to the mail app with an email already written to `INBOUND_EMAIL`, with subject and body `link CODE`. The person presses send from the address they want to use. Telegram buttons can't open `mailto:` directly, which is why the button goes through the page. The reply also carries `link CODE` to copy. The inbound handler accepts the code in the subject or the body.
+
+Sending email (`email.send` to someone else, `email.me` to yourself) needs a linked address: an email identity, or one confirmed with "my email is ...". Until then lifeline says so before asking for any yes, offers the one-tap link, and keeps the draft so nothing is lost.

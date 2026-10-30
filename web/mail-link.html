@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Link your email · lifeline</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#EDE6D6">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<style>
+  /* One tap from Telegram or the app: this page opens your mail app with the email already written. */
+  :root { --paper: #EDE6D6; --panel: #F7F2E7; --ink: #1F1B16; --ink-2: #4F473C; --accent: #2D4A3A; --on-accent: #F7F2E7; --plate: #B9CCA6; --line: #D6CCB8; }
+  @media (prefers-color-scheme: dark) { :root { --paper: #0F1411; --panel: #161D18; --ink: #ECE5D3; --ink-2: #C3BBA8; --accent: #8DB39A; --on-accent: #0F1411; --plate: #4D6340; --line: #2C352E; } }
+  @font-face { font-family: "EB Garamond"; font-style: normal; font-display: swap; font-weight: 400 800; src: url("/fonts/eb-garamond-latin-wght-normal.woff2") format("woff2"); }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: var(--paper); color: var(--ink); font: 400 1.125rem/1.55 "EB Garamond", Georgia, serif; }
+  .card { width: 100%; max-width: 440px; padding: 24px; border: 1.5px solid var(--ink); border-radius: 10px; background: var(--panel); box-shadow: 4px 4px 0 0 var(--plate); }
+  h1 { margin: 0 0 8px; font-weight: 400; font-size: 1.9rem; line-height: 1.1; }
+  p { margin: 0 0 14px; color: var(--ink-2); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: 600 1.05rem/1 "EB Garamond", Georgia, serif; padding: 14px 18px; border: 1.5px solid var(--ink); border-radius: 7px; background: var(--accent); color: var(--on-accent); text-decoration: none; cursor: pointer; width: 100%; }
+  .btn.plain { background: transparent; color: var(--ink); }
+  .row { display: grid; gap: 10px; margin: 16px 0; }
+  .copy { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 7px; font-family: ui-monospace, Menlo, monospace; font-size: .95rem; color: var(--ink); background: var(--paper); cursor: pointer; width: 100%; text-align: left; }
+  .copy span { color: var(--ink-2); font-family: "EB Garamond", Georgia, serif; font-size: .9rem; }
+  .err { color: #8C2F23; }
+  small { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<main class="card" id="card">
+  <h1>Link your email</h1>
+  <p id="lede">Your mail app should open with an email to lifeline already written. Just press send.</p>
+  <div class="row">
+    <a class="btn" id="open" href="#">Open my email</a>
+    <button class="copy" type="button" id="copyCmd" title="Copy"><code id="cmd"></code><span>Copy</span></button>
+    <button class="copy" type="button" id="copyTo" title="Copy"><code id="to"></code><span>Copy</span></button>
+  </div>
+  <small>Send it from the address you want to use. The code works for fifteen minutes. Once it's linked, you can email or forward lifeline anything, and it can send emails for you, always after your yes.</small>
+</main>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var to = q.get("to") || "", c = (q.get("c") || "").toUpperCase();
+    var okTo = /^[^\s@<>"']{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,24}$/i.test(to), okCode = /^[A-Z0-9]{6}$/.test(c);
+    if (!okTo || !okCode) {
+      document.getElementById("lede").innerHTML = '<span class="err">This link is missing its code.</span> Go back to lifeline and say <b>link my email</b> for a fresh one.';
+      document.querySelector(".row").hidden = true;
+      return;
+    }
+    var subject = "link " + c;
+    var body = "link " + c + "\n\n(Just press send. This links this email address to your lifeline.)";
+    var mailto = "mailto:" + to + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+    document.getElementById("open").href = mailto;
+    document.getElementById("cmd").textContent = subject;
+    document.getElementById("to").textContent = to;
+    function copy(btn, text) {
+      var done = function () { var s = btn.querySelector("span"); s.textContent = "Copied"; setTimeout(function () { s.textContent = "Copy"; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {}); else done();
+    }
+    document.getElementById("copyCmd").addEventListener("click", function () { copy(this, subject); });
+    document.getElementById("copyTo").addEventListener("click", function () { copy(this, to); });
+    // Hand over to the mail app straight away; the button stays for when the browser asks first.
+    setTimeout(function () { location.href = mailto; }, 300);
+  })();
+</script>
+</body>
+</html>

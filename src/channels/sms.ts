@@ -188,7 +188,7 @@ export async function handleTextChannel(db: Db, channel: "sms" | "imessage" | "e
   if (n && buttons[n - 1]) reply = await handleCallback(db, user, buttons[n - 1].data);
   else if (n) reply = { text: `Those numbers were for an earlier message. Say what you'd like in words, or "yes" or "no" for anything waiting.` };
   else reply = await handleMessage(db, user, t, { channel, forwarded: opts.forwarded });
-  rememberButtons(from, reply.buttons);
+  rememberButtons(from, reply.buttons?.filter((b) => !b.data.startsWith("url:") && !b.data.startsWith("webapp:")));
   return buttonsAsText(reply);
 }
 

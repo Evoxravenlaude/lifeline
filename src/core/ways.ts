@@ -10,6 +10,20 @@ export function webAddress(): string {
 const smsOn = () => Boolean((config.twilioSid && config.twilioToken && config.twilioFrom) || config.smsGatewayKey);
 const imessageOn = () => Boolean(config.imessageProvider);
 const emailOn = () => Boolean(config.resendKey && config.resendWebhookSecret && config.inboundEmail);
+export const emailInOn = emailOn;
+
+/**
+ * One tap to link an email address: an email already addressed to lifeline, with the code as its subject and body,
+ * so the person only presses Send. Telegram buttons can't open mailto: directly, so the button opens a small page on
+ * the website that hands over to the mail app (web/mail-link.html). Null when email in isn't switched on.
+ */
+export function mailLink(code: string): { mailto: string; page: string | null; address: string } | null {
+  if (!emailOn()) return null;
+  const to = config.inboundEmail;
+  const q = `subject=${encodeURIComponent(`link ${code}`)}&body=${encodeURIComponent(`link ${code}\n\n(Just press send. This links this email address to your lifeline.)`)}`;
+  const web = webAddress().replace(/\/$/, "");
+  return { mailto: `mailto:${to}?${q}`, page: /^https:\/\//.test(web) ? `${web}/mail-link?to=${encodeURIComponent(to)}&c=${encodeURIComponent(code)}` : null, address: to };
+}
 
 /** Where people can reach lifeline right now, as a phrase: "Telegram, the website and text messages". */
 export function activePlaces(): string {
