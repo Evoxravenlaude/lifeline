@@ -15,9 +15,10 @@ import { complete, providerName } from "../intent/providers.js";
 import { overBudget, recordUsage } from "../core/budget.js";
 import { allow, draw, parseJson, search } from "../core/media.js";
 import { findCity } from "../core/geo.js";
-import { countryOf } from "../core/money.js";
 import { config } from "../core/config.js";
 import { webAddress } from "../core/ways.js";
+import { parseWhen } from "../core/time.js";
+import { propose } from "../policy/engine.js";
 import { log } from "../core/log.js";
 
 addSchema(`CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), kind TEXT NOT NULL DEFAULT 'trip', title TEXT NOT NULL, data JSONB NOT NULL, hero BYTEA, hero_mime TEXT, created_at TIMESTAMPTZ DEFAULT now(), deleted BOOLEAN NOT NULL DEFAULT false)`);
@@ -36,14 +37,15 @@ export interface TripPlan {
 }
 
 /** Where the plan pages are served: the server's own address (it renders them), else the website. */
-export const planBase = () => (config.publicUrl || webAddress() || "").replace(/\/$/, "");
+/** Plans live on the website's own address (it forwards /plan to the server), so links never show the server's host. */
+export const planBase = () => (webAddress() || config.publicUrl || "").replace(/\/$/, "");
 export const planUrl = (id: string) => `${planBase()}/plan/${id}`;
 
 /** "February 2027, from Abuja. Hikes and food" → the anchors. */
 export function readAnchors(text: string): { when?: string; from?: string; style?: string } {
   const t = text.trim().replace(/\s+/g, " ");
   const from = /\b(?:from|leaving from|flying from|out of)\s+([A-Za-zÀ-ÿ' .-]{2,40}?)(?=[,.;]|\s+(?:in|on|around|for|and|with)\b|$)/i.exec(t)?.[1]?.trim();
-  const when = /\b((?:early |mid |late |mid-|end of |start of )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+\d{4})?|\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+\d{4})?(?:\s+(?:to|until|-)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*)?(?:\s+\d{4})?)?|next (?:week|month|year|summer|winter|spring|autumn)|this (?:summer|winter|spring|autumn|weekend)|christmas|easter|new year)/i.exec(t)?.[1];
+  const when = /\b((?:early |mid |late |mid-|end of |start of )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+\d{4})?|\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+\d{4})?(?:\s+(?:to|until|-)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*)?(?:\s+\d{4})?)?|next (?:week|month|year|summer|winter|spring|autumn)|this (?:summer|winter|spring|autumn|weekend)|christmas|easter|new year)/i.exec(t)?.[1];
   const rest = t.replace(from ? new RegExp(`\\b(?:from|leaving from|flying from|out of)\\s+${from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i") : /$^/, " ")
     .replace(when ? new RegExp(when.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : /$^/, " ")
     .replace(/^[\s,.;-]+|[\s,.;-]+$/g, "").replace(/\s*[,.;]\s*/g, ", ").replace(/^(?:and|,)\s*/i, "").trim();
@@ -51,6 +53,10 @@ export function readAnchors(text: string): { when?: string; from?: string; style
 }
 
 const say = async (ctx: Ctx, step: string) => { try { await ctx.progress?.(step); } catch { /* the steps are a nicety */ } };
+/** A line said along the way ("On it.", "Your plan is built."), as its own message where the channel can. */
+const note = async (ctx: Ctx, text: string) => { try { await ctx.note?.(text); } catch { /* also a nicety */ } };
+/** Places so small a long trip isn't needed. */
+const TINY = /^(?:liechtenstein|monaco|san marino|vatican(?: city)?|andorra|malta|luxembourg|singapore|bahrain|gibraltar|zanzibar)$/i;
 
 async function research(ctx: Ctx, q: string): Promise<{ answer: string; sources: { title: string; url: string }[] } | null> {
   const r = await search(q, ctx.user.tz).catch(() => null);
@@ -62,10 +68,17 @@ const plan = defineAction({
   tier: 1,
   description: "Research and write up a full trip plan (visa for their passport, getting there, where to stay, a day-by-day, food, tips) as a page they can open, for when someone says 'help me plan a trip to X' or 'plan my trip to X'. Asks for when and where they're travelling from first. For simply recording a trip with dates, use trip.create instead.",
   schema: z.object({ destination: z.string().min(2).max(60), when: z.string().max(60).optional(), from: z.string().max(60).optional(), style: z.string().max(120).optional() }),
-  needs(args) {
-    if (args.when && args.from) return null;
+  needs(args, ctx) {
+    const home = typeof ctx.user.prefs.city === "string" ? (ctx.user.prefs.city as string) : null;
+    if (args.when && (args.from || home)) return null;
     const d = args.destination.replace(/\b\w/g, (c) => c.toUpperCase());
-    return { need: "anchors", question: `Happy to plan ${d}. A few anchors so I build the right trip: when are you thinking, and where are you travelling from? And is it more hikes and sights, or food and slow days?` };
+    const tiny = TINY.test(args.destination) ? ` ${d} is small, so even two or three days covers it nicely.` : "";
+    return {
+      need: "anchors",
+      question: home
+        ? `Happy to plan it!${tiny}\n\nA couple of anchors so I build the right trip: when are you thinking, and is it more hikes and sights, or food and slow days? I'll plan it from ${home}; say if you're leaving from somewhere else.`
+        : `Happy to plan it!${tiny}\n\nA couple of anchors so I build the right trip: when are you thinking, and where are you travelling from? And is it more hikes and sights, or food and slow days?`,
+    };
   },
   fill(need, answer) {
     if (need !== "anchors") return null;
@@ -73,27 +86,30 @@ const plan = defineAction({
     return a.when || a.from ? { ...a } : null;
   },
   async run(args, ctx) {
-    const dest = args.destination.trim();
+    const dest = args.destination.trim().replace(/\b\w/g, (c) => c.toUpperCase());
     if (!providerName() || (await overBudget(ctx.db, ctx.user.id))) {
       return { reply: `I can't research a full plan right now (that needs the model and web search). Say "I'm going to ${dest}${args.when ? ` ${args.when}` : ""}" and I'll start the trip with a packing list and reminders.` };
     }
-    await say(ctx, `Reading up on ${dest}`);
-    const home = args.from ? await findCity(args.from).catch(() => null) : null;
-    const passportCountry = (typeof ctx.user.prefs.passport === "string" ? ctx.user.prefs.passport : null) ?? home?.countryName ?? null;
-    const country = countryOf(ctx.user);
+    const fromCity = args.from ?? (typeof ctx.user.prefs.city === "string" ? (ctx.user.prefs.city as string) : null);
+    const home = fromCity ? await findCity(fromCity).catch(() => null) : null;
+    const passport = (typeof ctx.user.prefs.passport === "string" ? ctx.user.prefs.passport : null) ?? home?.countryName ?? null;
     const when = args.when ?? "soon";
-    await say(ctx, passportCountry ? `Visa rules for a ${passportCountry} passport` : "Visa rules");
-    const visa = await research(ctx, `Visa requirements for ${passportCountry ?? "travellers"} passport holders visiting ${dest} in ${when}${home?.countryName ? `, applying from ${home.countryName}` : ""}: which visa, where to apply, how long it takes, documents.`);
-    await say(ctx, `Getting there${args.from ? ` from ${args.from}` : ""}`);
-    const route = await research(ctx, `How to travel to ${dest}${args.from ? ` from ${args.from}` : ""} in ${when}: usual routes, connections, nearest airport, typical journey time and rough fares.`);
+    // Say what's about to happen, the way a person would, before going quiet to work.
+    const day = args.when && /\d/.test(args.when) ? parseWhen(args.when, ctx.user.tz, ctx.now) : null;
+    const whenSay = day ? ` from ${DateTime.fromJSDate(day).setZone(ctx.user.tz).toFormat("d LLLL")}` : args.when ? ` in ${args.when.replace(/^\w/, (c) => c.toUpperCase())}` : "";
+    await note(ctx, `On it. ${dest}${whenSay}${fromCity ? `, from ${fromCity}` : ""}${args.style ? `, ${args.style.toLowerCase()}` : ""}. ${passport ? `Visa rules for ${passport} passport holders come first, since they set the clock, then` : "First"} how to get there, where to stay and what to eat.`);
+    await say(ctx, passport ? `Visa rules for ${passport} passports` : "Visa rules");
+    const visa = await research(ctx, `Visa requirements for ${passport ?? "travellers"} passport holders visiting ${dest} in ${when}${home?.countryName ? `, applying from ${home.countryName}` : ""}: which visa, where to apply, how long it takes, documents.`);
+    await say(ctx, `Getting there${fromCity ? ` from ${fromCity}` : ""}`);
+    const route = await research(ctx, `How to travel to ${dest}${fromCity ? ` from ${fromCity}` : ""} in ${when}: usual routes, connections, nearest airport, typical journey time and rough fares.`);
     await say(ctx, "Where to stay, what to do, where to eat");
     const things = await research(ctx, `${dest} in ${when}${args.style ? ` for someone who wants ${args.style}` : ""}: best areas or towns to stay, specific hotels by name, top things to do (with what's open or good that season), notable restaurants including any Michelin-starred ones, local food to try, weather.`);
     if (!visa && !route && !things) return { reply: `I couldn't reach web search just now, so I won't guess at a plan. Try again in a few minutes, or say "I'm going to ${dest}" to start a simple trip.` };
     await say(ctx, "Writing it up");
     const facts = [visa && `VISA:\n${visa.answer}`, route && `GETTING THERE:\n${route.answer}`, things && `STAY, DO, EAT:\n${things.answer}`].filter(Boolean).join("\n\n");
     const r = await complete({
-      system: "You turn research notes into a trip plan. Use only facts in the notes; when the notes are unsure or silent, say so briefly rather than inventing (no made-up prices, opening hours or names). Plain, warm, specific. No emoji, no em dashes. Output JSON only.",
-      messages: [{ role: "user", content: `Trip: ${dest}, ${when}${args.from ? `, from ${args.from}` : ""}${args.style ? `, style: ${args.style}` : ""}. Passport: ${passportCountry ?? "unknown"}.\n\nNotes:\n${facts}\n\nJSON with keys: title (short), clock (one sentence: the single thing to start first and why, e.g. the visa), summary (2 to 3 sentences: where to base, the big dinner, the one activity), visa (2 to 4 sentences), gettingThere (2 to 4 sentences), budget (1 to 2 sentences, only what the notes support), stay (up to 3 {area, why}), days (2 to 5 {title, items: 2 to 4 short strings}), food (up to 5), tips (up to 5), packing (up to 8 short items for that place and season), questions (2 short questions that would sharpen the plan).` }],
+      system: "You turn research notes into a trip plan and talk like a well-travelled friend: warm, direct, specific, first person ('I'd base you in...'). Use only facts in the notes; when they're unsure or silent, say so briefly rather than inventing (no made-up prices, opening hours or names). No emoji, no em dashes. Output JSON only.",
+      messages: [{ role: "user", content: `Trip: ${dest}, ${when}${fromCity ? `, from ${fromCity}` : ""}${args.style ? `, style: ${args.style}` : ""}. Passport: ${passport ?? "unknown"}.\n\nNotes:\n${facts}\n\nJSON with keys: title (short), clock (one sentence: the single thing to start first and why, e.g. "as a Nigerian passport holder you need a Schengen visa, filed at the Swiss Embassy in Abuja, so that starts before any flight money moves"), summary (2 to 3 sentences in your own voice: where you'd base them and why, the one big dinner, the one activity that suits the season), visa (2 to 4 sentences), gettingThere (2 to 4 sentences), budget (1 to 2 sentences, only what the notes support), stay (up to 3 {area, why}), days (2 to 5 {title, items: 2 to 4 short strings}), food (up to 5), tips (up to 5), packing (up to 8 short items for that place and season), questions (2 short questions that would shape the next pass, e.g. when the next trip should follow or who's coming).` }],
       json: true, maxTokens: 1800,
     }).catch((e) => { log.warn({ err: e?.message }, "plan write-up failed"); return null; });
     if (!r) return { reply: "I did the research but couldn't write it up just now. Try again in a minute?" };
@@ -102,14 +118,15 @@ const plan = defineAction({
     if (!j?.clock || !Array.isArray(j.days)) return { reply: "I did the research but the write-up came out garbled. Try again in a minute?" };
     const arr = <T,>(x: unknown, n: number): T[] => (Array.isArray(x) ? (x as T[]).slice(0, n) : []);
     const p: TripPlan = {
-      title: String(j.title ?? dest).slice(0, 80), destination: dest, when, from: args.from ?? null, style: args.style ?? null,
+      title: String(j.title ?? dest).slice(0, 80), destination: dest, when, from: fromCity, style: args.style ?? null,
       clock: String(j.clock), summary: String(j.summary ?? ""), visa: String(j.visa ?? ""), gettingThere: String(j.gettingThere ?? ""), budget: String(j.budget ?? ""),
-      stay: arr<any>(j.stay, 3).map((s) => ({ area: String(s.area ?? ""), why: String(s.why ?? "") })),
+      stay: arr<any>(j.stay, 3).map((x) => ({ area: String(x.area ?? ""), why: String(x.why ?? "") })),
       days: arr<any>(j.days, 6).map((d) => ({ title: String(d.title ?? ""), items: arr<string>(d.items, 5).map(String) })),
       food: arr<string>(j.food, 6).map(String), tips: arr<string>(j.tips, 6).map(String), packing: arr<string>(j.packing, 10).map(String), questions: arr<string>(j.questions, 2).map(String),
-      sources: [...(visa?.sources ?? []), ...(route?.sources ?? []), ...(things?.sources ?? [])].filter((s, i, a) => /^https?:\/\//.test(s.url) && a.findIndex((x) => x.url === s.url) === i).slice(0, 10),
-      passport: passportCountry, made: ctx.now.toISOString(),
+      sources: [...(visa?.sources ?? []), ...(route?.sources ?? []), ...(things?.sources ?? [])].filter((x, i, a) => /^https?:\/\//.test(x.url) && a.findIndex((y) => y.url === x.url) === i).slice(0, 10),
+      passport, made: ctx.now.toISOString(),
     };
+    await note(ctx, `Your ${dest} plan is built. Publishing the full itinerary now.`);
     let hero: { data: Buffer; mime: string } | null = null;
     if (allow("image", ctx.user.id)) {
       await say(ctx, "A picture for the top");
@@ -118,22 +135,27 @@ const plan = defineAction({
     }
     const id = randomBytes(12).toString("base64url");
     await ctx.db.query(`INSERT INTO plans (id, user_id, kind, title, data, hero, hero_mime) VALUES ($1,$2,'trip',$3,$4,$5,$6)`, [id, ctx.user.id, p.title, JSON.stringify(p), hero?.data ?? null, hero?.mime ?? null]);
+    // Keep it among their trips too (with a date when there is one), so packing and reminders come for free.
+    const start = args.when ? parseWhen(args.when, ctx.user.tz, ctx.now) : null;
+    const existing = await ctx.db.one(`SELECT 1 FROM trips WHERE user_id=$1 AND lower(destination)=lower($2) AND (starts_on IS NULL OR starts_on >= $3::date)`, [ctx.user.id, dest, ctx.now]);
+    let kept = false;
+    if (!existing && start) { await propose({ ...ctx, sourceMessage: `[plan ${id}]`, skipAsk: true }, "trip.create", { destination: dest, start: args.when }).then(() => { kept = true; }, () => {}); }
     const url = planUrl(id);
+    const q = p.questions.length === 2 ? `Two things to shape the next pass: ${p.questions[0].replace(/\?*$/, "?")} And ${p.questions[1].charAt(0).toLowerCase()}${p.questions[1].slice(1).replace(/\?*$/, "?")}` : p.questions[0] ?? "";
     const lines = [
       `Your ${dest} plan is ready: ${url}`,
       "",
-      p.clock,
-      ...(p.summary ? ["", p.summary] : []),
-      ...(p.questions.length ? ["", `To shape the next pass: ${p.questions.join(" ")}`] : []),
+      `The one thing that sets the clock: ${p.clock.charAt(0).toLowerCase()}${p.clock.slice(1)}${/[.!?]$/.test(p.clock) ? "" : "."}${p.summary ? ` ${p.summary}` : ""}`,
+      ...(q ? ["", q] : []),
+      ...(kept ? ["", `I've also added ${dest} to your trips, with a packing list and a nudge before you go.`] : []),
       "",
-      `_Anyone with the link can open it${p.passport || p.from ? `, and it mentions ${[p.passport ? "your passport country" : "", p.from ? "where you're leaving from" : ""].filter(Boolean).join(" and ")}` : ""}. Say "delete my ${dest} plan" to take it down._`,
+      `_Anyone with the link can open it${p.passport || p.from ? ` (it mentions ${[p.passport ? "your passport" : "", p.from ? "where you're leaving from" : ""].filter(Boolean).join(" and ")})` : ""}; say "delete my ${dest} plan" to take it down._`,
     ];
-    void country;
     const buttons = [
       ...(/^https:\/\//.test(url) ? [{ label: "Open the plan", data: `webapp:${url}` }] : []),
-      { label: "Add to my trips", data: `say:I'm going to ${dest}${args.when ? ` ${args.when}` : ""}`.slice(0, 64) },
+      ...(!kept && !existing ? [{ label: "Add to my trips", data: `say:I'm going to ${dest}${args.when ? ` ${args.when}` : ""}`.slice(0, 64) }] : []),
     ];
-    return { reply: lines.join("\n"), buttons, undo: { payload: { id } } };
+    return { reply: lines.join("\n"), buttons, undo: { payload: { id } }, ...(hero ? { image: { data: hero.data.toString("base64"), mime: hero.mime } } : {}) };
   },
   async undo(p, ctx) {
     await ctx.db.query(`UPDATE plans SET deleted=true WHERE id=$1 AND user_id=$2`, [p.id, ctx.user.id]);
@@ -172,13 +194,19 @@ const place = (s: string) => !NOT_PLACE.test(s.trim());
 
 addRules(
   // "plan a trip to X" stays the quick trip (dates and a packing list); asking for help, research or an itinerary gets the full plan.
-  [/^(?:(?:can you |could you |please )?help me plan|plan me|plan out|research|map out|put together|build me|make me)\s+(?:a |my |our |the )?(?:trip|holiday|vacation|getaway|weekend away|honeymoon|visit|itinerary)\s+(?:to|in|for)\s+([^\d,?]{2,40}?)(?:\s+(?:in|for|around)\s+((?:early |mid |late )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+\d{4})?|next (?:week|month|year|summer|winter)))?(?:,?\s+from\s+([A-Za-zÀ-ÿ' .-]{2,40}))?\??$/i,
-    (m) => (place(m[1]) ? { action: "trip.plan", args: { destination: m[1].trim(), ...(m[2] ? { when: m[2] } : {}), ...(m[3] ? { from: m[3].trim() } : {}) } } : null)],
+  [/^(?:(?:can you |could you |please )?help me plan|(?:can you |could you |please )?plan|plan me|plan out|research|map out|put together|build me|make me)\s+(?:a |my |our |the )?(?:trip|holiday|vacation|getaway|weekend away|honeymoon|visit|itinerary)\s+(?:to|in|for)\s+([^\d,?]{2,40}?)(?:\s+(?:in|for|around)\s+((?:early |mid |late )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+\d{4})?|next (?:week|month|year|summer|winter)))?(?:,?\s+from\s+([A-Za-zÀ-ÿ' .-]{2,40}))?\??$/i,
+    (m) => {
+      if (!place(m[1])) return null;
+      // "from March" is a when, not a city.
+      const fromIsWhen = m[3] && /^(?:early |mid |late )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+\d{4})?$|^next /i.test(m[3].trim());
+      const when = m[2] ?? (fromIsWhen ? m[3].trim() : undefined);
+      return { action: "trip.plan", args: { destination: m[1].trim(), ...(when ? { when } : {}), ...(m[3] && !fromIsWhen ? { from: m[3].trim() } : {}) } };
+    }],
   [/^(?:an? )?itinerary for\s+([^\d,?]{2,40}?)\??$/i, (m) => (place(m[1]) ? { action: "trip.plan", args: { destination: m[1].trim() } } : null)],
   [/^(?:delete|remove|take down)\s+(?:my |the )?(.+?)\s+plan(?: page)?$/i, (m) => (place(m[1]) ? { action: "plan.delete", args: { match: m[1] } } : null)],
   [/^(?:my plans|my trip plans|show my plans)$/i, () => ({ action: "plan.list", args: {} })],
 );
-addExamples("trip.plan", ["help me plan a trip to Liechtenstein", "help me plan a trip to Bali in March from Lagos", "research a weekend away in Porto", "itinerary for Kyoto"]);
+addExamples("trip.plan", ["Plan a trip to Tunisia", "plan a trip to Nairobi", "help me plan a trip to Liechtenstein", "help me plan a trip to Bali in March from Lagos", "research a weekend away in Porto", "itinerary for Kyoto"]);
 addExamples("plan.delete", ["delete my Liechtenstein plan"]);
 addExamples("plan.list", ["my plans"]);
 addCues("trip", ["plan a trip", "itinerary", "visa", "holiday", "vacation", "getaway", "where to stay"]);

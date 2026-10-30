@@ -10,7 +10,7 @@ import { Resvg } from "@resvg/resvg-js";
 
 const root = process.cwd();
 const W = 1200, H = 630;
-const C = { paper: "#EDE6D6", panel: "#F7F2E7", ink: "#1F1B16", ink2: "#4F473C", ink3: "#6F6658", line: "rgba(31,27,22,.16)" };
+export const C = { paper: "#EDE6D6", panel: "#F7F2E7", ink: "#1F1B16", ink2: "#4F473C", ink3: "#6F6658", line: "rgba(31,27,22,.16)" };
 export const PLATES = { rem: "#D9BD72", event: "#9FB6CF", dose: "#B9CCA6", class: "#C7B0CC", trip: "#DDB894", money: "#A9C9BD", hack: "#DCA99F", scout: "#BCB5DA", list: "#D8CFB4" } as const;
 export type Plate = keyof typeof PLATES;
 
@@ -47,20 +47,23 @@ function pip(pose: string): string | null {
 }
 
 /** Keep only what the card's fonts can draw; trim to fit. */
+/** Currency signs the card fonts don't carry are written as their code ("NGN 84,500"), so nothing turns into a blank. */
+const SIGN_CODE: Record<string, string> = { "\u20A6": "NGN ", "\u20B9": "INR ", "\u20A9": "KRW ", "\u20B1": "PHP ", "\u20BA": "TRY ", "\u20BD": "RUB ", "\u20B4": "UAH ", "\u20B5": "GHS ", "\u20AB": "VND ", "\u20AA": "ILS ", "\u0E3F": "THB " };
 export function latin(s: string, max: number): string {
-  const t = s.normalize("NFC").replace(/[^ -ɏ‘-”–…₠-⃏]/g, "").replace(/\s+/g, " ").trim();
-  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+  const t = s.normalize("NFC").replace(/[\u20A6\u20B9\u20A9\u20B1\u20BA\u20BD\u20B4\u20B5\u20AB\u20AA\u0E3F]\s?/g, (m) => SIGN_CODE[m.trim()] ?? "")
+    .replace(/[^\u0020-\u024F\u2018-\u201D\u2013\u2026\u20AC]/g, "").replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}\u2026` : t;
 }
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** A letterpress card: ink edge, paper face, a coloured plate offset behind it (as on the website). */
-function plateCard(x: number, y: number, w: number, h: number, plate: string, r = 18): string {
+export function plateCard(x: number, y: number, w: number, h: number, plate: string, r = 18): string {
   return `<rect x="${x + 10}" y="${y + 10}" width="${w}" height="${h}" rx="${r}" fill="${plate}" stroke="${C.ink}" stroke-width="3"/>
   <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="${C.panel}" stroke="${C.ink}" stroke-width="3"/>`;
 }
 
 /** Pip without his caption: the top of the sticker image, clipped. */
-function pipArt(pose: string, x: number, y: number, size: number): string {
+export function pipArt(pose: string, x: number, y: number, size: number): string {
   const uri = pip(pose);
   if (!uri) return "";
   const id = `clip${Math.round(x)}${Math.round(y)}`;
@@ -105,8 +108,8 @@ export function pageSvg(c: PageCard): string {
 }
 
 /** SVG to PNG. Rendering takes tens of milliseconds; callers cache. */
-export async function renderPng(svg: string): Promise<Buffer> {
+export async function renderPng(svg: string, width = W): Promise<Buffer> {
   const fontFiles = await loadFonts();
-  const r = new Resvg(svg, { fitTo: { mode: "width", value: W }, font: { fontFiles, loadSystemFonts: false, defaultFontFamily: "EB Garamond" } });
+  const r = new Resvg(svg, { fitTo: { mode: "width", value: width }, font: { fontFiles, loadSystemFonts: false, defaultFontFamily: "EB Garamond" } });
   return Buffer.from(r.render().asPng());
 }
