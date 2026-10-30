@@ -48,7 +48,18 @@ async function realClient(): Promise<PushClient> {
 
 /** Push is on when all three VAPID values are set. */
 export function pushOn(): boolean {
-  return Boolean(config.vapidPublicKey && config.vapidPrivateKey && /^(mailto:|https:)/.test(config.vapidSubject));
+  return Boolean(config.vapidPublicKey && config.vapidPrivateKey && /^(mailto:|https:)/.test(config.vapidSubject)) && !vapidProblem();
+}
+
+/** What's wrong with the VAPID settings, in words for /doctor, or null when they look right. */
+export function vapidProblem(): string | null {
+  const bytes = (k: string) => { try { return /^[A-Za-z0-9_-]+$/.test(k) ? Buffer.from(k, "base64url") : null; } catch { return null; } };
+  if (!config.vapidPublicKey || !config.vapidPrivateKey || !config.vapidSubject) return "set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT";
+  const pub = bytes(config.vapidPublicKey), priv = bytes(config.vapidPrivateKey);
+  if (!pub || pub.length !== 65 || pub[0] !== 4) return "VAPID_PUBLIC_KEY doesn't look like the public key from `npx web-push generate-vapid-keys` (it should be about 87 characters, starting with B)";
+  if (!priv || priv.length !== 32) return "VAPID_PRIVATE_KEY doesn't look like the private key from the same command (about 43 characters)";
+  if (!/^(mailto:\S+@\S+|https:\/\/\S+)$/.test(config.vapidSubject)) return "VAPID_SUBJECT should be mailto: and your email, like mailto:you@example.com";
+  return null;
 }
 
 const B64URL = /^[A-Za-z0-9_-]+={0,2}$/;

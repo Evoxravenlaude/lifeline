@@ -25,14 +25,14 @@ import { ASKS, BACK, OK, panel, shapeAnswer, type Btn, type Style } from "./pane
 import { ensurePip, pipSticker } from "./stickers.js";
 import { dashboardFacts, dashSignature, renderDashboard, renderSection, sectionFacts } from "../core/dashboard.js";
 import { signInMethods } from "../core/auth.js";
-import { pushOn } from "../core/webpush.js";
+import { pushOn, vapidProblem } from "../core/webpush.js";
 
 /** /doctor: which ways into the website are on, and whether app notifications can go out. */
 async function webWaysLine(): Promise<string> {
   const m = await signInMethods("bot");
   const ways: [string, unknown, string][] = [["Google", m.google, "set GOOGLE_CLIENT_ID"], ["Apple", m.apple, "set APPLE_CLIENT_ID"], ["text code", m.sms, "needs SMS"], ["iMessage code", m.imessage, "needs iMessage"], ["email code", m.email, "needs email sending"]];
   const on = ways.filter(([, v]) => Boolean(v)).map(([n]) => n), off = ways.filter(([, v]) => !v).map(([n, , why]) => `${n} (${why})`);
-  return `Website sign-in: Telegram${on.length ? `, ${on.join(", ")}` : ""}.${off.length ? ` Off: ${off.join(", ")}.` : ""} App notifications: ${pushOn() ? "on" : "off (set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT)"}.`;
+  return `Website sign-in: Telegram${on.length ? `, ${on.join(", ")}` : ""}.${off.length ? ` Off: ${off.join(", ")}.` : ""} App notifications: ${pushOn() ? "on" : `off (${vapidProblem()})`}.`;
 }
 import { pluginLocationHandlers } from "../core/plugins.js";
 import { abilityLines, allow, mediaAbilities, probeVoice, speak, wantsVoice } from "../core/media.js";

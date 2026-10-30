@@ -38,7 +38,7 @@ export function mediaAbilities() {
     speak: Boolean(gkey()),
     see: Boolean(gkey() || (config.openaiCompatKey && isGroq())),
     draw: Boolean((config.cfAccountId && config.cfApiToken) || (gkey() && config.geminiImageModel) || config.enablePollinations),
-    search: Boolean(gkey() || (config.openaiCompatKey && isGroq())),
+    search: Boolean(gkey() || config.openaiKey || (config.openaiCompatKey && isGroq())),
   };
 }
 
@@ -50,7 +50,7 @@ export function abilityLines(): string[] {
     `Hearing voice notes: ${on(Boolean(config.openaiKey || groq || gkey()), config.openaiKey ? "OpenAI" : groq ? `Groq ${config.groqSttModel}` : "Gemini", "needs a Groq, OpenAI or Gemini key")}.`,
     `Looking at photos: ${on(Boolean(gkey() || groq), gkey() ? "Gemini" : "Groq", "needs a Gemini or Groq key")}.`,
     `Drawing: ${on(mediaAbilities().draw, config.cfAccountId && config.cfApiToken ? "Cloudflare" : config.geminiImageModel ? "Gemini" : "Pollinations, slow", "set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN")}.`,
-    `Web search: ${on(Boolean(gkey() || groq), gkey() ? "Gemini with Google Search" : "Groq compound", "needs a Gemini or Groq key")}.`,
+    `Web search: ${on(Boolean(gkey() || groq || config.openaiKey), gkey() ? "Gemini with Google Search" : config.openaiKey ? "OpenAI web search" : "Groq compound", "needs a Gemini, OpenAI or Groq key")}.`,
   ];
 }
 
@@ -347,6 +347,22 @@ export async function search(question: string, tz: string): Promise<Found | null
       if (c?.text) return { answer: c.text, sources: dedupe(c.grounding ?? []) };
     } catch (e: any) { log.warn({ err: e?.message }, "search (gemini) failed"); }
   }
+  // OpenAI's own web search (Responses API, tool "web_search"), when there's an OpenAI key: answers with real citations.
+  if (config.openaiKey) {
+    try {
+      const r = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiKey}` }, signal: AbortSignal.timeout(60_000),
+        body: JSON.stringify({ model: config.openaiSearchModel, tools: [{ type: "web_search" }], instructions: system, input: question, max_output_tokens: 1200 }),
+      });
+      if (r.ok) {
+        const j: any = await r.json();
+        const parts = (j.output ?? []).filter((o: any) => o.type === "message").flatMap((o: any) => o.content ?? []).filter((c: any) => c.type === "output_text");
+        const text = parts.map((c: any) => c.text).join("\n").trim();
+        const sources = parts.flatMap((c: any) => c.annotations ?? []).filter((a: any) => a.type === "url_citation" && /^https?:/.test(a.url)).map((a: any) => ({ uri: String(a.url), title: a.title ? String(a.title) : undefined }));
+        if (text) return { answer: text, sources: dedupe(sources) };
+      } else log.warn({ status: r.status }, "search (openai) failed");
+    } catch (e: any) { log.warn({ err: e?.message }, "search (openai) failed"); }
+  }
   if (config.openaiCompatKey && isGroq()) {
     try {
       const r = await fetch(`${config.openaiCompatBaseUrl}/chat/completions`, {
@@ -355,8 +371,12 @@ export async function search(question: string, tz: string): Promise<Found | null
       });
       if (r.ok) {
         const j: any = await r.json();
-        const text = j.choices?.[0]?.message?.content;
-        if (text) return { answer: String(text).trim(), sources: [] };
+        const msg = j.choices?.[0]?.message ?? {};
+        const text = msg.content;
+        // Groq's compound model reports the searches it ran, with each result's title and address: those are the sources.
+        const found = (msg.executed_tools ?? []).flatMap((t: any) => t?.search_results?.results ?? []);
+        const sources = found.filter((x: any) => /^https?:/.test(String(x?.url ?? ""))).map((x: any) => ({ uri: String(x.url), title: x.title ? String(x.title) : undefined }));
+        if (text) return { answer: String(text).trim(), sources: dedupe(sources) };
       } else log.warn({ status: r.status }, "search (groq) failed");
     } catch (e: any) { log.warn({ err: e?.message }, "search (groq) failed"); }
   }

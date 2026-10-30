@@ -60,7 +60,7 @@ const TINY = /^(?:liechtenstein|monaco|san marino|vatican(?: city)?|andorra|malt
 
 async function research(ctx: Ctx, q: string): Promise<{ answer: string; sources: { title: string; url: string }[] } | null> {
   const r = await search(q, ctx.user.tz).catch(() => null);
-  return r ? { answer: r.answer, sources: (r.sources ?? []).slice(0, 4).map((s: any) => ({ title: String(s.title ?? s.url).slice(0, 90), url: String(s.url) })) } : null;
+  return r ? { answer: r.answer, sources: (r.sources ?? []).slice(0, 4).map((s: any) => ({ title: String(s.title ?? s.uri ?? s.url).slice(0, 90), url: String(s.uri ?? s.url) })) } : null;
 }
 
 const plan = defineAction({
