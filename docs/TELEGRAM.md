@@ -45,6 +45,7 @@ It needs `WEB_URL` set to the https address of the website (the Vercel address).
 - Moving around the menu swaps the picture in place: each section (Today, Lists, Health, Money, Trips, Play, Settings) has its own picture with its real rows. A long page shows its start and a "Read it all" button.
 - The home dashboard keeps itself current. When what it says changes (a dose taken, a reminder passed, a spend logged, something new waiting), it's redrawn where it is, quietly (edits never notify). It's checked every five minutes and right after anything you change. Telegram lets a bot edit a message for about two days; after that, `/menu` sends a fresh one.
 - "plain menu" turns the pictures off for one person.
+- Home has Today, Lists, Health, Money, Trips, Safety, Play, You, Settings and Everything. Safety shows a running check-in (with I'm safe and 15 more minutes), safety contacts, the emergency card (and its lock-screen picture) and the incident log (with Export as PDF). You shows Pip's things, days kept, what lifeline remembers, Export my data, Delete my account and a short privacy page linking to `/privacy`. Settings has calm mode, quiet day, reactions and topics as buttons. Health has Took my meds, Doctor summary and Repair a streak; Money has Who owes me and Subscriptions; Play has Pip's things.
 - Lists in any reply are drawn as a tree: `├` for each item, `└` for the last.
 - The command list behind the Menu button is six commands: menu, today, everything, app, settings, help. The old ones still work if typed.
 

@@ -117,3 +117,10 @@ Possible, but weigh it first:
 The rough path: `npm i @capacitor/core @capacitor/cli @capacitor/ios`, `npx cap init lifeline com.yourname.lifeline --web-dir web`, set `server.url` in `capacitor.config` to your website, `npx cap add ios`, open the project in Xcode, then archive and upload to App Store Connect.
 
 For most people, Add to Home Screen on iPhone gives the same thing today, without review, fees or a Mac.
+
+## Safety, your data and privacy
+
+- **Safety** (in the bar on a laptop, under More on a phone): check a message that feels off, start or end a check-in, see safety contacts, make the emergency card a lock-screen picture, log an incident and export the log as a PDF, and the legacy plan's state. `GET /api/safety`.
+- **Settings** has Calm (calm mode, quiet day), On Telegram (reactions, topics) and Your data (export, delete with a yes, privacy).
+- **Today** says what Pip carries and how many kept days until his next thing. `GET /api/you`.
+- **Privacy** is a static page, `web/privacy.html`, at `/privacy`.
