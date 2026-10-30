@@ -39,6 +39,15 @@ export async function propose(ctx: Ctx, actionName: string, rawArgs: unknown): P
   }
   const args = parsed.data;
 
+  if (action.gate) {
+    const stop = await action.gate(args, ctx);
+    if (stop) {
+      await audit(ctx, actionName, action.tier, args, "gated");
+      const { reply, undo: _u, ...att } = stop;
+      return { kind: "ran", reply, extra: { ...att, action: actionName } };
+    }
+  }
+
   if (action.needs && !ctx.skipAsk) {
     const ask = await action.needs(args, ctx);
     if (ask) return { kind: "ask", reply: ask.question, thread: { action: actionName, args: args as Record<string, unknown>, need: ask.need, question: ask.question, askedAt: ctx.now.getTime() } };

@@ -111,7 +111,8 @@ export function wantsVoice(prefs: Record<string, unknown>, r: { text: string; sp
   if (typeof r.speak === "string") return true;
   const pref = (prefs.voiceReplies as string) ?? "mirror";
   if (pref === "off") return false;
-  if (r.buttons?.some((b) => /^confirm:/.test(b.data)) || r.text.length >= 1200) return false;
+  // Long or waiting-on-a-yes replies still get a voice note when someone spoke: a short spoken version (src/core/spoken.ts).
+  if (r.buttons?.some((b) => /^confirm:/.test(b.data)) && !spoken) return false;
   return r.speak === true || pref === "always" || (pref === "mirror" && spoken);
 }
 

@@ -203,7 +203,7 @@ const find = defineAction({
     for (const r of rows) await ctx.db.query(`INSERT INTO scout_seen (user_id, result_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ctx.user.id, r.id]);
     const shown = rows.length ? rows : hits.slice(0, args.limit ?? 8);
     const body = shown.map(fmtHit).join("\n\n");
-    const note = config.geminiKey ? "" : "\n\nThis run used GitHub, CoinGecko, DefiLlama and Show HN only; with a Gemini key on the server I also search the web for founders' handles.";
+    const note = config.geminiKey ? "" : "\n\nThis run used GitHub, CoinGecko, DefiLlama and Show HN only. With web search switched on, I also look for founders' handles.";
     const head = `${shown.length === 1 ? "One project" : `${shown.length} projects`} in ${args.niche}${args.objective ? `, picked for ${args.objective}` : ""}, newest first.`;
     return { reply: `${head}\n\n${body}${note}\n\nSay "draft outreach to <project>" and I'll write the first message for you to send.` };
   },

@@ -95,6 +95,11 @@ export interface Action<S extends ZodTypeAny = ZodTypeAny> {
   echo?: (args: z.infer<S>, ctx: Ctx) => string;
   run: (args: z.infer<S>, ctx: Ctx) => Promise<ActionResult>;
   undo?: (payload: any, ctx: Ctx) => Promise<string>;
+  /**
+   * Before anything else (even before asking for a yes): can this go ahead at all? Return a reply to stop here with
+   * (say why, and what to do instead), or null to carry on. For things missing outside the message, like a linked email.
+   */
+  gate?: (args: z.infer<S>, ctx: Ctx) => Promise<ActionResult | null> | ActionResult | null;
   /** Before running: is something essential missing? Return the one question to ask, or null. */
   needs?: (args: z.infer<S>, ctx: Ctx) => Promise<Ask | null> | Ask | null;
   /** Turn the user's answer to `needs` into the missing arguments. Return null if the answer doesn't fit. */

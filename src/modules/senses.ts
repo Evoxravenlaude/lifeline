@@ -4,6 +4,7 @@ import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
 import { allow, draw, refuseDrawing, search, VOICES, mediaAbilities } from "../core/media.js";
 import { canEmail, sendEmail } from "../core/email.js";
+import { emailLinkOffer, linkedEmail } from "./emaillink.js";
 
 /** Pip, described for a picture model, so "draw yourself as a pirate" gets the real Pip. */
 export const PIP_LOOKS = "Pip, a small friendly tortoise with round brass spectacles and a domed olive-green shell with brass edging, warm storybook illustration";
@@ -35,7 +36,7 @@ const webSearch = defineAction({
   description: "Search the web for anything current or factual you'd otherwise guess: news, scores, prices of things, opening hours, who won, release dates, how to do something, reviews. 'query' is a clear search question.",
   schema: z.object({ query: z.string().min(2) }),
   async run(args, ctx) {
-    if (!mediaAbilities().search) return { reply: "I can't search the web from this server yet. It needs a Gemini or Groq key." };
+    if (!mediaAbilities().search) return { reply: "Looking things up on the web isn't switched on for this circle yet. Whoever runs lifeline can turn it on." };
     if (!allow("search", ctx.user.id)) return { reply: "That's a lot of searching for one day; I'm out of searches until tomorrow." };
     const f = await search(args.query, ctx.user.tz);
     if (!f) return { reply: "The search didn't come back. Try again in a minute?" };
@@ -76,7 +77,7 @@ const speechSay = defineAction({
   description: "Read something out loud as a voice note: 'text' to read, or leave it empty to read the last thing you said.",
   schema: z.object({ text: z.string().optional() }),
   async run(args, ctx) {
-    if (!mediaAbilities().speak) return { reply: "I can't speak on this server yet. It needs a Gemini key." };
+    if (!mediaAbilities().speak) return { reply: "My voice isn't switched on for this circle yet. Whoever runs lifeline can turn it on." };
     let words = args.text;
     if (!words) {
       const last = await ctx.db.one<{ content: string }>(`SELECT content FROM messages WHERE user_id=$1 AND role='assistant' ORDER BY id DESC LIMIT 1`, [ctx.user.id]);
@@ -117,10 +118,14 @@ const emailMe = defineAction({
   tier: 1,
   description: "Email something to the user themselves: a list, a note, a summary, their brief, a draft. 'body' is the full text to send; 'subject' a short subject.",
   schema: z.object({ subject: z.string().optional(), body: z.string().min(1) }),
+  async gate(_args, ctx) {
+    if (!canEmail()) return { reply: "Sending email isn't switched on for this circle yet. I can put it in a note, or show it here for you to copy." };
+    if (await linkedEmail(ctx)) return null;
+    return emailLinkOffer(ctx, "I'll email you as soon as your email is linked, so I know where \"me\" is.");
+  },
   async run(args, ctx) {
-    if (!canEmail()) return { reply: "Email isn't switched on for this circle yet." };
     const to = await addressOf(ctx);
-    if (!to) return { reply: `What's your email address? Say "my email is …" and I'll send a code to confirm it first.` };
+    if (!to) return { reply: "Link your email first: say \"link my email\"." };
     const { subject, body } = await resolveBody(args.body, ctx);
     const ok = await sendEmail(to, args.subject ?? subject, body);
     return { reply: ok ? `${subject === "From lifeline" ? "Sent" : `${subject}, sent`} to ${to}.` : "The email didn't go out. Try again in a minute?" };
@@ -133,8 +138,15 @@ const emailSend = defineAction({
   description: "Send an email to someone else on the user's behalf. 'to' is their address, 'subject' and 'body' the full email, signed with the user's name. Always confirmed first.",
   schema: z.object({ to: z.string().email(), subject: z.string().min(1), body: z.string().min(1) }),
   echo: (a) => `This emails ${a.to}:\n\nSubject: ${a.subject}\n\n${a.body}`,
+  /* No yes is asked for until it can actually go: email switched on, and the person's own address linked so replies reach them. */
+  async gate(args, ctx) {
+    const draft = `\n\nHere's the draft meanwhile, to send yourself if you'd rather:\n\`\`\`\nTo: ${args.to}\nSubject: ${args.subject}\n\n${args.body}\n\`\`\``;
+    if (!canEmail()) return { reply: `Sending email isn't switched on for this circle yet.${draft}` };
+    if (await linkedEmail(ctx)) return null;
+    const offer = await emailLinkOffer(ctx, "Link your email first, so I can send this from lifeline with replies coming back to you. It takes one tap.");
+    return { ...offer, reply: `${offer.reply}${draft}` };
+  },
   async run(args, ctx) {
-    if (!canEmail()) return { reply: "Email isn't switched on for this circle yet." };
     const from = await addressOf(ctx);
     const ok = await sendEmail(args.to, args.subject, args.body, { replyTo: from ?? undefined });
     return { reply: ok ? `Sent to ${args.to}.${from ? " Replies come to your own inbox." : ""}` : "The email didn't go out. Nothing was sent; try again in a minute?" };

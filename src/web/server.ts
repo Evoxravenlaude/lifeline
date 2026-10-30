@@ -17,6 +17,9 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { config } from "../core/config.js";
+import { isOwner } from "../core/circle.js";
+import { emailInOn } from "../core/ways.js";
+import { spokenVersion } from "../core/spoken.js";
 import { log } from "../core/log.js";
 import type { Db } from "../core/db.js";
 import { ensureUser, getUserById, handleCallback, handleMessage, handlePhoto, redeemLinkCode, identitiesOf, type Reply } from "../core/handler.js";
@@ -330,7 +333,8 @@ export function createWeb(db: Db, botUsername: string) {
   /** Add a spoken version of the reply when the action asks for it or the person's setting says so. */
   const withVoice = async (u: User, r: Reply, spoken: boolean): Promise<Reply & { audio?: string }> => {
     if (!wantsVoice(u.prefs, r, spoken) || !mediaAbilities().speak || !allow("speak", u.id)) return r;
-    const sp = await speak(typeof r.speak === "string" ? r.speak : r.text, { voice: u.prefs.ttsVoice as string | undefined, persona: personaOf(u.prefs), ogg: false }).catch(() => null);
+    const words = typeof r.speak === "string" ? r.speak : await spokenVersion(r);
+    const sp = await speak(words, { voice: u.prefs.ttsVoice as string | undefined, persona: personaOf(u.prefs), ogg: false }).catch(() => null);
     return sp ? { ...r, audio: sp.wav.toString("base64") } : r;
   };
 
@@ -396,7 +400,7 @@ export function createWeb(db: Db, botUsername: string) {
   /* ---- app data ---- */
   app.get("/api/me", async (c) => {
     const u = user(c);
-    return c.json({ firstRun: u.prefs.firstRun === true, reach: reachOf(u), id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, gemini: Boolean(config.geminiKey), pip: pipLine("return", u), quiet_start: u.quiet_start, quiet_end: u.quiet_end, palette: u.prefs.palette ?? null, mode: u.prefs.mode ?? null, work: typeof u.prefs.work === "boolean" ? u.prefs.work : null, tags: Array.isArray(u.prefs.tags) ? u.prefs.tags : [] });
+    return c.json({ firstRun: u.prefs.firstRun === true, reach: reachOf(u), id: u.id, name: u.name, tz: u.tz, theme: u.prefs.theme ?? null, persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd, web: Boolean(config.geminiKey), pip: pipLine("return", u), quiet_start: u.quiet_start, quiet_end: u.quiet_end, palette: u.prefs.palette ?? null, mode: u.prefs.mode ?? null, work: typeof u.prefs.work === "boolean" ? u.prefs.work : null, tags: Array.isArray(u.prefs.tags) ? u.prefs.tags : [] });
   });
   app.get("/api/messages", async (c) => c.json((await db.query(`SELECT id, role, content, created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 60`, [user(c).id])).reverse()));
   app.post("/api/chat", async (c) => {
@@ -539,14 +543,17 @@ export function createWeb(db: Db, botUsername: string) {
     for (const t of trips) t.items = await db.query(`SELECT kind, title, at, cost, done FROM trip_items WHERE trip_id=$1 ORDER BY at NULLS LAST, id`, [t.id]);
     return c.json(trips);
   });
+  const ownerOf = async (u: { id: number; telegram_id: number }) => isOwner(Number(u.telegram_id), u.id, (await db.one<{ id: number }>(`SELECT min(id) AS id FROM users`))?.id);
   app.get("/api/settings", async (c) => {
     const u = user(c);
     return c.json({
       tz: u.tz, digest_hour: u.digest_hour, quiet_start: u.quiet_start, quiet_end: u.quiet_end, name: u.name, email: u.email ?? null,
       country: u.prefs.country ?? "", tags: u.prefs.tags ?? [], persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", personaCustom: u.prefs.personaCustom ?? "",
-      personas: PERSONAS, identities: await identitiesOf(db, u.id), provider: providerName(), spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd,
+      personas: PERSONAS, identities: await identitiesOf(db, u.id), spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd,
+      // Which models run underneath is for the owner only; everyone else is talking to lifeline.
+      ...((await ownerOf(u)) ? { provider: providerName(), owner: true } : {}), thinking: providerName() ? "A mix of models, picked per task" : "Plain language only for now",
       calm: u.prefs.calm === true, reactions: u.prefs.reactions !== false, topics: Boolean(u.prefs.topics && typeof u.prefs.topics === "object" && Object.keys(u.prefs.topics as object).length),
-      smsNumber: config.smsNumber || null,
+      smsNumber: config.smsNumber || null, mailIn: emailInOn() ? config.inboundEmail : null,
       reach: reachOf(u), push: { ...pushPublic(), devices: await devicesOf(db, u.id) },
     });
   });

@@ -18,7 +18,7 @@ import { allow, mediaAbilities, search, see } from "./media.js";
 import { answerGame, gameAnswer } from "../modules/fun.js";
 import { log } from "./log.js";
 import { BROKE } from "./humanize.js";
-import { waysIn } from "./ways.js";
+import { mailLink, waysIn } from "./ways.js";
 import { toPlain } from "./format.js";
 import { randomBytes } from "node:crypto";
 import type { Db } from "./db.js";
@@ -29,6 +29,7 @@ import type { Attachment, Ctx, Thread, User } from "../policy/types.js";
 import { getAction } from "../policy/registry.js";
 import { cancelPending, confirmPending, latestPending, propose, undo, type Decision } from "../policy/engine.js";
 import { resolveIntent } from "../intent/index.js";
+import { summarizeLater } from "../intent/model.js";
 import { answerCapability, isCapabilityQuestion } from "../intent/capabilities.js";
 import { openThread, setThread, SKIP } from "../intent/thread.js";
 import { parseRange, parseWhen, parseMoney } from "./time.js";
@@ -122,7 +123,7 @@ const YES = /^(?:yes|y|yes please|yep|yeah|yup|confirm|go ahead|go|do it|sure|ok
 const NO = /^(?:no|n|nope|nah|cancel|never ?mind|don'?t|stop|forget it|leave it)[.!]*$/i;
 
 /** Every message gets an answer in words, even when something underneath breaks. */
-export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"]; draft?: Ctx["draft"]; stop?: Ctx["stop"] }): Promise<Reply> {
+export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"]; draft?: Ctx["draft"]; stop?: Ctx["stop"]; voice?: boolean }): Promise<Reply> {
   try {
     return await answerMessage(db, user, text, opts);
   } catch (e: any) {
@@ -131,11 +132,11 @@ export async function handleMessage(db: Db, user: User, text: string, opts: { fo
   }
 }
 
-async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"]; draft?: Ctx["draft"]; stop?: Ctx["stop"] }): Promise<Reply> {
+async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"]; draft?: Ctx["draft"]; stop?: Ctx["stop"]; voice?: boolean }): Promise<Reply> {
   const now = opts.now ?? new Date();
   const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}`, progress: opts.progress, note: opts.note, draft: opts.draft, stop: opts.stop };
   const t = text.trim();
-  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, redact(text)]);
+  await db.query(`INSERT INTO messages (user_id, role, content, meta) VALUES ($1,'user',$2,$3)`, [user.id, redact(text), opts.voice ? JSON.stringify({ voice: true }) : null]);
 
   // 0. Anything that must be seen first (someone in crisis), whatever else is open.
   if (!opts.forwarded) for (const look of pluginFirstLooks()) {
@@ -166,7 +167,8 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
   }
   if (/^link$/i.test(t)) {
     const code = await createLinkCode(db, user.id);
-    return finish(db, user, { text: `Your link code is \`${code}\`. It works for fifteen minutes.\n\n${waysIn(code)}\n\nOnce it's linked, everything you've told me is there too.` });
+    const mail = mailLink(code);
+    return finish(db, user, { text: `Your link code is \`${code}\`. It works for fifteen minutes.\n\n${waysIn(code)}\n\nOnce it's linked, everything you've told me is there too.`, buttons: mail?.page ? [{ label: "Link my email", data: `url:${mail.page}` }] : undefined });
   }
 
   // 2. An open follow-up: read the message as the answer first.
@@ -186,7 +188,7 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
   // 3. "Can you track meds?"
   // A question that carries the real thing ("is this legit: …", "can you explain tx 0x…") is a request, not a question about me.
   const ruled = parseByRules(t);
-  const request = Boolean(ruled) && (SPECIFIC.test(t) || /^how (?:do|can) i (?:cancel|unsubscribe from|stop paying for)\b/i.test(t) || ruled!.action === "app.open");
+  const request = Boolean(ruled) && (SPECIFIC.test(t) || /^how (?:do|can) i (?:cancel|unsubscribe from|stop paying for)\b/i.test(t) || ["app.open", "about.engine", "account.export", "account.delete", "limits.reach", "privacy.scan", "email.link"].includes(ruled!.action));
   if (!opts.forwarded && isCapabilityQuestion(t) && !request) {
     const a = answerCapability(t, user.name);
     if (a) { if (thread) await setThread(db, user, null); return finish(db, user, { text: a }); }
@@ -244,7 +246,9 @@ function defaultFill(need: string, text: string, ctx: Ctx): Record<string, unkno
 
 async function finish(db: Db, user: User, r: Reply): Promise<Reply> {
   const out = { ...r, text: polish(r.text, { persona: personaOf(user.prefs) }) };
-  await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'assistant',$2)`, [user.id, redact(out.text.slice(0, 2000))]);
+  // What this turn DID travels with what it said, so whichever model picks up next knows (src/intent/route.ts).
+  await db.query(`INSERT INTO messages (user_id, role, content, meta) VALUES ($1,'assistant',$2,$3)`, [user.id, redact(out.text.slice(0, 2000)), r.action ? JSON.stringify({ action: r.action }) : null]);
+  summarizeLater(db, user);
   return out;
 }
 
@@ -267,6 +271,7 @@ async function answerButton(db: Db, user: User, data: string, now: Date): Promis
   const say = (text: string, buttons?: Reply["buttons"]): Reply => ({ text: polish(text, { persona: personaOf(user.prefs) }), buttons });
   // Outside Telegram an "open the app" button is just its address.
   if (kind === "webapp") return say(`Open ${data.slice(7)} to use lifeline on the web, or install it from there as an app.`);
+  if (kind === "url") return say(`Open this: ${data.slice(4)}`);
   switch (kind) {
     case "confirm": { const r = renderDecision(await confirmPending(ctx, Number(a))); return { ...r, ...say(r.text, r.buttons) }; }
     case "cancel": return say(await cancelPending(ctx, Number(a)));
@@ -303,7 +308,9 @@ async function answerButton(db: Db, user: User, data: string, now: Date): Promis
 export function buttonsAsText(r: Reply): string {
   const text = toPlain(r.text);
   if (!r.buttons?.length) return text;
-  return `${text}\n${r.buttons.map((b, i) => `${i + 1}) ${b.label}`).join("  ")}`;
+  const links = r.buttons.filter((b) => b.data.startsWith("url:"));
+  const taps = r.buttons.filter((b) => !b.data.startsWith("url:") && !b.data.startsWith("webapp:"));
+  return [text, ...links.map((b) => `${b.label}: ${b.data.slice(4)}`), taps.length ? taps.map((b, i) => `${i + 1}) ${b.label}`).join("  ") : ""].filter(Boolean).join("\n");
 }
 
 
@@ -315,10 +322,13 @@ export async function handlePhoto(db: Db, user: User, image: Buffer, mime: strin
   try {
     const cap = caption.trim();
     await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, `[picture]${cap ? ` ${redact(cap)}` : ""}`]);
-    if (!mediaAbilities().see) return finish(db, user, { text: "I can't look at pictures on this server yet. It needs a Gemini or Groq key." });
+    if (!mediaAbilities().see) return finish(db, user, { text: "Looking at pictures isn't switched on for this circle yet. Tell me what's in it and I'll take it from there." });
     if (!allow("see", user.id)) return finish(db, user, { text: "That's a lot of pictures for one day; I'll be able to look again tomorrow." });
     const seen = await see(image, mime, cap);
     if (!seen) return finish(db, user, { text: "I couldn't make that picture out just now. Try again in a minute, or tell me what's in it." });
+    // The picture itself isn't kept, but what it showed is: whichever model answers the next message can see it was there.
+    await db.query(`UPDATE messages SET content=$3, meta = COALESCE(meta, '{}'::jsonb) || '{"picture":true}'::jsonb WHERE id = (SELECT max(id) FROM messages WHERE user_id=$1 AND role='user') AND content LIKE '[picture]%' AND $2 = $2`,
+      [user.id, cap, redact(`[picture: ${seen.reply.replace(/\s+/g, " ").slice(0, 360)}]${cap ? ` ${cap}` : ""}`)]).catch(() => {});
     let text = seen.reply;
     if (cap && /\b(?:where (?:can|do|to)|buy|price|cost|how much|search|look (?:it )?up|find (?:it|this|me)|similar|who (?:makes|made|sells))\b/i.test(cap) && mediaAbilities().search && allow("search", user.id)) {
       const f = await search(`${cap}. The picture shows: ${seen.reply.slice(0, 400)}`, user.tz);

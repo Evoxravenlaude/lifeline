@@ -67,7 +67,7 @@ const research = defineAction({
   schema: z.object({ question: z.string().min(4).max(400) }),
   async run(args, ctx) {
     const q = args.question.trim().replace(/\s+/g, " ");
-    if (!mediaAbilities().search) return { reply: "I can't search the web from this server yet, so I can't research that properly. It needs a Gemini, OpenAI or Groq key." };
+    if (!mediaAbilities().search) return { reply: "Looking things up on the web isn't switched on for this circle yet, so I can't research that properly. I can still help you think it through from what I know, if you like." };
     if (!providerName() || (await overBudget(ctx.db, ctx.user.id))) return { reply: "I can't think this one through right now. Ask me again in a bit." };
     if (!allow("search", ctx.user.id)) return { reply: "That's a lot of searching for one day; I'm out of searches until tomorrow." };
 

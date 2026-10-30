@@ -29,6 +29,7 @@ import { ensurePip, pipSticker } from "./stickers.js";
 import { dashboardFacts, dashSignature, renderDashboard, renderSection, sectionFacts } from "../core/dashboard.js";
 import { signInMethods } from "../core/auth.js";
 import { pushOn, vapidProblem } from "../core/webpush.js";
+import { spokenVersion } from "../core/spoken.js";
 
 /** /doctor: which ways into the website are on, and whether app notifications can go out. */
 async function webWaysLine(): Promise<string> {
@@ -102,6 +103,7 @@ export function toKb(rows: Btn[][]): InlineKeyboard {
   rows.forEach((row, i) => {
     for (const b of row) {
       if (b.webApp) { k.webApp(b.label, b.webApp); continue; }
+      if (b.data.startsWith("url:")) { k.url(b.label, b.data.slice(4)); continue; }
       k.text(b.label, b.data); const st = b.style ?? styleOf(b.data, b.label); if (st) k.style(st);
     }
     if (i < rows.length - 1) k.row();
@@ -115,6 +117,7 @@ function kb(r: Reply): InlineKeyboard | undefined {
   const k = new InlineKeyboard();
   (r.buttons ?? []).forEach((b, i) => {
     if (b.data.startsWith("webapp:")) k.webApp(b.label, b.data.slice(7)); // opens the website inside Telegram
+    else if (b.data.startsWith("url:")) k.url(b.label, b.data.slice(4)); // a plain link (https only)
     else { k.text(b.label, b.data); const st = styleOf(b.data, b.label); if (st) k.style(st); }
     if (i % 2 === 1) k.row();
   });
@@ -246,7 +249,7 @@ export function createBot(db: Db): Bot {
   };
   /** Speak `words` as a voice note. When someone asked to hear it, a failure is said out loud too (in text). */
   const sendVoice = async (c: Context, u: { id: number; prefs: Record<string, unknown> }, words: string, asked: boolean) => {
-    if (!mediaAbilities().speak) return asked ? void (await c.reply("I can't speak on this server yet. It needs a Gemini key.").catch(() => {})) : undefined;
+    if (!mediaAbilities().speak) return asked ? void (await c.reply("My voice isn't switched on for this circle yet. Whoever runs lifeline can turn it on.").catch(() => {})) : undefined;
     if (!allow("speak", u.id)) return asked ? void (await c.reply("That's my voice used up for today. Back tomorrow.").catch(() => {})) : undefined;
     await c.replyWithChatAction("record_voice").catch(() => {});
     const sp = await speak(words, { voice: u.prefs.ttsVoice as string | undefined, persona: personaOf(u.prefs) }).catch(() => null);
@@ -273,6 +276,16 @@ export function createBot(db: Db): Bot {
     const d = await propose({ db, user: u, now: new Date(), sourceMessage: "[pip milestone]" }, "pip.things", {});
     const shown = renderDecision(d);
     await send(c, { ...shown, text: `Pip has picked up ${t.name}, for ${t.why}.\n\n${shown.text}`, celebrate: true, action: "pip.things" });
+  };
+  /** A short spoken gist of a long reply, in the person's chosen voice, by the quick model. */
+  const gistFor = (u: { id: number; prefs: Record<string, unknown> }) => async (plain: string): Promise<string | null> => {
+    const { complete, providerName } = await import("../intent/providers.js");
+    const { overBudget, recordUsage } = await import("../core/budget.js");
+    const { personaPrompt } = await import("../intent/persona.js");
+    if (!providerName() || (await overBudget(db, u.id))) return null;
+    const r = await complete({ system: `${personaPrompt(u.prefs)}\n\nTurn the reply below into what you'd SAY in a short voice note: the point first, at most 60 words, plain spoken sentences, no lists, no links, no numbers that only make sense on screen. Don't say "in summary". Output only the words to speak.`, messages: [{ role: "user", content: plain.slice(0, 4000) }], maxTokens: 200, tier: "fast" }).catch(() => null);
+    if (r) await recordUsage(db, u.id, r.usage.input, r.usage.output);
+    return r?.text?.trim() || null;
   };
   const send = async (c: Context, r: Reply, spoken = false): Promise<void> => {
     const u = await userOf(c);
@@ -318,7 +331,7 @@ export function createBot(db: Db): Bot {
     if (wantsRich(r) && c.chat?.type === "private" && u.prefs.rich !== false && !r.celebrate) {
       const msg: any = c.message ?? c.callbackQuery?.message;
       if (await sendRich(c.chat.id, r, msg?.is_topic_message ? msg.message_thread_id : undefined)) {
-        if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : r.text, Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
+        if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : await spokenVersion(r, gistFor(u)), Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
         return;
       }
     }
@@ -331,7 +344,7 @@ export function createBot(db: Db): Bot {
       await (i === 0 && effect ? c.reply(toHtml(parts[i]), { ...base, message_effect_id: effect }).catch(() => c.reply(toHtml(parts[i]), base)) : c.reply(toHtml(parts[i]), base))
         .catch(() => c.reply(toPlain(parts[i]), { reply_markup: markup }));
     }
-    if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : r.text, Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
+    if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : await spokenVersion(r, gistFor(u)), Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
     // Something was kept or changed (it can be undone): the dashboard picture catches up in a moment.
     if (r.buttons?.some((b) => /^undo:/.test(b.data))) setTimeout(() => { refreshHome(u.id).catch(() => {}); }, 1500);
   };
@@ -496,6 +509,10 @@ export function createBot(db: Db): Bot {
     await say(c, line ?? pipLine("idle", u));
   });
   bot.command("doctor", async (c) => {
+    // What runs underneath (models, keys, providers) is for whoever runs lifeline, not for everyone in the circle.
+    const du = await userOf(c);
+    const firstId = (await db.one<{ id: number }>(`SELECT min(id) AS id FROM users`))?.id;
+    if (!isOwner(c.from!.id, du.id, firstId)) return say(c, "That's a check for whoever runs lifeline. If something isn't working for you, tell me what happened and I'll do what I can, or pass it on to them.");
     await c.replyWithChatAction("typing").catch(() => {});
     const chain = providerChain();
     const age = (t: number | null) => (t ? (Date.now() - t < 90_000 ? `${Math.round((Date.now() - t) / 1000)}s ago` : `${Math.round((Date.now() - t) / 60_000)} min ago`) : "never");
@@ -549,11 +566,14 @@ export function createBot(db: Db): Bot {
     const isNote = Boolean(c.message?.video_note);
     const text = await transcribe(audio, isNote ? "note.mp4" : "voice.ogg", isNote ? "video/mp4" : c.message?.audio?.mime_type ?? "audio/ogg").catch(() => null);
     if (!text) return say(c, "I couldn't make out that voice note. Once more, or type it?");
-    await c.reply(`<i>“${toHtml(text.length > 900 ? `${text.slice(0, 900)}…` : text)}”</i>`, { parse_mode: "HTML" }).catch(() => c.reply(`“${text.slice(0, 900)}”`).catch(() => {}));
+    // First what I heard (folded away when it's long), then the answer in text, then the answer spoken.
+    const heard = toHtml(text.length > 3000 ? `${text.slice(0, 3000)}…` : text);
+    await c.reply(text.length > 280 ? `<b>You said</b>\n<blockquote expandable>${heard}</blockquote>` : `<b>You said:</b> <i>${heard}</i>`, { parse_mode: "HTML", reply_parameters: { message_id: c.message!.message_id, allow_sending_without_reply: true } })
+      .catch(() => c.reply(`You said: ${text.slice(0, 900)}`).catch(() => {}));
     const steps = stepsFor(c);
     const live = draftFor(c);
     try {
-      await send(c, await handleMessage(db, u, text, { channel: "telegram", progress: steps.step, note: async (t: string) => { await c.reply(toHtml(t), { parse_mode: "HTML" }).catch(() => {}); }, draft: live.draft, stop: live.stop }), true);
+      await send(c, await handleMessage(db, u, text, { channel: "telegram", voice: true, progress: steps.step, note: async (t: string) => { await c.reply(toHtml(t), { parse_mode: "HTML" }).catch(() => {}); }, draft: live.draft, stop: live.stop }), true);
     } finally { live.end(); }
     await steps.done();
   });
