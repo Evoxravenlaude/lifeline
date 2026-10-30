@@ -275,6 +275,14 @@ window.App = (function () {
   function pendingCards() {
     return (state.pending || []).map((p) => `<div class="card waiting-card"><div class="card-head">${ico("hourglass")}<span>Waiting on your yes</span><span class="sp"></span><span class="small">ten minutes from asking</span></div><div class="card-body"><p>${esc(p.echo)}</p><div class="row"><button class="btn metal" data-btn="confirm:${p.id}">Yes, go ahead</button><button class="btn" data-btn="cancel:${p.id}">No</button></div></div></div>`).join("");
   }
+  /* A link button ("url:https://...") opens the link instead of asking the server; caught before any button's own handler. */
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest('[data-btn^="url:"]');
+    if (!b) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const u = b.dataset.btn.slice(4);
+    if (/^https:\/\//.test(u)) window.open(u, "_blank", "noopener");
+  }, true);
   function wireButtons(scope) { $$("[data-btn]", scope).forEach((b) => b.addEventListener("click", () => press(b.dataset.btn, b))); }
   async function press(data, el) {
     if (el) el.disabled = true;
@@ -817,7 +825,7 @@ window.App = (function () {
   function wireScout() { wireTries($("#scoutOut")); $$("[data-outreach]").forEach((b) => b.addEventListener("click", () => { const ask = window.prompt(`What do you want from ${b.dataset.outreach}?`, "a partnership"); if (!ask) return; sessionStorage.setItem("ll_prefill", `draft outreach to ${b.dataset.outreach}: ${ask}`); location.hash = "chat"; })); }
   async function scout() {
     const niche = $("#niche").value.trim(); if (!niche) return $("#niche").focus();
-    $("#scoutOut").innerHTML = `<div class="card k-scout">${empty(`Turning over stones: GitHub, CoinGecko, DefiLlama, Show HN${me.gemini ? " and the open web" : ""}. Half a minute.`)}</div>`;
+    $("#scoutOut").innerHTML = `<div class="card k-scout">${empty(`Turning over stones: GitHub, CoinGecko, DefiLlama, Show HN${me.web ? " and the open web" : ""}. Half a minute.`)}</div>`;
     const r = await api("/api/scout", { niche, objective: $("#obj").value.trim() || undefined });
     $("#scoutOut").innerHTML = scoutCards(r.results || [], r.watches || []); wireScout();
     toast(r.results ? (r.results.length ? `${r.results.length} projects, with the people behind them.` : "Nothing yet for that one.") : "That search slipped.", "scout");
@@ -880,7 +888,7 @@ window.App = (function () {
         <div class="card k-event">${cardHead("moon", "Calm")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Calm mode keeps nudges for your morning note. A quiet day holds everything except what you set yourself, until tomorrow.</p><div class="seg" role="group" aria-label="Calm mode"><button data-calm="true" aria-pressed="${s.calm === true}">Calm on</button><button data-calm="false" aria-pressed="${s.calm !== true}">Calm off</button></div><div class="row"><button class="btn sm" data-say="quiet day">Quiet day today</button></div></div></div>
         <div class="card k-trip">${cardHead("chat", "On Telegram")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Quick logs like "took my meds" get a reaction instead of a reply. Topics split the chat into Money, Health, Trips, Work and Home.</p><div class="seg" role="group" aria-label="Quick logs"><button data-react="true" aria-pressed="${s.reactions !== false}">React</button><button data-react="false" aria-pressed="${s.reactions === false}">Reply in words</button></div><div class="row"><button class="btn sm" data-say="${s.topics ? "stop using topics" : "use topics"}">${s.topics ? "Stop using topics" : "Use topics"}</button></div></div></div>
         <div class="card k-dose">${cardHead("key", "Your data")}<div class="card-body" style="display:grid;gap:12px"><p class="muted">Everything you keep here is yours. Take a copy any time, or delete it all, on every channel. Chat history is kept 180 days.</p><div class="row"><button class="btn sm" id="exportBtn">${ico("out", "sm")}Export my data</button><button class="btn sm ghost danger" id="deleteBtn">Delete my account</button><a class="btn sm ghost" href="/privacy" target="_blank" rel="noopener">Privacy</a></div><div id="dataOut"></div></div></div>
-        <div class="card k-list">${cardHead("sliders", "Under the hood")}<div class="card-body"><dl class="kv"><dt>Model</dt><dd>${esc(s.provider || "plain language only, no model key")}</dd><dt>Spend today</dt><dd>$${Number(s.spend || 0).toFixed(3)} of $${s.budget}</dd></dl></div></div>
+        <div class="card k-list">${cardHead("sliders", "Under the hood")}<div class="card-body"><dl class="kv"><dt>Thinking</dt><dd>${esc(s.owner && s.provider ? `${s.thinking} (${s.provider} first)` : s.thinking || "A mix of models, picked per task")}</dd><dt>Spend today</dt><dd>$${Number(s.spend || 0).toFixed(3)} of $${s.budget}</dd></dl></div></div>
       </div></div>`;
     waysCard($("#waysHost"));
     appCard($("#appHost"), s);
@@ -917,6 +925,10 @@ window.App = (function () {
       const code = ((r.text || "").match(/\b[A-Z0-9]{6}\b/) || [""])[0];
       if (!code) return toast("I couldn't make a code just now. Try again in a moment.");
       const o = $("#linkOut"); o.textContent = code; o.dataset.copy = `link ${code}`; o.hidden = false;
+      if (s.mailIn && !$("#mailLink")) {
+        const subj = encodeURIComponent(`link ${code}`), body = encodeURIComponent(`link ${code}\n\n(Just press send. This links this email address to your lifeline.)`);
+        o.insertAdjacentHTML("afterend", `<a class="btn sm" id="mailLink" href="mailto:${esc(s.mailIn)}?subject=${subj}&body=${body}">${ico("out", "sm")}Link my email in one tap</a>`);
+      }
     });
   }
 

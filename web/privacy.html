@@ -96,8 +96,8 @@
   <h2>Outside services</h2>
   <p>lifeline passes each service the minimum it needs:</p>
   <ul>
-    <li><b>AI model providers</b> (Anthropic, Google Gemini, OpenAI or Groq). They get the message, recent conversation, confirmed memories, your name and time zone, to understand you and reply. They don't get your whole history.</li>
-    <li><b>Web search</b> (Gemini, OpenAI or Groq). It gets the question, and your city when it matters.</li>
+    <li><b>AI model providers.</b> lifeline runs on several, picked per task. Whichever one handles a message gets that message, the recent conversation, a short summary of earlier turns, confirmed memories, your name and time zone, to understand you and reply. It doesn't get your whole history. Each provider's own terms for developers cover what it does with what's sent; some free tiers may use it to improve their services.</li>
+    <li><b>Web search</b> through those same providers. It gets the question, and your city when it matters. "Find my personal data online" sends your name and the details you choose to search for, so it can look.</li>
     <li><b>Messaging.</b> Telegram, text and iMessage providers (Twilio, httpSMS, TextBee, Sendblue or BlueBubbles), email (Resend or SMTP), and app notification services (Google, Mozilla, Apple, Microsoft). Each gets the message and the address it goes to.</li>
     <li><b>Sign-in</b> with Google or Apple: confirmation of who you are.</li>
     <li><b>Lookups you ask for.</b> A link to Google Safe Browsing. Public wallet addresses to GoPlus, Etherscan, OpenSea and Magic Eden. A city, country, team or flight number for weather, prayer times, holidays, sports and flights.</li>
