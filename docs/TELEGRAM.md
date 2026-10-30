@@ -39,12 +39,22 @@ It needs `WEB_URL` set to the https address of the website (the Vercel address).
 
 ## The menu, redesigned
 
-- `/menu` opens a home screen with a picture card above it, drawn in the website's paper and ink: a greeting, the date, Pip in a pose that fits the hour, and three plates (what's next, what's open or waiting, this week's spending). Each section (Today, Lists, Money...) has its own card. Underneath, the facts read as a small tree, the way a dashboard does.
-- The card is a picture at a signed address that expires in two days (`/card/<kind>.png`, drawn by `src/core/cards.ts`, served by `src/web/extras.ts`). Telegram fetches it, so it needs `PUBLIC_URL` set to the server's https address. Without it the menu is text only, which still works. "plain menu" turns the picture off for one person.
-- Lists in any reply are drawn the same way: `├` for each item, `└` for the last.
+- `/menu` sends a real photo: the dashboard, drawn in the website's paper and ink (`src/core/dashboard.ts`). It shows only what's real: what's still to come today with times (events, reminders, classes, doses), later this week when today is light, doses taken, this week's spending and where most of it went, what's coming (a trip, a birthday, a renewal, a document running out), and anything waiting on a yes. "updated 08:12" sits in the corner.
+- The text under it is the photo's caption, written as a small tree, with the menu buttons below. Tapping the picture opens Telegram's photo viewer, where it can be saved. No outside link.
+- Moving around the menu swaps the picture in place: each section (Today, Lists, Health, Money, Trips, Play, Settings) has its own picture with its real rows. A long page shows its start and a "Read it all" button.
+- The home dashboard keeps itself current. When what it says changes (a dose taken, a reminder passed, a spend logged, something new waiting), it's redrawn where it is, quietly (edits never notify). It's checked every five minutes and right after anything you change. Telegram lets a bot edit a message for about two days; after that, `/menu` sends a fresh one.
+- "plain menu" turns the pictures off for one person.
+- Lists in any reply are drawn as a tree: `├` for each item, `└` for the last.
 - The command list behind the Menu button is six commands: menu, today, everything, app, settings, help. The old ones still work if typed.
-- Long work (researching a trip plan) shows its steps in one small message that updates as it goes, then settles to "Completed N steps", with the answer below.
 
 ## Trip plans
 
-"help me plan a trip to Liechtenstein" asks when and from where, then researches visas for the person's passport, getting there, where to stay, what to do and where to eat with live web search, and writes it up as a page at `/plan/<id>` on the server (unlisted, not indexed, taken down with "delete my Liechtenstein plan"). The reply leads with the one thing to start first, usually the visa. "plan a trip to Accra from dec 20 to dec 27" still makes a quick trip with dates and a packing list.
+"Plan a trip to Tunisia" (or "help me plan…", "itinerary for Kyoto") goes the way a person would do it:
+
+1. A couple of anchors: when, and what kind of trip. If lifeline knows their city, it plans from there and says so.
+2. "On it." with what it's about to do (visa rules for their passport first, since they set the clock).
+3. One small message ticks through the steps as they finish, then settles to "Completed N steps".
+4. "Your Tunisia plan is built. Publishing the full itinerary now."
+5. The picture comes into the chat as a photo, with the plan under it: the link (on the website's own address), the one thing that sets the clock, where it would base them, and two questions to shape the next pass.
+
+The page lives at `/plan/<id>` on the website (unlisted, not indexed; "delete my Tunisia plan" takes it down). With a date, the trip is also added to their trips with a packing list. "plan a trip to Accra from dec 20 to dec 27" still makes the quick version.
