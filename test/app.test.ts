@@ -51,8 +51,9 @@ beforeAll(async () => {
   registerSender("telegram", async (to, reply) => { if (telegramDown) throw new Error("telegram down"); telegramSent.push({ to, reply }); });
 });
 beforeEach(() => {
-  config.vapidPublicKey = "BAvapidPublicKeyForTestsOnly0000000000000000000000000000000000000000000000000000000000";
-  config.vapidPrivateKey = "test-private"; config.vapidSubject = "mailto:owner@example.com";
+  // Keys shaped like real ones (a 65-byte public point, a 32-byte private key): pushOn() checks the shape.
+  config.vapidPublicKey = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString("base64url");
+  config.vapidPrivateKey = Buffer.alloc(32, 9).toString("base64url"); config.vapidSubject = "mailto:owner@example.com";
   usePushClient(client); pushes.length = 0; telegramSent.length = 0; failWith = null; telegramDown = false;
 });
 afterEach(() => { vi.restoreAllMocks(); });

@@ -412,3 +412,68 @@ describe("planning a trip the way a person would", () => {
     expect(r.text).not.toMatch(/railway/);
   }, 30_000);
 });
+
+describe("research, properly", () => {
+  it("plans angles, searches each, reads the best page, answers with numbered sources, showing its steps", async () => {
+    Object.assign(config, { geminiKey: "", openaiKey: "", anthropicKey: "", openaiCompatKey: "gsk_test", openaiCompatBaseUrl: "https://api.groq.com/openai/v1", provider: "openai" });
+    const { resolver } = await import("../src/core/safefetch.js");
+    const realLookup = resolver.lookup;
+    resolver.lookup = async () => ["93.184.216.34"];
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      const url = String(input?.url ?? input);
+      calls.push(url);
+      if (/api\.groq\.com/.test(url)) {
+        const body = JSON.parse(init?.body ?? "{}");
+        if (body.model === config.groqSearchModel) {
+          return new Response(JSON.stringify({ choices: [{ message: { content: `Found: ${body.messages.at(-1).content}`, executed_tools: [{ search_results: { results: [{ title: "Visa guide", url: "https://gov.example.pt/visa" }, { title: "Expat forum", url: "https://forum.example.com/t/1" }] } }] } }] }), { headers: { "content-type": "application/json" } });
+        }
+        const sys = String(body.messages?.[0]?.content ?? "");
+        const text = /plan web research/.test(sys) ? JSON.stringify({ queries: ["Portugal visa rules for Nigerian citizens 2026", "Portugal D7 visa requirements"] }) : "You need a Schengen visa for a short stay [1]. For living there, the D7 route asks for proof of passive income [2].";
+        return new Response(JSON.stringify({ choices: [{ message: { content: text } }], usage: { prompt_tokens: 5, completion_tokens: 5 } }), { headers: { "content-type": "application/json" } });
+      }
+      if (/gov\.example\.pt/.test(url)) return new Response(`<html><head><script>steal()</script></head><body><h1>Visas</h1><p>${"Short stays need a Schengen visa. ".repeat(20)}</p></body></html>`, { headers: { "content-type": "text/html" } });
+      return new Response("nope", { status: 404 });
+    }));
+    try {
+      const u = await ensureUser(db, "telegram", "8701", "Kemi");
+      const said: string[] = [], steps: string[] = [];
+      const r = await handleMessage(db, u, "look into whether I need a visa for Portugal", { channel: "telegram", note: (t) => { said.push(t); }, progress: (s) => { steps.push(s); } });
+      expect(said[0]).toMatch(/^On it\./);
+      expect(steps).toEqual(expect.arrayContaining(["Working out what to look up", "Searched: Portugal D7 visa requirements", "Reading gov.example.pt", "Putting it together"]));
+      expect(r.text).toMatch(/^You need a Schengen visa for a short stay \[1\]/);
+      expect(r.text).toMatch(/\*\*Sources\*\*\n1\. \[Visa guide\]\(https:\/\/gov\.example\.pt\/visa\)/);
+      expect(r.buttons?.[0].label).toBe("Dig deeper");
+    } finally { resolver.lookup = realLookup; }
+  }, 30_000);
+
+  it("reads a page as plain text, without scripts", async () => {
+    const { pageText } = await import("../src/modules/research.js");
+    expect(pageText("<html><script>evil()</script><style>x{}</style><p>Hello &amp; welcome</p><br>Next line</html>")).toBe("Hello & welcome\nNext line");
+  });
+});
+
+describe("search with an OpenAI key", () => {
+  it("uses OpenAI's web search and keeps its citations", async () => {
+    Object.assign(config, { geminiKey: "", openaiKey: "sk-test", openaiCompatKey: "" });
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      expect(String(input)).toBe("https://api.openai.com/v1/responses");
+      const body = JSON.parse(init.body);
+      expect(body.tools).toEqual([{ type: "web_search" }]);
+      return new Response(JSON.stringify({ output: [{ type: "web_search_call", status: "completed" }, { type: "message", content: [{ type: "output_text", text: "Arsenal won 2 to 1.", annotations: [{ type: "url_citation", url: "https://bbc.co.uk/sport/1", title: "BBC Sport" }] }] }] }), { headers: { "content-type": "application/json" } });
+    }));
+    const { search } = await import("../src/core/media.js");
+    expect(await search("who won the arsenal game", "Europe/London")).toEqual({ answer: "Arsenal won 2 to 1.", sources: [{ uri: "https://bbc.co.uk/sport/1", title: "BBC Sport" }] });
+  });
+
+  it("explains exactly what's wrong with notification keys", async () => {
+    const { vapidProblem } = await import("../src/core/webpush.js");
+    Object.assign(config, { vapidPublicKey: "BLF7N5o9Yf", vapidPrivateKey: "x", vapidSubject: "me@example.com" });
+    expect(vapidProblem()).toMatch(/VAPID_PUBLIC_KEY doesn't look like/);
+    const pub = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 1)]).toString("base64url");
+    Object.assign(config, { vapidPublicKey: pub, vapidPrivateKey: Buffer.alloc(32, 2).toString("base64url"), vapidSubject: "me@example.com" });
+    expect(vapidProblem()).toMatch(/VAPID_SUBJECT should be mailto:/);
+    Object.assign(config, { vapidSubject: "mailto:me@example.com" });
+    expect(vapidProblem()).toBeNull();
+  });
+});
