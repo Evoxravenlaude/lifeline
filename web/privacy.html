@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacy · lifeline</title>
+<meta name="description" content="What lifeline keeps, what it never keeps, who sees what, and how to take your data with you or delete it.">
+<meta name="theme-color" content="#EDE6D6">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<style>
+  /* Kept in step with the privacy doc (see docs/SPEC-AND-PRIVACY.md). Self-contained, like the offline page. */
+  :root { --paper: #EDE6D6; --panel: #F7F2E7; --ink: #1F1B16; --ink-2: #4F473C; --ink-3: #7A7062; --line: #D6CCB8; --accent: #2D4A3A; --plate: #B9CCA6; }
+  @media (prefers-color-scheme: dark) { :root { --paper: #0F1411; --panel: #161D18; --ink: #ECE5D3; --ink-2: #C3BBA8; --ink-3: #8F8878; --line: #2C352E; --accent: #8DB39A; --plate: #4D6340; } }
+  @font-face { font-family: "EB Garamond"; font-style: normal; font-display: swap; font-weight: 400 800; src: url("/fonts/eb-garamond-latin-wght-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Libre Caslon Display"; font-style: normal; font-display: swap; font-weight: 400; src: url("/fonts/libre-caslon-display-latin-400-normal.woff2") format("woff2"); }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 1.125rem/1.6 "EB Garamond", Georgia, serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 72px; }
+  a { color: var(--accent); }
+  .top { display: flex; align-items: baseline; gap: 12px; margin-bottom: 28px; }
+  .top a { font-family: "Libre Caslon Display", Georgia, serif; font-size: 1.3rem; color: var(--ink); text-decoration: none; }
+  .top span { color: var(--ink-3); font-style: italic; }
+  h1 { font: 400 clamp(2rem, 6vw, 2.8rem)/1.1 "Libre Caslon Display", Georgia, serif; margin: 0 0 10px; }
+  .lede { color: var(--ink-2); margin: 0 0 28px; }
+  h2 { font: 400 1.5rem/1.2 "Libre Caslon Display", Georgia, serif; margin: 40px 0 10px; }
+  p, li { color: var(--ink-2); }
+  ul { padding-left: 1.2em; }
+  li { margin: 6px 0; }
+  li b, p b { color: var(--ink); }
+  .card { padding: 20px 22px; border: 1.5px solid var(--ink); border-radius: 10px; background: var(--panel); box-shadow: 4px 4px 0 0 var(--plate); }
+  .card ul { margin: 0; }
+  .table { overflow-x: auto; margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-size: 1rem; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  td { color: var(--ink-2); }
+  tr:last-child td { border-bottom: 0; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .9em; background: var(--paper); padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+  .foot { margin-top: 48px; color: var(--ink-3); font-size: 1rem; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><a href="/">lifeline</a><span>privacy</span></div>
+  <h1>Privacy, plainly</h1>
+  <p class="lede">lifeline keeps what you tell it so it can bring it back at the right time, and nothing else. It is run by one person for a small circle of up to 55 people. Nothing is sold, and there are no ads. Last updated 30 October 2026.</p>
+
+  <div class="card"><ul>
+    <li><b>Yours, not ours.</b> What you keep is used to help you. It is never sold, shared for marketing, or used to profile you.</li>
+    <li><b>Your yes first.</b> Nothing that spends money, deletes something or reaches another person happens without you confirming it.</li>
+    <li><b>Secrets stay out.</b> Passwords, seed phrases, private keys, API tokens and card numbers are removed before anything is saved.</li>
+    <li><b>Groups see nothing personal.</b> Your reminders, health, money and memories never appear in a group chat.</li>
+    <li><b>Leave with everything.</b> Say "export my data" for a full copy, or "delete my account" to erase it all.</li>
+    <li><b>History doesn't pile up.</b> Chat history is deleted after 180 days. What you asked lifeline to keep stays until you delete it.</li>
+  </ul></div>
+
+  <h2>What lifeline keeps</h2>
+  <div class="table"><table>
+    <tr><th>What</th><th>Examples</th><th>How long</th></tr>
+    <tr><td>Account</td><td>Your name from sign-in, time zone, city, country, currency, settings</td><td>Until you delete your account</td></tr>
+    <tr><td>Ways to reach you</td><td>Telegram id, phone number, email, Google or Apple id, app notification address</td><td>Until you remove it</td></tr>
+    <tr><td>Your day</td><td>Calendar, reminders, lists, notes, classes, trips, plans, birthdays</td><td>Until you delete them</td></tr>
+    <tr><td>Body and mind</td><td>Medication and doses, cycle, sleep, weight, mood, habits, symptoms, checkups</td><td>Until you delete them</td></tr>
+    <tr><td>Money</td><td>Spending, bills, subscriptions, who owes whom, savings circles, document expiry dates</td><td>Until you delete them</td></tr>
+    <tr><td>People</td><td>Contacts you name for keep-in-touch, caregiver texts, safety check-ins, legacy messages</td><td>Until you delete them</td></tr>
+    <tr><td>Work, crypto, creative</td><td>Watched sites and repos, public wallet addresses, mints, commissions</td><td>Until you stop or delete them</td></tr>
+    <tr><td>Memories</td><td>Facts you confirmed</td><td>Until you say "forget"</td></tr>
+    <tr><td>Conversation</td><td>Your messages and the replies, secrets removed</td><td>180 days</td></tr>
+    <tr><td>Audit log</td><td>Which action ran, when, and whether you said yes</td><td>365 days</td></tr>
+  </table></div>
+  <p>Voice notes and photos are turned into text or a description and then discarded. The recording and the picture are not stored.</p>
+
+  <h2>What it never keeps</h2>
+  <ul>
+    <li><b>Passwords and PINs.</b> They are refused in plain words. A note on where to find things is fine.</li>
+    <li><b>Seed phrases and private keys.</b> They are replaced with "[hidden seed phrase]" or "[hidden key]" before saving. A transaction hash is left alone.</li>
+    <li><b>API keys, tokens and card numbers.</b> These are replaced before saving, too.</li>
+  </ul>
+  <p>lifeline only ever reads crypto wallets. It never asks for a key and cannot sign anything.</p>
+
+  <h2>Who sees what</h2>
+  <div class="table"><table>
+    <tr><th>Where</th><th>Who sees what</th></tr>
+    <tr><td>Your chat, the app, texts, email</td><td>Only you, everything you keep</td></tr>
+    <tr><td>A group with lifeline in it</td><td>Only group things: splits, the shared list, time polls, trivia, birthdays, voice cards. Your own share of a bill is shown to you alone.</td></tr>
+    <tr><td>Typing @lifeline in another chat</td><td>Everyone there: a worked-out split or a general answer, never your records</td></tr>
+    <tr><td>Caregiver texts</td><td>The person you named, after they reply YES</td></tr>
+    <tr><td>Safety check-ins</td><td>Your safety contacts, only if you don't check in: your last shared location and what you told lifeline</td></tr>
+    <tr><td>If something happens to me</td><td>The people you chose, after a waiting period and several pings to you first</td></tr>
+    <tr><td>Scam reports and Wrapped</td><td>Counts only, never who. Wrapped comparisons only among people who opted in, never health, cycle or mood.</td></tr>
+    <tr><td>Your lock screen</td><td>A generic line for health, mood and safety notifications, not the details</td></tr>
+  </table></div>
+
+  <h2>Outside services</h2>
+  <p>lifeline passes each service the minimum it needs:</p>
+  <ul>
+    <li><b>AI model providers</b> (Anthropic, Google Gemini, OpenAI or Groq). They get the message, recent conversation, confirmed memories, your name and time zone, to understand you and reply. They don't get your whole history.</li>
+    <li><b>Web search</b> (Gemini, OpenAI or Groq). It gets the question, and your city when it matters.</li>
+    <li><b>Messaging.</b> Telegram, text and iMessage providers (Twilio, httpSMS, TextBee, Sendblue or BlueBubbles), email (Resend or SMTP), and app notification services (Google, Mozilla, Apple, Microsoft). Each gets the message and the address it goes to.</li>
+    <li><b>Sign-in</b> with Google or Apple: confirmation of who you are.</li>
+    <li><b>Lookups you ask for.</b> A link to Google Safe Browsing. Public wallet addresses to GoPlus, Etherscan, OpenSea and Magic Eden. A city, country, team or flight number for weather, prayer times, holidays, sports and flights.</li>
+    <li><b>Flutterwave</b>, only for a bill you said yes to: the biller, the amount and the account number for that bill.</li>
+  </ul>
+  <p>The data is stored with Supabase (Postgres). The server runs on Railway and the website on Vercel, with secrets in Doppler.</p>
+
+  <h2>Storage and security</h2>
+  <ul>
+    <li><b>Database.</b> One Postgres database, reached only by the lifeline server, over an encrypted connection.</li>
+    <li><b>Backups.</b> These follow the host's schedule, so a deleted record can stay in a backup until that copy expires.</li>
+    <li><b>Sign-in.</b> Codes are stored hashed, expire quickly and are rate-limited. Google and Apple sign-ins use one-time checks.</li>
+    <li><b>Links.</b> Picture and plan links are signed and expire. Plan pages are unlisted.</li>
+    <li><b>Reading the web.</b> lifeline only fetches public addresses and checks every redirect.</li>
+    <li><b>On your phone.</b> Inside Telegram's app, you can choose to keep your emergency card in Telegram's secure storage on your phone.</li>
+  </ul>
+
+  <h2>Your controls</h2>
+  <div class="table"><table>
+    <tr><th>Say</th><th>What happens</th></tr>
+    <tr><td><code>export my data</code></td><td>A file with everything lifeline keeps about you</td></tr>
+    <tr><td><code>delete my account</code></td><td>After your yes, everything is erased on every channel</td></tr>
+    <tr><td><code>what do you know about me</code></td><td>Your confirmed memories</td></tr>
+    <tr><td><code>forget that ...</code></td><td>That memory is removed</td></tr>
+    <tr><td><code>delete my symptom log</code>, <code>forget my cycle data</code>, <code>delete my incident log</code></td><td>That part of your records is removed</td></tr>
+    <tr><td><code>calm mode on</code>, <code>quiet day</code></td><td>Fewer nudges, or none today</td></tr>
+    <tr><td><code>undo</code></td><td>The last change is reversed, within five minutes</td></tr>
+  </table></div>
+
+  <h2>Health, safety and money</h2>
+  <p>lifeline helps you remember and keep track. It is not a doctor, an emergency service, a lawyer or a financial adviser.</p>
+  <ul>
+    <li><b>Medication.</b> It reminds you of what you told it, and never suggests doses or changes.</li>
+    <li><b>Cycle.</b> Predictions are estimates, not contraception.</li>
+    <li><b>Safety check-ins.</b> These depend on your phone and the network, so use them as an extra layer, never your only plan.</li>
+    <li><b>Scam checks.</b> A check that finds nothing never means safe.</li>
+    <li><b>Money tools.</b> Debt plans, tax dates and rent timelines are arithmetic and reminders, not advice.</li>
+  </ul>
+
+  <h2>Changes and contact</h2>
+  <p>If this changes in a way that matters, everyone in the circle hears about it in their morning note before the change takes effect. lifeline is for people 18 and over. For questions or requests, write to <b>[contact to be added]</b>.</p>
+
+  <p class="foot"><a href="/">Back to lifeline</a></p>
+</main>
+</body>
+</html>

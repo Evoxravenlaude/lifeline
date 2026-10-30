@@ -302,7 +302,7 @@ export function explain(c: Capability, asked = ""): string {
 
 /** The short answer to "who are you". */
 export function intro(): string {
-  return `I'm lifeline, and the tortoise is Pip. I'm a personal assistant for everyday life. I keep your day (calendar, reminders, lists, birthdays, trips), your body (medication, your period and cycle, sleep, weight, mood, habits), your money (what you spend, bills when you say yes), and, if you want it, your work: jobs, companies and the people behind them, hackathons. Ask "what can you do" for the long version, or just tell me something.`;
+  return `I'm lifeline, and the tortoise is Pip. I'm a personal assistant for everyday life, wherever you live. I keep your day (calendar, reminders, lists, birthdays, trips and trip plans), your body (medication, your cycle, sleep, mood, habits), your money (spending, bills, who owes you, subscriptions, savings circles), your home and paperwork, and your safety (a second look at messages that feel off, check-ins on the way home, an emergency card). In a group I split bills and find a time. If you build, hold crypto or make things, I watch those too. Ask "what can you do" for the long version, or just tell me something.`;
 }
 
 export function overview(name?: string | null): string {
@@ -393,7 +393,7 @@ export function everythingGroup(i: number): string | null {
 
 /** /help: the same calm index, with how buttons work. */
 export function helpIndex(): string {
-  return `${everythingIndex().replace(", or open a drawer below", "")}\n\nButtons: Yes, No, Undo, OK. By text message, reply 1 or 2. Say pending for what's waiting, undo to take back the last thing, quiet day for a day without nudges.`;
+  return `${everythingIndex().replace(", or open a drawer below", "")}\n\nButtons: Yes, No, Undo, OK. By text message, reply 1 or 2. Say pending for what's waiting, undo to take back the last thing, quiet day for a day without nudges. Your data is yours: export my data for a copy, delete my account to leave.`;
 }
 
 /** Compact catalogue for the model's system prompt. */
