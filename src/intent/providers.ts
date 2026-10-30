@@ -16,6 +16,8 @@ export interface Completion {
   grounding?: { uri: string; title?: string }[];
   /** The person stopped it part way; `text` is what was written by then. */
   stopped?: boolean;
+  /** Which tier actually answered (a fast model that isn't there falls back to the smart one). */
+  tier?: Tier;
 }
 export interface CompleteOpts {
   system: string; messages: Msg[]; tools?: Tool[]; maxTokens?: number; grounded?: boolean; json?: boolean;
@@ -26,7 +28,10 @@ export interface CompleteOpts {
   onText?: (soFar: string) => void;
   /** Stop early (the person pressed Stop): the text written so far is returned, marked `stopped`. */
   signal?: AbortSignal;
+  /** Which tier to use (src/intent/route.ts). Default "smart". The prompt and context are the same either way. */
+  tier?: Tier;
 }
+export type Tier = "fast" | "smart";
 
 export type Provider = "anthropic" | "gemini" | "openai";
 
@@ -130,6 +135,21 @@ const isGroq = () => /groq\.com/.test(config.openaiCompatBaseUrl);
 const resolved: { openai?: string; gemini?: string } = {};
 export const modelsInUse = () => ({ openai: resolved.openai ?? config.openaiCompatModel, gemini: resolved.gemini ?? config.geminiModel });
 
+/** The fast model for a provider, or null when there's no separate fast tier (or it turned out not to exist). */
+const fastGone = new Set<Provider>();
+export function fastModel(p: Provider): string | null {
+  if (fastGone.has(p)) return null;
+  if (p === "openai") return config.openaiCompatFastModel || (isGroq() ? config.openaiCompatFallbackModel || null : null);
+  if (p === "gemini") return config.geminiFastModel || null;
+  return config.anthropicSmartModel ? config.model : null; // Anthropic: MODEL is quick; MODEL_SMART is the thinker
+}
+/** The model a call uses: fast when asked and there is one, else the smart (main) model. */
+export function modelFor(p: Provider, tier: Tier = "smart"): { model: string; tier: Tier } {
+  const smart = p === "openai" ? resolved.openai ?? config.openaiCompatModel : p === "gemini" ? resolved.gemini ?? config.geminiModel : config.anthropicSmartModel || config.model;
+  const fast = tier === "fast" ? fastModel(p) : null;
+  return fast && fast !== smart ? { model: fast, tier: "fast" } : { model: smart, tier: "smart" };
+}
+
 /** Pick from a provider's own list: the first preference that matches, skipping speech, image, embedding and guard models. */
 export function pickModel(ids: string[], prefer: RegExp[]): string | null {
   const usable = ids.filter((id) => !/whisper|tts|audio|image|vision-only|embed|guard|safeguard|moderation|live|transcribe|aqa|imagen|veo|learnlm|robotics|computer-use/i.test(id));
@@ -181,8 +201,11 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
   const post = (model: string) => fetch(`${config.openaiCompatBaseUrl}/chat/completions`, {
     method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiCompatKey}` }, body: JSON.stringify({ ...body, model }), signal: signalFor(o, live ? STREAM_TIMEOUT_MS : CALL_TIMEOUT_MS),
   });
-  const main = resolved.openai ?? config.openaiCompatModel;
+  const pick = modelFor("openai", o.tier);
+  const main = pick.model;
   let r = await post(main);
+  // A fast model that isn't there: stop asking for it, and answer with the smart one.
+  if (pick.tier === "fast" && (r.status === 404 || (r.status === 400 && /model/i.test(await r.clone().text())))) { fastGone.add("openai"); return openaiCompat({ ...o, tier: "smart" }); }
   // Rate-limited, too large, or the model was retired: try the second model before giving up on this provider.
   if ((r.status === 429 || r.status === 413 || r.status === 404) && config.openaiCompatFallbackModel && config.openaiCompatFallbackModel !== main) r = await post(config.openaiCompatFallbackModel);
   if (r.status === 404 || r.status === 400 && /model/i.test(await r.clone().text())) {
@@ -190,6 +213,7 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
     if (found && found !== main) { r = await post(found); if (r.ok) resolved.openai = found; }
   }
   if (!r.ok) throw new Error(`${config.openaiCompatBaseUrl.replace(/^https?:\/\//, "")} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const tierUsed = pick.tier;
   if (live) {
     let text = "", name = "", argText = "", usage = { input: 0, output: 0 }, stopped = false;
     try {
@@ -203,7 +227,7 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
     } catch (e) { if (!stoppedBy(o)) throw e; stopped = true; }
     let args: Record<string, unknown> = {};
     if (argText) { try { args = JSON.parse(argText); } catch { args = {}; } }
-    return { text: text.trim(), toolCall: name && !stopped ? { name, args } : undefined, usage, ...(stopped ? { stopped } : {}) };
+    return { text: text.trim(), toolCall: name && !stopped ? { name, args } : undefined, usage, tier: tierUsed, ...(stopped ? { stopped } : {}) };
   }
   const j: any = await r.json();
   const m = j.choices?.[0]?.message ?? {};
@@ -214,14 +238,16 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
     text: (m.content ?? "").trim(),
     toolCall: tc ? { name: tc.name, args } : undefined,
     usage: { input: j.usage?.prompt_tokens ?? 0, output: j.usage?.completion_tokens ?? 0 },
+    tier: tierUsed,
   };
 }
 
 async function anthropic(o: CompleteOpts): Promise<Completion> {
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
   const client = new Anthropic({ apiKey: config.anthropicKey, timeout: CALL_TIMEOUT_MS, maxRetries: 0 });
+  const pick = modelFor("anthropic", o.tier);
   const req = {
-    model: config.model,
+    model: pick.model,
     max_tokens: o.maxTokens ?? 1500,
     system: o.system,
     tools: o.tools?.map((t) => ({ name: t.name, description: t.description, input_schema: z.toJSONSchema(t.schema, { io: "input" }) as any })),
@@ -241,18 +267,24 @@ async function anthropic(o: CompleteOpts): Promise<Completion> {
         text: res.content.filter((c) => c.type === "text").map((c: any) => c.text).join("\n").trim(),
         toolCall: tool && tool.type === "tool_use" ? { name: tool.name, args: tool.input as any } : undefined,
         usage: { input: res.usage.input_tokens, output: res.usage.output_tokens },
+        tier: pick.tier,
       };
     } catch (e) {
       if (!stoppedBy(o)) throw e;
       return { text: text.trim(), usage: { input: 0, output: 0 }, stopped: true };
     } finally { o.signal?.removeEventListener("abort", onStop); }
   }
-  const res = await client.messages.create(req);
+  const res = await client.messages.create(req).catch((e: any) => {
+    if (pick.tier === "fast" && /not_found|404/.test(String(e?.status ?? e?.message))) { fastGone.add("anthropic"); return null; }
+    throw e;
+  });
+  if (!res) return anthropic({ ...o, tier: "smart" });
   const tool = res.content.find((c) => c.type === "tool_use");
   return {
     text: res.content.filter((c) => c.type === "text").map((c: any) => c.text).join("\n").trim(),
     toolCall: tool && tool.type === "tool_use" ? { name: tool.name, args: tool.input as any } : undefined,
     usage: { input: res.usage.input_tokens, output: res.usage.output_tokens },
+    tier: pick.tier,
   };
 }
 
@@ -283,8 +315,10 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
   const post = (model: string) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:${live ? "streamGenerateContent?alt=sse&" : "generateContent?"}key=${config.geminiKey}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: signalFor(o, live ? STREAM_TIMEOUT_MS : o.grounded ? CALL_TIMEOUT_MS * 3 : CALL_TIMEOUT_MS),
   });
-  const main = resolved.gemini ?? config.geminiModel;
+  const pick = modelFor("gemini", o.grounded ? "smart" : o.tier);
+  const main = pick.model;
   let r = await post(main);
+  if (pick.tier === "fast" && (r.status === 404 || (r.status === 400 && /model/i.test(await r.clone().text())))) { fastGone.add("gemini"); return gemini({ ...o, tier: "smart" }); }
   if (r.status === 404) {
     const found = await discoverGemini();
     if (found && found !== main) { r = await post(found); if (r.ok) resolved.gemini = found; }
@@ -303,7 +337,7 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
         if (ev.usageMetadata) usage = { input: ev.usageMetadata.promptTokenCount ?? 0, output: ev.usageMetadata.candidatesTokenCount ?? 0 };
       }
     } catch (e) { if (!stoppedBy(o)) throw e; stopped = true; }
-    return { text: text.trim(), toolCall: fc && !stopped ? { name: fc.name, args: fc.args ?? {} } : undefined, usage, grounding, ...(stopped ? { stopped } : {}) };
+    return { text: text.trim(), toolCall: fc && !stopped ? { name: fc.name, args: fc.args ?? {} } : undefined, usage, grounding, tier: pick.tier, ...(stopped ? { stopped } : {}) };
   }
   const j: any = await r.json();
   const parts: any[] = j.candidates?.[0]?.content?.parts ?? [];
@@ -314,5 +348,6 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
     toolCall: fc ? { name: fc.name, args: fc.args ?? {} } : undefined,
     usage: { input: j.usageMetadata?.promptTokenCount ?? 0, output: j.usageMetadata?.candidatesTokenCount ?? 0 },
     grounding: chunks.map((c: any) => ({ uri: c.web?.uri, title: c.web?.title })).filter((c: any) => c.uri),
+    tier: pick.tier,
   };
 }

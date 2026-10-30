@@ -32,6 +32,12 @@ export const config = {
   openaiCompatModel: process.env.OPENAI_COMPAT_MODEL || "openai/gpt-oss-120b",
   /** Used when the main model is rate-limited (Groq only). Empty string turns it off. */
   openaiCompatFallbackModel: process.env.OPENAI_COMPAT_FALLBACK_MODEL ?? "openai/gpt-oss-20b",
+  /* Two tiers per provider: quick things go to the fast model, thinking to the smart one (src/intent/route.ts).
+     Empty means "use the main model for both". The main models above are the smart tier, except MODEL (Anthropic),
+     which stays the fast tier and MODEL_SMART lifts it. */
+  openaiCompatFastModel: process.env.OPENAI_COMPAT_FAST_MODEL ?? "",
+  geminiFastModel: process.env.GEMINI_FAST_MODEL ?? "gemini-flash-lite-latest",
+  anthropicSmartModel: process.env.MODEL_SMART ?? "",
   // web + messaging channels
   port: Number(process.env.PORT ?? 3000),
   publicUrl: (process.env.PUBLIC_URL ?? "").replace(/\/$/, ""),
