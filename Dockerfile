@@ -1,6 +1,7 @@
 FROM node:22-slim
 # ffmpeg turns spoken replies into Telegram voice notes (OGG/Opus).
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# DejaVu gives the incident-log PDF Cyrillic, Greek, Arabic and more beyond the cards' Latin fonts.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./

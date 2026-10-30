@@ -11,7 +11,9 @@ import type { Db } from "../../../core/db.js";
 import { register } from "../../../policy/registry.js";
 import { addCapability, addCues, addExamples, addRules, addSchema } from "../../../core/plugins.js";
 import { canEmail, sendEmail } from "../../../core/email.js";
+import { log } from "../../../core/log.js";
 import { SECRET_REFUSAL, keepEnding, looksSecret, ownEmail } from "./shared.js";
+import { incidentPdf } from "./pdf.js";
 
 addSchema(`CREATE TABLE IF NOT EXISTS safety_incidents (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), seq INT NOT NULL, logged_at TIMESTAMPTZ NOT NULL, text TEXT NOT NULL, prev_hash TEXT NOT NULL, hash TEXT NOT NULL, UNIQUE (user_id, seq))`);
 
@@ -71,8 +73,8 @@ const incidentShow = defineAction({
   },
 });
 
-export function timeline(rows: Entry[], tz: string, name: string | null): string {
-  const head = `Incident log${name ? ` of ${name}` : ""}, exported ${when(new Date(), tz)} (${tz})`;
+export function timeline(rows: Entry[], tz: string, name: string | null, now = new Date()): string {
+  const head = `Incident log${name ? ` of ${name}` : ""}, exported ${when(now, tz)} (${tz})`;
   const body = rows.map((r) => `${r.seq}. ${when(r.logged_at, tz)}\n${r.text}\nsha256: ${r.hash}`).join("\n\n");
   return `${head}\nEach hash covers the entry and the hash before it.\n\n${body}`;
 }
@@ -80,19 +82,33 @@ export function timeline(rows: Entry[], tz: string, name: string | null): string
 const incidentExport = defineAction({
   name: "incident.export",
   tier: 1,
-  description: "Export the person's whole incident log as a plain-text timeline with each entry's hash, check the chain is intact, and email it to their own confirmed address if they have one.",
+  description: "Export the person's whole incident log as a PDF (and a plain-text timeline by email) with each entry's time and hash, check the chain is intact, and email it to their own confirmed address if they have one.",
   schema: z.object({}),
   async run(_a, ctx) {
     const rows = await all(ctx.db, ctx.user.id);
     if (!rows.length) return { reply: "Your incident log is empty, so there's nothing to export yet." };
     const broken = verifyChain(rows);
-    const text = timeline(rows, ctx.user.tz, ctx.user.name);
+    const text = timeline(rows, ctx.user.tz, ctx.user.name, ctx.now);
     const to = canEmail() ? await ownEmail(ctx.db, ctx.user) : null;
     const mailed = to ? await sendEmail(to, "Your incident log", text) : false;
     const check = broken ? `Entry ${broken} doesn't match its hash, so something changed from there on.` : "The chain checks out: no entry has been changed or removed.";
-    return { reply: `${check}${mailed ? ` I've emailed a copy to ${to}.` : ""}\n\n\`\`\`\n${text}\n\`\`\`` };
+    const sent = mailed ? ` I've emailed a copy to ${to}.` : "";
+    const pdf = await exportPdf(rows, ctx.user.tz, ctx.user.name, ctx.now, check);
+    // No PDF (it failed to build): the whole timeline as text, as before.
+    if (!pdf) return { reply: `${check}${sent}\n\n\`\`\`\n${text}\n\`\`\`` };
+    const n = `${rows.length} ${rows.length === 1 ? "entry" : "entries"}`;
+    const exact = pdf.missing ? `\n\nA few characters in your entries aren't in the PDF's font, so here is the exact text too:\n\n\`\`\`\n${text}\n\`\`\`` : "";
+    return { reply: `${check} Your incident log is attached as a PDF, ${n} with their times and hashes.${sent}${exact}`, file: pdf.file };
   },
 });
+
+async function exportPdf(rows: Entry[], tz: string, name: string | null, now: Date, status: string) {
+  try {
+    const r = await incidentPdf({ name, tz, status, exported: when(now, tz), entries: rows.map((e) => ({ seq: e.seq, when: when(e.logged_at, tz), text: e.text, hash: e.hash })) });
+    const day = DateTime.fromJSDate(now).setZone(tz).toISODate();
+    return { missing: r.missing, file: { data: Buffer.from(r.bytes).toString("base64"), name: `incident-log-${day}.pdf`, mime: "application/pdf" } };
+  } catch (e: any) { log.warn({ err: e?.message }, "incident pdf failed"); return null; }
+}
 
 const incidentForget = defineAction({
   name: "incident.forget",
@@ -124,5 +140,5 @@ addCapability({
   cues: ["incident log", "evidence log", "harassment", "landlord dispute", "keep a record of what happened"],
   what: "A private, time-stamped record of things you may need evidence of later: harassment at work, a landlord or a bad vendor. Each entry is sealed with a hash linked to the one before, so any change shows.",
   say: ["log incident: what happened", "show my incident log", "export my incident log"],
-  then: "It's never in your brief or anywhere shared. Export it whenever you need it; say \"delete my incident log\" to remove it.",
+  then: "It's never in your brief or anywhere shared. Export it as a PDF whenever you need it; say \"delete my incident log\" to remove it.",
 }, "Safety");

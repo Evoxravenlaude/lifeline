@@ -1,6 +1,7 @@
 /**
  * Emergency card (ICE): only what the person chooses to put on it, shown as a clean card to screenshot
- * or copy into their phone's medical ID. Never in the brief. No government ID numbers.
+ * or copy into their phone's medical ID, or drawn as a lock-screen picture when they ask for one.
+ * Never in the brief. No government ID numbers.
  */
 import { z } from "zod";
 import { DateTime } from "luxon";
@@ -10,6 +11,7 @@ import { register } from "../../../policy/registry.js";
 import { addCapability, addCues, addExamples, addRules, addSchema } from "../../../core/plugins.js";
 import { parseByRules } from "../../../intent/rules.js";
 import { GOV_ID, looksSecret } from "./shared.js";
+import { lockDropsSomething, lockScreenPng } from "./lockscreen.js";
 
 addSchema(`CREATE TABLE IF NOT EXISTS safety_ice (user_id INT PRIMARY KEY REFERENCES users(id), blood TEXT, allergies TEXT, conditions TEXT, meds TEXT, contacts TEXT, plan TEXT, updated_at TIMESTAMPTZ DEFAULT now())`);
 
@@ -107,7 +109,29 @@ const cardShow = defineAction({
     const r = await ctx.db.one<Record<Field, string | null> & { updated_at: string }>(`SELECT * FROM safety_ice WHERE user_id=$1`, [ctx.user.id]);
     if (!r || FIELDS.every((f) => !r[f])) return { reply: "You don't have an emergency card yet. Say \"set up my emergency card\" and I'll ask a few questions; every one is optional." };
     const lines = [`Emergency card${ctx.user.name ? `: ${ctx.user.name}` : ""}`, ...FIELDS.filter((f) => r[f]).map((f) => `${LABEL[f]}: ${r[f]}`), `Updated ${DateTime.fromJSDate(new Date(r.updated_at)).setZone(ctx.user.tz).toFormat("d LLL yyyy")}`];
-    return { reply: `Here's your emergency card. Screenshot it, or copy it into your phone's medical ID or lock screen.\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`` };
+    return {
+      reply: `Here's your emergency card. Screenshot it, or copy it into your phone's medical ID or lock screen.\n\n\`\`\`\n${lines.join("\n")}\n\`\`\``,
+      buttons: [{ label: "Make it a lock-screen picture", data: "say:emergency card picture" }],
+    };
+  },
+});
+
+const cardPicture = defineAction({
+  name: "emergency.card_picture",
+  tier: 1,
+  description: "Draw the person's emergency card as a lock-screen picture (a phone-sized PNG) to set as their wallpaper. Only what's already on their card goes on it.",
+  schema: z.object({}),
+  async run(_a, ctx) {
+    const r = await ctx.db.one<Record<Field, string | null> & { updated_at: string }>(`SELECT * FROM safety_ice WHERE user_id=$1`, [ctx.user.id]);
+    if (!r || FIELDS.every((f) => !r[f])) return { reply: "You don't have an emergency card yet. Say \"set up my emergency card\" and I'll ask a few questions; every one is optional. Then I can make it a lock-screen picture." };
+    const card = { name: ctx.user.name, fields: FIELDS.filter((f) => r[f]).map((f) => ({ label: LABEL[f], value: r[f]! })), updated: DateTime.fromJSDate(new Date(r.updated_at)).setZone(ctx.user.tz).toFormat("d LLL yyyy") };
+    const data = (await lockScreenPng(card)).toString("base64");
+    const drops = lockDropsSomething(card) ? " A few characters aren't in the picture's font, so check it against \"show my emergency card\"." : "";
+    return {
+      reply: `Here's your emergency card as a lock-screen picture. Set it as your lock screen wallpaper; the top is left clear for the clock. The full-size file is attached too.${drops}`,
+      image: { data, mime: "image/png" },
+      file: { data, name: "emergency-card.png", mime: "image/png" },
+    };
   },
 });
 
@@ -129,7 +153,7 @@ const cardForget = defineAction({
   },
 });
 
-register(cardSetup, cardSet, cardShow, cardForget);
+register(cardSetup, cardSet, cardShow, cardPicture, cardForget);
 
 const FIELD_WORDS: [RegExp, Field][] = [[/^blood(?: group| type)?$/i, "blood"], [/^allerg(?:y|ies)$/i, "allergies"], [/^(?:medical )?conditions?$/i, "conditions"], [/^(?:meds|medications?|medicines?)$/i, "meds"], [/^(?:emergency |ice )?contacts?$/i, "contacts"], [/^(?:health ?plan|insurance|health insurance|medical aid|hmo)$/i, "plan"]];
 const fieldOf = (w: string) => FIELD_WORDS.find(([re]) => re.test(w.trim()))?.[1];
@@ -138,6 +162,7 @@ addRules(
   [/^(?:set up|make|create|start|update|fill in) (?:my |an? )?(?:emergency|ice|medical id) card$/i, () => ({ action: "emergency.card_setup", args: {} })],
   [/^(?:show|open|see|view) (?:me )?my (?:emergency|ice|medical id) card$|^(?:my )?(?:emergency|ice) card$/i, () => ({ action: "emergency.card_show", args: {} })],
   [/^(?:forget|delete|erase|remove|wipe) (?:my )?(?:emergency|ice|medical id) card$/i, () => ({ action: "emergency.card_forget", args: {} })],
+  [/^(?:(?:make|show|send|give|get) (?:me )?)?(?:my |an? )?(?:emergency|ice) card (?:as an? )?(?:picture|image|wallpaper|lock ?screen(?: picture| image| wallpaper)?)$|^(?:my |an? )?lock ?screen (?:emergency |ice )?card$|^(?:make|turn|set) my (?:emergency|ice) card (?:into )?(?:an? |my )?(?:picture|image|wallpaper|lock ?screen(?: picture| image| wallpaper)?)$|^(?:put )?my (?:emergency|ice) card on my lock ?screen$/i, () => ({ action: "emergency.card_picture", args: {} })],
   [/^(?:emergency|ice) card (blood(?: group| type)?|allerg(?:y|ies)|(?:medical )?conditions?|meds|medications?|(?:emergency )?contacts?|health ?plan|insurance)[:\s]+(.+)$/i, (m) => ({ action: "emergency.card_set", args: { field: fieldOf(m[1])!, value: m[2] } })],
   [/^my blood (?:group|type) is\s+((?:a|b|ab|o)\s?[+-]|(?:a|b|ab|o) (?:positive|negative|pos|neg))$/i, (m) => ({ action: "emergency.card_set", args: { field: "blood", value: m[1].toUpperCase().replace(/\s?(?:POSITIVE|POS)$/, "+").replace(/\s?(?:NEGATIVE|NEG)$/, "-").replace(/\s/g, "") } })],
   [/^(?:add )?(?:my )?(?:meds|medications) (?:to|on) my (?:emergency|ice) card$/i, () => ({ action: "emergency.card_set", args: { field: "meds", value: "from my list" } })],
@@ -145,12 +170,13 @@ addRules(
 addExamples("emergency.card_setup", ["set up my emergency card", "make an ICE card"]);
 addExamples("emergency.card_set", ["my blood group is O+", "emergency card allergies: penicillin, peanuts", "add my meds to my emergency card", "emergency card health plan: Bupa, member 1234567"]);
 addExamples("emergency.card_show", ["show my emergency card", "emergency card"]);
+addExamples("emergency.card_picture", ["emergency card picture", "lock screen card", "make my emergency card a wallpaper"]);
 addExamples("emergency.card_forget", ["delete my emergency card"]);
-addCues("emergency", ["emergency card", "ice card", "medical id", "blood group", "blood type", "allergies", "allergic", "in case of emergency", "emergency contact"]);
+addCues("emergency", ["emergency card", "lock screen", "wallpaper", "ice card", "medical id", "blood group", "blood type", "allergies", "allergic", "in case of emergency", "emergency contact"]);
 addCapability({
   key: "emergency_card", name: "Emergency card",
   cues: ["emergency card", "ice card", "medical id", "blood group", "in case of emergency"],
-  what: "A short card with what a medic or stranger would need: blood group, allergies, medications, who to call. Only what you choose goes on it, and it's ready to screenshot for your lock screen.",
-  say: ["set up my emergency card", "show my emergency card", "my blood group is O+"],
+  what: "A short card with what a medic or stranger would need: blood group, allergies, medications, who to call. Only what you choose goes on it. Screenshot it, or ask for it as a lock-screen picture.",
+  say: ["set up my emergency card", "show my emergency card", "emergency card picture", "my blood group is O+"],
   then: "It's private and never appears in your brief. Say \"delete my emergency card\" to remove it. No ID numbers go on it.",
 }, "Safety");

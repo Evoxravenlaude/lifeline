@@ -15,6 +15,10 @@ import { looksSecret } from "../src/modules/features/safety/shared.js";
 import { entryHash, GENESIS, verifyChain } from "../src/modules/features/safety/incident.js";
 import { parseCheckin } from "../src/modules/features/safety/checkin.js";
 import { parseByRules } from "../src/intent/rules.js";
+import zlib from "node:zlib";
+import { PDFDocument } from "pdf-lib";
+import { incidentPdf } from "../src/modules/features/safety/pdf.js";
+import { lockScreenSvg } from "../src/modules/features/safety/lockscreen.js";
 import { handleTextChannel } from "../src/channels/sms.js";
 
 let db: Db;
@@ -360,7 +364,48 @@ describe("emergency card", () => {
     expect((await say(u, "delete my emergency card")).text).toMatch(/deleted/);
     expect((await say(u, "show my emergency card")).text).toMatch(/don't have an emergency card/);
   });
+
+  it("makes a lock-screen picture only when asked, phone-sized, with only what's on the card", async () => {
+    const u = await ensureUser(db, "telegram", "9102", "Kwame Mensah");
+    expect((await say(u, "lock screen card")).text).toMatch(/don't have an emergency card yet/);
+    await say(u, "my blood group is B+");
+    await say(u, "emergency card allergies: penicillin");
+    const card = await say(u, "show my emergency card");
+    expect(card.image).toBeUndefined(); // the text card stays as it was; the picture is opt-in
+    expect(card.buttons).toContainEqual({ label: "Make it a lock-screen picture", data: "say:emergency card picture" });
+    for (const s of ["emergency card picture", "lock screen card", "make my emergency card a wallpaper"]) expect(parseByRules(s)?.action, s).toBe("emergency.card_picture");
+    const pic = await say(u, "emergency card picture");
+    expect(pic.text).toMatch(/lock-screen picture/);
+    expect(pic.text).toMatch(/top is left clear for the clock/);
+    expect(pic.image?.mime).toBe("image/png");
+    expect(pic.file).toMatchObject({ name: "emergency-card.png", mime: "image/png" });
+    const png = Buffer.from(pic.file!.data, "base64");
+    expect(pngSize(png)).toEqual({ width: 1080, height: 2340 });
+    const svg = lockScreenSvg({ name: "Kwame Mensah", fields: [{ label: "Blood group", value: "B+" }, { label: "Allergies", value: "penicillin" }], updated: "30 Oct 2026" });
+    expect(svg).toContain("B+");
+    expect(svg).not.toMatch(/Medications|Health plan|Conditions/);
+    // Nothing drawn in the clock's third of the screen apart from the background.
+    const ys = [...svg.matchAll(/<(?:text|rect|line)[^>]*?\sy1?="(\d+(?:\.\d+)?)"/g)].map((m) => Number(m[1])).filter((y) => y > 0);
+    expect(Math.min(...ys)).toBeGreaterThan(2340 / 3);
+  });
 });
+
+/** Reads a PNG properly: checks the signature and every chunk's CRC, inflates the pixels, and returns the size from IHDR. */
+function pngSize(png: Buffer): { width: number; height: number } {
+  expect(png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(true);
+  let off = 8, width = 0, height = 0, bpp = 0;
+  const idat: Buffer[] = [];
+  while (off < png.length) {
+    const len = png.readUInt32BE(off), type = png.subarray(off + 4, off + 8).toString("latin1"), data = png.subarray(off + 8, off + 8 + len);
+    expect(png.readUInt32BE(off + 8 + len)).toBe(zlib.crc32(png.subarray(off + 4, off + 8 + len)));
+    if (type === "IHDR") { width = data.readUInt32BE(0); height = data.readUInt32BE(4); bpp = ({ 2: 3, 6: 4, 0: 1, 4: 2 } as Record<number, number>)[data[9]] * (data[8] / 8); }
+    if (type === "IDAT") idat.push(data);
+    off += 12 + len;
+    if (type === "IEND") break;
+  }
+  expect(zlib.inflateSync(Buffer.concat(idat)).length).toBe(height * (1 + width * bpp));
+  return { width, height };
+}
 
 /* ---------------- legacy plan ---------------- */
 
@@ -472,9 +517,16 @@ describe("incident log", () => {
     expect(show.text).toMatch(/3 entries/);
     const exp = await say(u, "export my incident log");
     expect(exp.text).toMatch(/^The chain checks out/);
-    expect(exp.text).toContain(`sha256: ${rows[2].hash}`);
+    expect(exp.text).toMatch(/attached as a PDF, 3 entries/);
+    expect(exp.text).not.toContain("sha256:"); // the reply stays short; the hashes are in the PDF and the email
     expect(exp.text).toMatch(/emailed a copy to priya@example\.com/);
+    expect(exp.file).toMatchObject({ mime: "application/pdf" });
+    expect(exp.file!.name).toMatch(/^incident-log-\d{4}-\d{2}-\d{2}\.pdf$/);
+    const pdf = Buffer.from(exp.file!.data, "base64");
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
     expect(mails[0]).toMatchObject({ to: "priya@example.com", subject: "Your incident log" });
+    expect(mails[0].text).toContain(`sha256: ${rows[2].hash}`);
 
     await db.query(`UPDATE safety_incidents SET text='nothing happened' WHERE user_id=$1 AND seq=2`, [u.id]);
     expect((await say(u, "verify my incident log")).text).toMatch(/^Entry 2 doesn't match/);
@@ -485,6 +537,30 @@ describe("incident log", () => {
     expect(await db.query(`SELECT * FROM safety_incidents WHERE user_id=$1`, [u.id])).toHaveLength(3);
     expect((await say(u, "yes")).text).toMatch(/deleted, all 3 entries/);
     expect(await db.query(`SELECT * FROM safety_incidents WHERE user_id=$1`, [u.id])).toHaveLength(0);
+  });
+
+  it("builds a PDF that wraps long entries onto new pages, keeps the hashes, and hands over the exact text when a script isn't in the font", async () => {
+    const entries = Array.from({ length: 12 }, (_, i) => ({ seq: i + 1, when: `Mon ${i + 1} Jun 2026, 09:00`, text: i === 4 ? "The landlord came in again without notice and took photos of my room. ".repeat(70) : `Entry ${i + 1}: the vendor would not refund the deposit.`, hash: String(i).repeat(64).slice(0, 64) }));
+    const one = await incidentPdf({ name: "Amara Okafor", exported: "Tue 30 Jun 2026, 10:00", tz: "Africa/Lagos", status: "The chain checks out.", entries: entries.slice(0, 2) });
+    expect(Buffer.from(one.bytes).subarray(0, 5).toString()).toBe("%PDF-");
+    expect(one.pages).toBe(1);
+    const many = await incidentPdf({ name: null, exported: "Tue 30 Jun 2026, 10:00", tz: "Africa/Lagos", status: "The chain checks out.", entries });
+    expect(many.pages).toBeGreaterThanOrEqual(3); // one very long entry spills over two pages on its own
+    const doc = await PDFDocument.load(many.bytes);
+    expect(doc.getPageCount()).toBe(many.pages);
+    expect(doc.getTitle()).toBe("Incident log");
+    expect(many.missing).toBe(false);
+    // A script no font on any machine here has (Egyptian hieroglyphs): still a PDF, and the export says so and gives the exact text.
+    const glyphs = "\u{13000}\u{13001}\u{13002}";
+    const odd = await incidentPdf({ name: "Li Hua", exported: "x", tz: "Asia/Shanghai", status: "ok", entries: [{ seq: 1, when: "x", text: `the landlord wrote ${glyphs} on the door`, hash: "a".repeat(64) }] });
+    expect(Buffer.from(odd.bytes).subarray(0, 5).toString()).toBe("%PDF-");
+    expect(odd.missing).toBe(true);
+    const u = await ensureUser(db, "telegram", "9303", "Li Hua");
+    await say(u, `log incident: the landlord wrote ${glyphs} on the door`);
+    const exp = await say(u, "export my incident log");
+    expect(exp.file?.mime).toBe("application/pdf");
+    expect(exp.text).toMatch(/aren't in the PDF's font, so here is the exact text too/);
+    expect(exp.text).toContain(glyphs);
   });
 
   it("undo only takes back the newest entry", async () => {
