@@ -24,6 +24,40 @@ There's no app store involved: it's a Progressive Web App (PWA). The same websit
 - `src/core/webpush.ts` sends pushes with the `web-push` package and your VAPID keys. Each browser that turns notifications on is one row in `push_subscriptions`, per person and per device. A person with at least one gets an "app" way of being reached, and the dispatcher (`src/core/dispatch.ts`) uses it like Telegram or SMS. If a push service says a subscription is gone (404 or 410), it's dropped on the spot.
 - The fallback chain is unchanged: the preferred place first, then Telegram, the app, iMessage, SMS, the web inbox, and email as the last resort. With **Both**, the app is sent to as well as the chain, and if the app reached the person, the email last resort isn't used.
 
+## Inside the app
+
+### Your day, as a timeline
+
+Today has a card that lays the day out by time: calendar events, reminders, classes, medication doses and trip plans. A strip across the top shows the whole 24 hours, with a mark for each thing and a brass line at now. Below it the day runs in order on a rail, with a "Now" marker between what's behind you and what's still to come.
+
+- A filled dot is still to come. A tick is done: a reminder ticked off, a dose taken or skipped, an event or class that's over. A dashed dot is a time that went by without a mark ("Not ticked off", "Not marked"), or a dose that's waiting on an answer.
+- Reminders have Done and Snooze; a dose waiting on you has Taken and Skip. They work the same as everywhere else.
+- The arrows step a day at a time, up to a week either way, and "Back to today" returns. A trip that covers the day shows as a chip ("Lisbon trip, day 2 of 5").
+- Only real things show. An empty day says so.
+
+It reads `GET /api/day?date=YYYY-MM-DD` (today when left off), signed in like every other `/api` call, in the person's own time zone. The code is `dayPlan` in `src/web/views.ts`.
+
+### The cycle calendar
+
+On Health, for someone who has logged a period or chosen cycle settings, there's a month calendar under the cycle card. Nobody else sees it, and it never appears anywhere but this page.
+
+- Logged period days are filled in. The next period and the fertile window are marked only as `src/modules/cycle.ts` predicts them, from the person's own history, and are left off when the period is late, the same as the brief and the chat.
+- A dot means something was noted that day. Tap a day to see what.
+- The arrows move month to month, up to two years either way.
+- It says plainly that these are estimates, not birth control.
+
+It reads `GET /api/cycle?month=YYYY-MM`, which answers `{ shown: false }` for anyone who doesn't track their cycle, and `Cache-Control: no-store` always. The lock-screen rules for notifications don't apply here, since this is inside the app.
+
+### The emergency card, kept on the phone
+
+Health also shows the emergency card, ready to copy or screenshot (`GET /api/emergency`, which reads it through the same action as "show my emergency card").
+
+Inside Telegram's app, on a Telegram version with secure storage (Bot API 9.0 or later), there's **Keep a copy on this phone**. The card's text goes into Telegram's SecureStorage on that phone, tied to that Telegram account. If lifeline can't be reached later, the Mini App shows the copy under the "can't reach the server" notice, and Health shows it too. **Update the copy** appears when the card has changed since, and **Remove the copy** takes it off the phone. Telegram Desktop and the web version don't have secure storage, so the offer doesn't appear there. Outside Telegram there's no copy at all; the website never keeps the card in the browser's own storage.
+
+### Files in chat
+
+A reply can carry a file (a calendar invite, a PDF). In the web chat it shows as a **Save** button with the file's name, the same as a picture's Save. `/api/chat`, `/api/voice`, `/api/photo`, `/api/button` and `/api/do` pass it through after a check (`src/web/replies.ts`): real base64, a plain name with no folders, and a type a browser can be given safely. Anything that could run as a page is saved as plain bytes.
+
 ## Turning on notifications (once, for whoever runs lifeline)
 
 1. **Make the keys.** On any computer with Node installed, in Terminal:

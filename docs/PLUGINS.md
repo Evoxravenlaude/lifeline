@@ -112,3 +112,13 @@ Follow `docs/VOICE.md`. In short:
   - `npx vitest run test/features-<area>.test.ts` passes.
   - `npx vitest run test/coverage.test.ts` passes (it checks your examples and that you didn't shadow core sentences).
   - The full `npx vitest run` passes, apart from failures in other builders' files, which you report.
+
+## Reply extras (any action)
+
+Besides `reply`, `undo`, `buttons`, `image`, `speak`, `sticker` and `celebrate`, an action can return:
+- `file: { data, name, mime }`: a document to hand over (base64). Telegram sends it as a document; the web shows a Save link.
+- `react`: a Telegram reaction emoji for the person's own message, for a quick log. Most quick logs are covered by the `QUICK` map in `src/telegram/bot.ts`, keyed by action name; set `react` only to override it.
+- `rich: true`: send as a Telegram rich message (headings, lists, tables).
+The engine adds `action` (the action's name) to every reply, which Telegram uses for reactions and topics.
+
+Streaming: actions that write long model answers can pass `onText: ctx.draft, signal: ctx.stop` to `complete()`; the person sees the text as it's written and can stop it (the result then has `stopped: true`).

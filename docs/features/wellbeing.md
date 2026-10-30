@@ -14,7 +14,7 @@ Every feature here is opt-in, private and calm. Pings go through `push()`, so qu
 | `health.ts` | 2 checkups, the symptom log, the doctor summary |
 | `change.ts` | 5 quit and no-contact counters; 8 the dreaded-task breaker |
 | `remember.ts` | 6 remembrance dates; 9 time capsule; 10 on this day |
-| `lessons.ts` | 13 language drops (built-in starter lessons for Spanish, French, Portuguese, German and Italian) |
+| `lessons.ts` | 13 language drops: with a model, about five words or phrases built from the person's last 7 days (list items, calendar titles, trip destinations, spending categories; never health, cycle, mood or medication data, and anything that reads like health is filtered out of those too), one example sentence and a recall question for tomorrow, answered at the top of the next day's drop. Without a model (or over budget), the built-in starters for Spanish, French, Portuguese, German and Italian, with a recall question from their own words. Uses `think()` (budget checked, usage recorded); one call a day, cached in `prefs.wb.lang.cache` |
 | `privacy.ts` | `wellbeing.forget`: "delete my symptom log / good things / quit counters / remembrance dates / time capsules / keep in touch list / checkups / caregiver reminders / buddies" (tier 2) |
 
 ## Jobs

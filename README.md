@@ -102,6 +102,7 @@ Outbound pushes go to the user's preferred channel and fall back down the chain 
 | Work, code and crypto | `watch https://mysite.com` · `watch releases of vercel/next.js` · `decode jwt …` · `explain cron 0 9 * * 1-5` · `gas now` · `explain tx 0x…` · `is this token safe 0x… on base` · `funding on ETH` | Uptime with TLS and domain expiry, GitHub and packages, status pages, dev tools, gas, wallet activity, tx explainer, token and approval checks, claims, funding, Polymarket, ENS/SNS. Read-only. See docs/features/tech.md |
 | Creative and NFTs | `minted 2 Pudgy Penguins at 0.05 ETH` · `my mints` · `Azuki mint opens 3 Nov 18:00 UTC` · `commission: portrait for Tolu, 150, due 20 Nov` · `open call: Lagos Photo closes 15 Dec` · `releasing my single on 12 Dec` · `idea: …` · `quote for a logo, 12 hours at 40` | Mint log with floors and rough P&L, mints spotted in watched wallets (asks first), mint calendar, commissions, open calls, release planner, ideas, practice time, quotes, portfolio links. See docs/features/creative.md |
 | Trip plans | `help me plan a trip to Liechtenstein` · `my plans` | Asks when and from where, researches visa, routes, stays, days and food with live search, publishes a shareable page. See docs/TELEGRAM.md |
+| Tidy chat | `use topics` · `reply to my logs` · `Pip's things` | Topics for Money, Health, Trips, Work and Home; reactions instead of replies for quick logs; Pip picks up small things as you keep days. See docs/TELEGRAM.md |
 | Website and app | `open the app` · `/app` | Sign in with Telegram, Google, Apple, a text, iMessage or email code; install it as an app with notifications. See docs/SIGNIN.md and docs/APP.md |
 | Groups | add the bot to a group · `/split 120 dinner @ana @ben` · `/list` · `/when movie night` · `/trivia` · `/birthday 12 March` | Things friends do together; nothing personal ever appears in a group. See docs/TELEGRAM.md |
 | Digest | `digest` · `digest at 8` | Schedule, meds, assignments, hackathon deadlines, trip countdown, job matches, new hackathons |
@@ -120,7 +121,7 @@ The conversation layer is unguarded by design. Three lines stay fixed: forwarded
 
 | PDF v1 item | Status |
 |---|---|
-| Telegram bot, voice transcription | ✅ (streaming via `sendMessageDraft` still pending grammY support) |
+| Telegram bot, voice transcription | ✅ answers stream live as drafts with a Stop button; topics, reactions and rich messages (docs/TELEGRAM.md) |
 | Intent → three-tier policy → echo-and-confirm | ✅ |
 | Hackathon discovery + ledger | ✅ Devpost, ETHGlobal, Superteam, Colosseum, HackathonRadar, Hack Club |
 | Launch discovery with risk scoring | ✅ |
