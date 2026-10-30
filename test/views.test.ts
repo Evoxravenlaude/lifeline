@@ -259,3 +259,34 @@ describe("files in web chat replies", () => {
     expect(pageReply({ text: "hi", file: { data: "%%%", name: "a", mime: "text/plain" } })).toEqual({ text: "hi" });
   });
 });
+
+describe("safety, you, settings and your data on the web", () => {
+  it("shows the Safety page's state, only to its owner", async () => {
+    const a = await signIn("880101", "Ngozi");
+    const b = await signIn("880102", "Seyi");
+    await db.query(`INSERT INTO safety_ice (user_id, blood) VALUES ($1,'O+')`, [a.user.id]);
+    const r = await get("/api/safety", a.cookie);
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ checkin: null, contacts: 0, card: true, incidents: 0, legacy: "off" });
+    expect(r.cache).toMatch(/no-store/);
+    expect((await get("/api/safety", b.cookie)).json.card).toBe(false);
+    expect((await get("/api/safety")).status).toBe(401);
+  });
+
+  it("says what Pip carries and what the settings are", async () => {
+    const a = await signIn("880103", "Ifeoma");
+    const you = await get("/api/you", a.cookie);
+    expect(you.json).toMatchObject({ days: 0, things: [], next: { name: "a scarf", at: 7 }, keepDays: 180 });
+    const s = await get("/api/settings", a.cookie);
+    expect(s.json).toMatchObject({ calm: false, reactions: true, topics: false });
+  });
+
+  it("exports everything as a file from the data card", async () => {
+    const a = await signIn("880104", "Bayo");
+    const r = await post("/api/do", { action: "account.export", args: {} }, a.cookie);
+    expect(r.json.file.name).toMatch(/^lifeline-export-.*\.json$/);
+    expect(JSON.parse(Buffer.from(r.json.file.data, "base64").toString()).you[0].name).toBe("Bayo");
+    const d = await post("/api/do", { action: "account.delete", args: {} }, a.cookie);
+    expect(d.json.buttons[0].data).toMatch(/^confirm:/);
+  });
+});

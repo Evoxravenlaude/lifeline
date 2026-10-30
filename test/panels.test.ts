@@ -22,15 +22,15 @@ describe("the menu", () => {
     expect(r.panel!.text).toMatch(/^\*\*Good morning, Sage\.\*\*/);
     expect(r.panel!.text).toMatch(/Still to come today\*\*\n└ 16:00 Call mum/);
     expect(r.panel!.card).toBe("home");
-    expect(datas(r.panel!)).toEqual(["p:today", "p:lists", "p:health", "p:money", "p:trips", "p:play", "p:settings", "ev:home", "p:home", "p:ok"]);
+    expect(datas(r.panel!)).toEqual(["p:today", "p:lists", "p:health", "p:money", "p:trips", "p:safety", "p:play", "p:you", "p:settings", "ev:home", "p:home", "p:ok"]);
   });
 
   it("every page except home has Back and OK", async () => {
     const u = await ensureUser(db, "telegram", "8002", "Ada");
-    for (const k of ["today", "lists", "health", "money", "money:month", "trips", "play", "settings", "persona"]) {
+    for (const k of ["today", "lists", "health", "money", "money:month", "trips", "safety", "play", "you", "privacy", "settings", "persona"]) {
       const p = (await panel(db, u, k, NOW)).panel!;
       expect(datas(p), k).toContain("p:ok");
-      expect(datas(p).some((d) => /^p:(home|settings|lists)$/.test(d)), k).toBe(true);
+      expect(datas(p).some((d) => /^p:(home|settings|lists|you)$/.test(d)), k).toBe(true);
     }
   });
 

@@ -257,3 +257,71 @@ describe("Pip grows with you", () => {
     expect(r.image?.mime).toBe("image/png");
   }, 30_000);
 });
+
+describe("your data", () => {
+  it("routes the plain sentences", () => {
+    expect(parseByRules("export my data")?.action).toBe("account.export");
+    expect(parseByRules("delete my account")?.action).toBe("account.delete");
+    expect(parseByRules("forget everything about me")?.action).toBe("account.delete");
+  });
+
+  it("exports everything about one person, children included, and nobody else's", async () => {
+    const { exportUser } = await import("../src/modules/account.js");
+    const a = await ensureUser(db, "telegram", "7401", "Kunle");
+    const b = await ensureUser(db, "telegram", "7402", "Zara");
+    const h = await db.one<{ id: number }>(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,'read',7) RETURNING id`, [a.id]);
+    await db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,'2026-10-29')`, [h!.id]);
+    await db.query(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,'zara habit',7)`, [b.id]);
+    const r = await handleMessage(db, a, "export my data", { channel: "telegram" });
+    expect(r.file?.name).toMatch(/^lifeline-export-\d{4}-\d{2}-\d{2}\.json$/);
+    const data = JSON.parse(Buffer.from(r.file!.data, "base64").toString());
+    expect(data.habits.map((x: any) => x.name)).toEqual(["read"]);
+    expect(data["habit_checkins (of habits)"]).toHaveLength(1);
+    expect(JSON.stringify(data)).not.toContain("zara habit");
+    expect(data.sessions).toBeUndefined();
+    expect(Object.keys(await exportUser(db, b.id))).toContain("habits");
+  });
+
+  it("deletes an account after a yes, everything with it, and leaves others alone", async () => {
+    const { eraseUser } = await import("../src/modules/account.js");
+    const a = await ensureUser(db, "telegram", "7403", "Musa");
+    const b = await ensureUser(db, "telegram", "7404", "Lola");
+    const h = await db.one<{ id: number }>(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,'run',7) RETURNING id`, [a.id]);
+    await db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,'2026-10-29')`, [h!.id]);
+    await db.query(`INSERT INTO group_chats (chat_id, title, added_by) VALUES (-424242,'Musa and friends',$1)`, [a.id]);
+    await db.query(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,'lola habit',7)`, [b.id]);
+    const ask = await handleMessage(db, a, "delete my account", { channel: "telegram" });
+    expect(ask.text).toMatch(/can't be undone/);
+    expect(ask.buttons?.[0].data).toMatch(/^confirm:/);
+    const n = await eraseUser(db, a.id);
+    expect(n).toBeGreaterThan(3);
+    expect(await db.one(`SELECT 1 AS x FROM users WHERE id=$1`, [a.id])).toBeUndefined();
+    expect(await db.one(`SELECT 1 AS x FROM habit_checkins WHERE habit_id=$1`, [h!.id])).toBeUndefined();
+    expect(await db.one(`SELECT 1 AS x FROM identities WHERE external_id='7403'`)).toBeUndefined();
+    expect((await db.one<{ added_by: number | null }>(`SELECT added_by FROM group_chats WHERE chat_id=-424242`))!.added_by).toBeNull();
+    expect(await db.one(`SELECT 1 AS x FROM habits WHERE user_id=$1`, [b.id])).toBeTruthy();
+  });
+});
+
+describe("the menu and the website, caught up", () => {
+  it("has Safety and You on the Telegram menu, with real rows and pictures", async () => {
+    const { panel } = await import("../src/telegram/panels.js");
+    const { sectionFacts } = await import("../src/core/dashboard.js");
+    const u = await ensureUser(db, "telegram", "7501", "Efe");
+    const fresh = (await db.one<any>(`SELECT * FROM users WHERE id=$1`, [u.id]))!;
+    const home = await panel(db, fresh, "home");
+    const labels = home.panel!.rows.flat().map((b) => b.label);
+    expect(labels).toEqual(expect.arrayContaining(["Safety ›", "You ›"]));
+    const safety = await panel(db, fresh, "safety");
+    expect(safety.panel!.text).toMatch(/No check-in running[\s\S]*No emergency card yet/);
+    expect(safety.panel!.rows.flat().map((b) => b.data)).toContain("say:check on me");
+    const you = await panel(db, fresh, "you");
+    expect(you.panel!.text).toMatch(/Chat history kept 180 days/);
+    expect(you.panel!.rows.flat().find((b) => b.label === "Delete my account")?.style).toBe("danger");
+    const settings = await panel(db, fresh, "settings");
+    expect(settings.panel!.text).toMatch(/Quick logs: a reaction/);
+    expect((await sectionFacts(db, fresh, "safety", new Date()))!.rows[0]).toEqual(["Check-in", "none running"]);
+    expect((await sectionFacts(db, fresh, "you", new Date()))!.rows.map((r) => r[0])).toContain("Days kept");
+  });
+
+});
