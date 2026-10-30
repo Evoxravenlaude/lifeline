@@ -3,11 +3,11 @@
  * inline keyboards. Also handles voice notes, .ics uploads, the persona
  * picker, and Telegram Business messages (draft replies, never auto-sent).
  */
-import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
+import { Bot, InlineKeyboard, InputFile, InputMediaBuilder, type Context } from "grammy";
 import { config } from "../core/config.js";
 import { log } from "../core/log.js";
 import type { Db } from "../core/db.js";
-import { ensureUser, handleCallback, handleMessage, handlePhoto, renderDecision, type Reply } from "../core/handler.js";
+import { ensureUser, getUserById, handleCallback, handleMessage, handlePhoto, renderDecision, type Reply } from "../core/handler.js";
 import { registerSender } from "../core/dispatch.js";
 import { propose } from "../policy/engine.js";
 import { FULL_HELP } from "../intent/index.js";
@@ -23,7 +23,7 @@ import { admit, circleSummary, FULL_MESSAGE, isOwner } from "../core/circle.js";
 import { copyButton, toPlain, toTelegramHtml } from "../core/format.js";
 import { ASKS, BACK, OK, panel, shapeAnswer, type Btn, type Style } from "./panels.js";
 import { ensurePip, pipSticker } from "./stickers.js";
-import { cardUrl } from "../web/extras.js";
+import { dashboardFacts, dashSignature, renderDashboard, renderSection, sectionFacts } from "../core/dashboard.js";
 import { signInMethods } from "../core/auth.js";
 import { pushOn } from "../core/webpush.js";
 
@@ -198,6 +198,8 @@ export function createBot(db: Db): Bot {
         .catch(() => c.reply(toPlain(parts[i]), { reply_markup: markup }));
     }
     if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : r.text, Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
+    // Something was kept or changed (it can be undone): the dashboard picture catches up in a moment.
+    if (r.buttons?.some((b) => /^undo:/.test(b.data))) setTimeout(() => { refreshHome(u.id).catch(() => {}); }, 1500);
   };
   const say = async (c: Context, text: string, extra: Record<string, unknown> = {}) => {
     const u = await userOf(c);
@@ -266,14 +268,70 @@ export function createBot(db: Db): Bot {
   });
   /** Send a fresh panel (the menu, or one of its pages). */
   /** The picture card above a panel (a link preview of the signed card image), or no preview at all. */
-  const preview = (u: { id: number; prefs: Record<string, unknown> }, card?: string) => {
-    const url = card && u.prefs.menuCard !== false ? cardUrl(u.id, card) : null;
-    return url ? { url, prefer_large_media: true, show_above_text: true } : { is_disabled: true };
+  /**
+   * Menus are real photos: the picture (the dashboard, or a section's own) with the text as its caption and the buttons
+   * under it. Tapping the picture opens Telegram's viewer, where it can be saved like any photo. Moving around the menu
+   * swaps the picture in place, and the home dashboard redraws itself when something that matters changes.
+   */
+  const picture = async (u: { id: number; prefs: Record<string, unknown> }, card?: string): Promise<Buffer | null> => {
+    if (!card || u.prefs.menuCard === false) return null;
+    try {
+      const fresh = (await getUserById(db, u.id))!;
+      if (card === "home") return await renderDashboard(await dashboardFacts(db, fresh, new Date()));
+      const sec = await sectionFacts(db, fresh, card, new Date());
+      return sec ? await renderSection(sec) : null;
+    } catch (e: any) { log.warn({ err: e?.message, card }, "menu picture failed"); return null; }
+  };
+  /** A caption holds 1024 characters: a long page shows its start, with a button for the rest. */
+  const fit = (text: string, key: string): { caption: string; more: Btn | null } => {
+    if (toPlain(text).length <= 1000) return { caption: text, more: null };
+    const out: string[] = [];
+    for (const l of text.split("\n")) { if (toPlain([...out, l].join("\n")).length > 940) break; out.push(l); }
+    return { caption: `${out.join("\n")}\n…`, more: { label: "Read it all", data: `p:full:${key}` } };
+  };
+  const rowsWith = (rows: Btn[][], more: Btn | null) => (more ? [[more], ...rows] : rows);
+  /** Remember where the home dashboard is, so it can be kept current. */
+  const rememberHome = async (userId: number, chat: number, id: number, sig: string) => {
+    await db.query(`UPDATE users SET prefs = prefs || jsonb_build_object('homeMsg', $2::jsonb) WHERE id=$1`, [userId, JSON.stringify({ chat, id, sig, at: Date.now() })]);
   };
   const showPanel = async (c: Context, u: Awaited<ReturnType<typeof userOf>>, key: string) => {
     const r = await panel(db, u, key);
-    if (r.panel) await c.reply(toHtml(r.panel.text), { parse_mode: "HTML", reply_markup: toKb(r.panel.rows), link_preview_options: preview(u, r.panel.card) }).catch(() => c.reply(toPlain(r.panel!.text), { reply_markup: toKb(r.panel!.rows) }));
+    if (!r.panel) return;
+    const p = r.panel;
+    const png = await picture(u, p.card);
+    if (png) {
+      const { caption, more } = fit(p.text, key);
+      const m = await c.replyWithPhoto(new InputFile(png, "lifeline.png"), { caption: toHtml(caption), parse_mode: "HTML", reply_markup: toKb(rowsWith(p.rows, more)) }).catch(() => null);
+      if (m) { if (p.card === "home") await rememberHome(u.id, m.chat.id, m.message_id, dashSignature(await dashboardFacts(db, (await getUserById(db, u.id))!, new Date()))); return; }
+    }
+    await c.reply(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: { is_disabled: true } }).catch(() => c.reply(toPlain(p.text), { reply_markup: toKb(p.rows) }));
   };
+  /** Redraw the home dashboard where it already is, quietly (edits never notify). Only when what it says has changed, unless forced. */
+  const refreshHome = async (userId: number, force = false): Promise<void> => {
+    const u = await getUserById(db, userId);
+    const h = u?.prefs.homeMsg as { chat: number; id: number; sig: string; at: number } | undefined;
+    if (!u || !h || u.prefs.menuCard === false) return;
+    if (Date.now() - h.at > 46 * 3_600_000) { await db.query(`UPDATE users SET prefs = prefs - 'homeMsg' WHERE id=$1`, [u.id]); return; }
+    const facts = await dashboardFacts(db, u, new Date());
+    const sig = dashSignature(facts);
+    if (!force && sig === h.sig) return;
+    const r = await panel(db, u, "home");
+    const png = await renderDashboard(facts).catch(() => null);
+    if (!r.panel || !png) return;
+    const { caption, more } = fit(r.panel.text, "home");
+    await bot.api.editMessageMedia(h.chat, h.id, InputMediaBuilder.photo(new InputFile(png, "lifeline.png"), { caption: toHtml(caption), parse_mode: "HTML" }), { reply_markup: toKb(rowsWith(r.panel.rows, more)) })
+      .then(() => db.query(`UPDATE users SET prefs = prefs || jsonb_build_object('homeMsg', $2::jsonb) WHERE id=$1`, [u.id, JSON.stringify({ ...h, sig })]))
+      .catch(async (e: any) => {
+        const why = String(e?.description ?? e?.message ?? "");
+        if (/not found|can't be edited|message to edit/i.test(why)) await db.query(`UPDATE users SET prefs = prefs - 'homeMsg' WHERE id=$1`, [u.id]);
+      });
+  };
+  /* Every five minutes, dashboards whose facts changed (a dose taken, a reminder passed, a spend logged) are redrawn. */
+  const dashTimer = setInterval(async () => {
+    const rows = await db.query<{ id: number }>(`SELECT id FROM users WHERE prefs ? 'homeMsg'`).catch(() => [] as { id: number }[]);
+    for (const r of rows) await refreshHome(r.id).catch(() => {});
+  }, 5 * 60_000);
+  dashTimer.unref?.();
   bot.command(["menu", "home"], async (c) => showPanel(c, await userOf(c), "home"));
   bot.command("settings", async (c) => showPanel(c, await userOf(c), "settings"));
   bot.api.setMyCommands(COMMANDS.map(([command, description]) => ({ command, description }))).catch((e) => log.warn({ err: e?.message }, "setMyCommands failed"));
@@ -284,7 +342,7 @@ export function createBot(db: Db): Bot {
   bot.command("scout", async (c) => say(c, "Which niche, and what for? Something like \"payments on base, for partnerships\" or \"ai agent startups to apply to\".", { reply_markup: { force_reply: true, input_field_placeholder: "a niche, and what you want from it" } }));
   bot.command("help", async (c) => say(c, FULL_HELP));
   const drawers = () => { const rows: Btn[][] = []; helpGroups().forEach(([t], i) => { if (i % 2 === 0) rows.push([]); rows[rows.length - 1].push({ label: `${t} ›`, data: `ev:${i}` }); }); return toKb([...rows, [BACK("home"), OK]]); };
-  bot.command(["everything", "all", "features"], async (c) => { const u = await userOf(c); await c.reply(toHtml(everythingIndex()), { parse_mode: "HTML", reply_markup: drawers(), link_preview_options: preview(u, "everything") }); });
+  bot.command(["everything", "all", "features"], async (c) => { const u = await userOf(c); void u; await c.reply(toHtml(everythingIndex()), { parse_mode: "HTML", reply_markup: drawers(), link_preview_options: { is_disabled: true } }); });
   bot.command(["app", "web", "website"], async (c) => send(c, await handleMessage(db, await userOf(c), "open the app", { channel: "telegram" })));
   bot.command(["play", "game", "games"], async (c) => showPanel(c, await userOf(c), "play"));
   bot.command("voice", async (c) => showPanel(c, await userOf(c), "settings"));
@@ -358,7 +416,9 @@ export function createBot(db: Db): Bot {
     const text = await transcribe(audio, isNote ? "note.mp4" : "voice.ogg", isNote ? "video/mp4" : c.message?.audio?.mime_type ?? "audio/ogg").catch(() => null);
     if (!text) return say(c, "I couldn't make out that voice note. Once more, or type it?");
     await c.reply(`<i>“${toHtml(text.length > 900 ? `${text.slice(0, 900)}…` : text)}”</i>`, { parse_mode: "HTML" }).catch(() => c.reply(`“${text.slice(0, 900)}”`).catch(() => {}));
-    await send(c, await handleMessage(db, u, text, { channel: "telegram" }), true);
+    const steps = stepsFor(c);
+    await send(c, await handleMessage(db, u, text, { channel: "telegram", progress: steps.step, note: async (t: string) => { await c.reply(toHtml(t), { parse_mode: "HTML" }).catch(() => {}); } }), true);
+    await steps.done();
   });
 
   /* Photos: what's in it, an answer to the caption, and an offer to keep what matters. */
@@ -439,7 +499,8 @@ export function createBot(db: Db): Bot {
     const forwarded = Boolean((c.message as any).forward_origin || (c.message as any).forward_date);
     await c.replyWithChatAction("typing").catch(() => {});
     const steps = stepsFor(c);
-    await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded, progress: steps.step }));
+    const note = async (t: string) => { await c.reply(toHtml(t), { parse_mode: "HTML", link_preview_options: { is_disabled: true } }).catch(() => {}); await c.replyWithChatAction("typing").catch(() => {}); };
+    await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded, progress: steps.step, note }));
     await steps.done();
   });
 
@@ -478,16 +539,36 @@ export function createBot(db: Db): Bot {
       await c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
       return say(c, r === "expired" ? "That request has expired. Press the button on the page again." : answer === "yes" ? "Done. You're signed in on the web; the page will open by itself in a moment." : "Okay, nobody was signed in.");
     }
+    if (data.startsWith("p:full:")) {
+      await c.answerCallbackQuery().catch(() => {});
+      const r = await panel(db, u, data.slice(7));
+      if (r.panel) await send(c, { text: r.panel.text });
+      return;
+    }
     if (data.startsWith("p:")) {
-      const r = await panel(db, u, data.slice(2));
+      const key = data.slice(2);
+      const r = await panel(db, u, key);
       await c.answerCallbackQuery(r.toast ? { text: r.toast } : {}).catch(() => {});
       if (r.close) return c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
       if (r.ask) return c.reply(ASKS[r.ask].prompt, { reply_markup: { force_reply: true, input_field_placeholder: ASKS[r.ask].placeholder } }).catch(() => {});
       if (!r.panel) return;
       const p = r.panel;
-      return c.editMessageText(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: preview(u, p.card) }).catch((e) => {
+      const msg = c.callbackQuery.message;
+      if (msg && "photo" in msg && msg.photo) {
+        // A photo menu: swap the picture and caption in place.
+        const png = await picture(u, p.card);
+        const { caption, more } = fit(p.text, key);
+        const markup = toKb(rowsWith(p.rows, more));
+        const done = png
+          ? await c.editMessageMedia(InputMediaBuilder.photo(new InputFile(png, "lifeline.png"), { caption: toHtml(caption), parse_mode: "HTML" }), { reply_markup: markup }).then(() => true, () => false)
+          : await c.editMessageCaption({ caption: toHtml(caption), parse_mode: "HTML", reply_markup: markup }).then(() => true, () => false);
+        if (done && p.card === "home") await rememberHome(u.id, msg.chat.id, msg.message_id, dashSignature(await dashboardFacts(db, (await getUserById(db, u.id))!, new Date())));
+        if (done) return;
+        return showPanel(c, u, key);
+      }
+      return c.editMessageText(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: { is_disabled: true } }).catch((e) => {
         if (/not modified/i.test(String(e?.description ?? e?.message ?? ""))) return;
-        return c.reply(toHtml(p.text), { parse_mode: "HTML", reply_markup: toKb(p.rows), link_preview_options: preview(u, p.card) }).catch(() => {});
+        return showPanel(c, u, key);
       });
     }
     if (data.startsWith("ev:")) {
@@ -513,6 +594,7 @@ export function createBot(db: Db): Bot {
       return send(c, await handleMessage(db, u, data.slice(4), { channel: "telegram" }));
     }
     const r = await handleCallback(db, u, data);
+    if (/^(?:rem:|med:|confirm:|undo:|cancel:)/.test(data)) setTimeout(() => { refreshHome(u.id).catch(() => {}); }, 1500);
     const short = toPlain(r.text);
     await c.answerCallbackQuery({ text: short.length > 190 ? short.slice(0, 187).replace(/\s+\S*$/, "") + "…" : short }).catch(() => {});
     await c.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});

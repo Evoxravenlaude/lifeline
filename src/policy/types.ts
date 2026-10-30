@@ -26,6 +26,8 @@ export interface Ctx {
   thread?: Thread | null;
   /** For long work (researching a plan): say which step is running, so the person sees it move. Optional; channels without it ignore it. */
   progress?: (step: string) => Promise<void> | void;
+  /** For long work: a line said along the way, as its own message ("On it.", "Your plan is built."). Optional. */
+  note?: (text: string) => Promise<void> | void;
 }
 
 /** A follow-up the bot asked and is waiting on. Lives in users.prefs.thread for ten minutes. */

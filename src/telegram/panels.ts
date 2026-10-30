@@ -14,6 +14,7 @@ import { VOICES } from "../core/media.js";
 import { buildDigest } from "../modules/digest.js";
 import { cyclePicture, cycleRows, cyclePrefs, describeCycle } from "../modules/cycle.js";
 import { webAddress } from "../core/ways.js";
+import { dashboardFacts } from "../core/dashboard.js";
 
 /** The website, opened inside Telegram. Only over https, which Telegram requires. */
 export const appButton = (): Btn | null => { const w = webAddress(); return /^https:\/\//.test(w) ? { label: "Open the app", data: "p:app", webApp: `${w.replace(/\/$/, "")}/` } : null; };
@@ -77,22 +78,23 @@ export async function homeFacts(db: Db, u: User, now: Date) {
 export const tree = (items: string[]) => items.map((t, i) => `${i === items.length - 1 ? "└" : "├"} ${t}`);
 
 async function home(db: Db, u: User, now: Date): Promise<Panel> {
-  const f = await homeFacts(db, u, now);
-  const facts = [
-    f.next ? `Next: ${f.next.title}, at ${f.next.at}.` : "Nothing else on today.",
-    ...(f.pending ? [`${f.pending === 1 ? "One thing is" : `${f.pending} things are`} waiting on your yes.`] : []),
-    ...(f.open ? [`${f.open} open on your lists.`] : []),
-  ];
-  const lines = [`**${f.greeting}**`, `_${DateTime.fromJSDate(now).setZone(u.tz).toFormat("cccc d LLLL, HH:mm")}_`, "", ...tree(facts)];
+  const d = await dashboardFacts(db, u, now);
+  const lines = [`**${d.greeting}**`, `_${d.date}, updated ${d.updated}_`, ""];
+  if (d.today.length) lines.push("**Still to come today**", ...tree(d.today.map((r) => `${r.time} ${r.text}`)), "");
+  else lines.push("Nothing else booked today.", "");
+  if (d.later.length) lines.push("**Later this week**", ...tree(d.later.map((r) => `${r.time} ${r.text}`)), "");
+  const tiles = d.tiles.map((t) => `${t.label}: ${t.value}${t.note ? `. ${t.note}` : ""}`);
+  if (tiles.length) lines.push(...tree(tiles));
   return {
-    text: lines.join("\n"),
+    text: lines.join("\n").trim(),
     card: "home",
     rows: [
       [{ label: "Today ›", data: "p:today" }, { label: "Lists ›", data: "p:lists" }],
       [{ label: "Health ›", data: "p:health" }, { label: "Money ›", data: "p:money" }],
       [{ label: "Trips ›", data: "p:trips" }, { label: "Play ›", data: "p:play" }],
       [{ label: "Settings ›", data: "p:settings" }, { label: "Everything ›", data: "ev:home" }],
-      appButton() ? [appButton()!, OK] : [OK],
+      [...(appButton() ? [appButton()!] : []), { label: "Refresh", data: "p:home" }],
+      [OK],
     ],
   };
 }
@@ -120,6 +122,7 @@ async function oneList(db: Db, u: User, i: number): Promise<Panel | null> {
   const items = await db.query<{ id: number; text: string }>(`SELECT id, text FROM todos WHERE user_id=$1 AND list=$2 AND NOT done ORDER BY id LIMIT 14`, [u.id, name]);
   return {
     text: `**${cap(name)}**\n\n${items.length} open. Tap one to tick it off.`,
+    card: "lists",
     rows: [...items.map((t) => [{ label: `○  ${t.text}`.slice(0, 60), data: `p:tick:${t.id}:${i}` }]), [{ label: "Add something", data: "p:ask:list" }], nav("lists")],
   };
 }
@@ -209,7 +212,7 @@ function personas(u: User): Panel {
   const keys = Object.keys(PERSONAS);
   const rows: Btn[][] = [];
   for (let i = 0; i < keys.length; i += 2) rows.push(keys.slice(i, i + 2).map((k) => ({ label: k === cur ? `${PERSONAS[k].label} · now` : PERSONAS[k].label, data: `p:persona:${k}`, ...(k === cur ? { style: "primary" as Style } : {}) })));
-  return { text: "**Personality**\n\nHow I talk to you. Or describe your own, like \"talk like a tired pirate\".", rows: [...rows, nav("settings")] };
+  return { text: "**Personality**\n\nHow I talk to you. Or describe your own, like \"talk like a tired pirate\".", card: "settings", rows: [...rows, nav("settings")] };
 }
 
 /* ---------------- routing ---------------- */

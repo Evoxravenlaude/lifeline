@@ -122,7 +122,7 @@ const YES = /^(?:yes|y|yes please|yep|yeah|yup|confirm|go ahead|go|do it|sure|ok
 const NO = /^(?:no|n|nope|nah|cancel|never ?mind|don'?t|stop|forget it|leave it)[.!]*$/i;
 
 /** Every message gets an answer in words, even when something underneath breaks. */
-export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"] }): Promise<Reply> {
+export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"] }): Promise<Reply> {
   try {
     return await answerMessage(db, user, text, opts);
   } catch (e: any) {
@@ -131,9 +131,9 @@ export async function handleMessage(db: Db, user: User, text: string, opts: { fo
   }
 }
 
-async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"] }): Promise<Reply> {
+async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"] }): Promise<Reply> {
   const now = opts.now ?? new Date();
-  const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}`, progress: opts.progress };
+  const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}`, progress: opts.progress, note: opts.note };
   const t = text.trim();
   await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, redact(text)]);
 
