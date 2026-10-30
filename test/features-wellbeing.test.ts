@@ -4,6 +4,7 @@ import { DateTime } from "luxon";
 import "../src/modules/index.js";
 import { openTestDb, type Db } from "../src/core/db.js";
 import { config } from "../src/core/config.js";
+import { weekWords } from "../src/modules/features/wellbeing/lessons.js";
 import { ensureUser, getUserById, handleCallback, handleMessage, type Reply } from "../src/core/handler.js";
 import { runDue, type SchedulerDeps } from "../src/core/scheduler.js";
 import { buildDigest } from "../src/modules/digest.js";
@@ -562,6 +563,51 @@ describe("13. language drops", () => {
     expect(await brief(p)).not.toMatch(/French today/);
     await setPrefs(p, { calm: true });
     expect((await runMine(new Date(Date.now() + 4 * 86_400_000))).to(p)).toHaveLength(0);
+  });
+});
+
+describe("13b. language drops built from your own week", () => {
+  it("falls back to the starters with no model, with a recall question answered the next day", async () => {
+    const u = await person("Odile");
+    await say(u, "teach me French, 2 minutes a day");
+    const day1 = (await say(u, "today's lesson")).text;
+    expect(day1).toMatch(/^French today: bonjour \(hello\), merci \(thank you\), s'il vous plaît \(please\)\./);
+    expect(day1).toMatch(/For tomorrow: how do you say "thank you"\?$/);
+    const day2 = (await say(u, "today's lesson", new Date(Date.now() + 86_400_000))).text;
+    expect(day2).toMatch(/^Yesterday's answer: merci\. French today: Comment ça va \?/);
+  });
+
+  it("with a model, builds about five words from the last 7 days and never from health, mood or meds", async () => {
+    const u = await person("Bisi");
+    await say(u, "teach me French, 2 minutes a day");
+    const now = new Date();
+    await db.query(`INSERT INTO todos (user_id, list, text) VALUES ($1,'shopping','plantains'), ($1,'shopping','pick up prescription'), ($1,'todo','call the plumber')`, [u.id]);
+    await db.query(`INSERT INTO events (user_id, title, starts_at) VALUES ($1,'dinner with Kemi',$2), ($1,'therapy session',$2), ($1,'old meeting',$3)`, [u.id, new Date(now.getTime() - 86_400_000), new Date(now.getTime() - 20 * 86_400_000)]);
+    await db.query(`INSERT INTO trips (user_id, destination, starts_on) VALUES ($1,'Dakar',$2::date)`, [u.id, DateTime.utc().plus({ days: 5 }).toISODate()]);
+    await db.query(`INSERT INTO spend (user_id, amount, currency, category) VALUES ($1, 5000, 'NGN', 'transport'), ($1, 900, 'NGN', 'pharmacy')`, [u.id]);
+    await db.query(`INSERT INTO medications (user_id, name, times) VALUES ($1,'metformin','{08:00}')`, [u.id]).catch(() => {});
+    const words = await weekWords(db, await fresh(u), now);
+    expect(words).toEqual(expect.arrayContaining(["plantains", "call the plumber", "dinner with Kemi", "a trip to Dakar", "spending on transport"]));
+    expect(words.join(" ")).not.toMatch(/prescription|therapy|pharmacy|metformin|old meeting/i);
+
+    Object.assign(config, { openaiCompatKey: "k", openaiCompatBaseUrl: "https://api.groq.com/openai/v1", modelProvider: "openai" });
+    const calls = mockFetch([[/chat\/completions$/, () => json({
+      choices: [{ message: { content: JSON.stringify({
+        items: [["les bananes plantain", "plantains"], ["le plombier", "the plumber"], ["le dîner", "dinner"], ["le voyage", "the trip"], ["le transport", "transport"]],
+        sentence: "Je dîne avec Kemi avant mon voyage à Dakar.", meaning: "I'm having dinner with Kemi before my trip to Dakar.",
+        recall: { question: "how do you say \"the plumber\"", answer: "le plombier" },
+      }) } }], usage: { prompt_tokens: 120, completion_tokens: 90 },
+    })]]);
+    const l = (await say(u, "today's lesson")).text;
+    expect(l).toMatch(/^French today: les bananes plantain \(plantains\), le plombier \(the plumber\), le dîner \(dinner\), le voyage \(the trip\), le transport \(transport\)\./);
+    expect(l).toMatch(/Try: "Je dîne avec Kemi avant mon voyage à Dakar\." It means: .+ For tomorrow: how do you say "the plumber"\?$/);
+    const prompt = JSON.stringify(calls.map((c) => c.body));
+    expect(prompt).toMatch(/plantains/);
+    expect(prompt).toMatch(/a trip to Dakar/);
+    expect(prompt).not.toMatch(/prescription|therapy|pharmacy|metformin/i);
+    expect(calls).toHaveLength(1);
+    expect((await say(u, "today's lesson")).text).toBe(l); // the same all day, no second call
+    expect(calls).toHaveLength(1);
   });
 });
 

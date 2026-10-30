@@ -3,14 +3,14 @@
  * dates (music, books, NFT collections and a generic plan for shows, films, zines and the rest),
  * ticked off in words or with a button, with a brief line when a step is due.
  * Practice time: "drew for 45 minutes", "wrote 800 words", weekly totals and a kind run where one
- * rest day a week never breaks it (the same rule as streakOf in src/modules/life.ts). No shame, ever.
+ * rest day a week never breaks it, and streak freezes cover a missed day (the same rules as streakOf in src/modules/life.ts). No shame, ever.
  */
 import { z } from "zod";
 import { defineAction } from "../../../policy/types.js";
 import { register } from "../../../policy/registry.js";
 import { addCapability, addCues, addExamples, addRules, addSchema } from "../../../core/plugins.js";
 import type { Db } from "../../../core/db.js";
-import { streakOf } from "../../life.js";
+import { streakNote, streakOf } from "../../life.js";
 import { addBriefItems, addCrButton, addDays, addPinger, byName, cap, clean, daysTo, ensureDaily, parseDay, refuseSecret, sayDay, shortDay, todayOf } from "./shared.js";
 
 addSchema(`CREATE TABLE IF NOT EXISTS crt_releases (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), title TEXT NOT NULL, kind TEXT NOT NULL, on_date DATE NOT NULL, active BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ DEFAULT now());
@@ -208,10 +208,10 @@ async function summary(db: Db, userId: number, today: string): Promise<{ line: s
   const minutes = week.reduce((s, r) => s + (r.minutes ?? 0), 0);
   const words = week.reduce((s, r) => s + (r.words ?? 0), 0);
   const nDays = new Set(week.map((r) => r.day)).size;
-  const st = days.includes(today) ? streakOf(days, today) : { run: 0, best: 0, restYesterday: false };
+  const st = days.includes(today) ? streakOf(days, today) : null;
   const totals = [minutes ? hm(minutes) : "", words ? `${words.toLocaleString("en-US")} words` : ""].filter(Boolean).join(" and ");
-  const run = st.run >= 2 ? ` ${st.run} days running.${st.restYesterday ? " Yesterday was a rest day; one a week keeps the run going." : ""}` : "";
-  return { line: `This week: ${totals} across ${nDays === 1 ? "1 day" : `${nDays} days`}.${run}`, minutes, words, days: nDays, run: st.run };
+  const run = st && st.run >= 2 ? ` ${st.run} days running.${streakNote(st)}` : "";
+  return { line: `This week: ${totals} across ${nDays === 1 ? "1 day" : `${nDays} days`}.${run}`, minutes, words, days: nDays, run: st?.run ?? 0 };
 }
 
 const practiceShow = defineAction({

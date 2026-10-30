@@ -2,7 +2,9 @@
  * Public holidays and long weekends from Nager.Date (free, no key, about 120 countries) for the
  * person's own country. "next public holiday", "long weekends this year" (where a day or two off makes
  * a long break, with the country's own weekend), and a line in the brief a week before and the day before.
- * Countries Nager.Date doesn't cover are named plainly.
+ * Where Nager.Date has no list, Calendarific is tried when CALENDARIFIC_KEY is set, then a small built-in
+ * list (Gabon for now: fixed dates plus Easter Monday, Ascension and Whit Monday). Replies say when a list
+ * is the built-in one. Countries with none of these are named plainly.
  */
 import { z } from "zod";
 import { DateTime } from "luxon";
@@ -12,6 +14,7 @@ import type { Db } from "../../../core/db.js";
 import { addBriefSection, addCapability, addCues, addExamples, addRules, addSystemJob } from "../../../core/plugins.js";
 import { onJob } from "../../../core/scheduler.js";
 import { countryOf } from "../../../core/money.js";
+import { config } from "../../../core/config.js";
 import { cacheGet, cached, getJson, local, plural, setPrefs } from "./util.js";
 
 const NAGER = "https://date.nager.at/api/v3";
@@ -61,6 +64,66 @@ export async function holidays(db: Db, cc: string, year: number): Promise<Holida
   });
 }
 
+/* ---------------- fallbacks: Calendarific, then a built-in list ---------------- */
+
+const CALENDARIFIC = "https://calendarific.com/api/v2/holidays";
+/** Calendarific's national holidays for one country and year (cached a week). Null when there's no key or it can't be reached. */
+export async function calendarific(db: Db, cc: string, year: number): Promise<Holiday[] | null> {
+  if (!config.calendarificKey) return null;
+  return cached<Holiday[]>(db, `cal:${cc}:${year}`, 7 * 86_400_000, async () => {
+    const r = await getJson(`${CALENDARIFIC}?api_key=${encodeURIComponent(config.calendarificKey)}&country=${cc}&year=${year}`);
+    const list = r && r.status < 400 && r.data?.meta?.code === 200 ? r.data?.response?.holidays : null;
+    if (!Array.isArray(list)) return null;
+    const seen = new Set<string>();
+    return list
+      .filter((h: any) => (Array.isArray(h.type) ? h.type : [h.type]).some((t: unknown) => /national holiday/i.test(String(t))))
+      .map((h: any): Holiday => ({ date: String(h.date?.iso ?? "").slice(0, 10), localName: String(h.name ?? ""), name: String(h.name ?? ""), global: !h.locations || h.locations === "All", counties: null, types: ["Public"] }))
+      .filter((h: Holiday) => /^\d{4}-\d{2}-\d{2}$/.test(h.date) && h.name && !seen.has(`${h.date}|${h.name}`) && !!seen.add(`${h.date}|${h.name}`))
+      .sort((a: Holiday, b: Holiday) => a.date.localeCompare(b.date));
+  });
+}
+
+/** Western Easter Sunday (the anonymous Gregorian algorithm), as a UTC date. */
+export function easter(year: number): DateTime {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  return DateTime.fromObject({ year, month, day }, { zone: "UTC" });
+}
+
+/**
+ * Built-in public holidays for countries no service covers. Checked against Wikipedia's "Public holidays in Gabon",
+ * holidaydb.com and calendarific.com (Oct 2026). Eid dates follow the moon and are announced each year, so they're
+ * left out, and so is 30 August (Liberation Day, decreed a national day in 2024; sources differ on whether it's a day off).
+ */
+const BUILTIN: Record<string, { fixed: [number, number, string][]; afterEaster: [number, string][]; note: string }> = {
+  GA: {
+    fixed: [[1, 1, "New Year's Day"], [4, 17, "Women's Day"], [5, 1, "Labour Day"], [8, 15, "Assumption Day"], [8, 16, "Independence Day"], [8, 17, "Independence Day holiday"], [11, 1, "All Saints' Day"], [12, 25, "Christmas Day"]],
+    afterEaster: [[1, "Easter Monday"], [39, "Ascension Day"], [50, "Whit Monday"]],
+    note: "Eid al-Fitr and Eid al-Adha move with the moon each year, so they aren't on it",
+  },
+};
+export const hasBuiltin = (cc: string) => !!BUILTIN[cc];
+export function builtinHolidays(cc: string, year: number): Holiday[] | null {
+  const b = BUILTIN[cc];
+  if (!b) return null;
+  const e = easter(year);
+  const mk = (d: DateTime, name: string): Holiday => ({ date: d.toISODate()!, localName: name, name, global: true, counties: null, types: ["Public"] });
+  return [...b.fixed.map(([m, d, n]) => mk(DateTime.fromObject({ year, month: m, day: d }, { zone: "UTC" }), n)), ...b.afterEaster.map(([n, name]) => mk(e.plus({ days: n }), name))]
+    .sort((x, y) => x.date.localeCompare(y.date));
+}
+
+export type Source = "nager" | "calendarific" | "builtin";
+/** One country's list for one year, from the first source that has it. `cov` is Nager.Date's coverage (null when unknown). */
+export async function holidayList(db: Db, cc: string, year: number, cov: boolean | null): Promise<{ list: Holiday[]; source: Source } | null> {
+  if (cov !== false) { const l = await holidays(db, cc, year); if (l) return { list: l, source: "nager" }; }
+  const c = await calendarific(db, cc, year);
+  if (c && c.length) return { list: c, source: "calendarific" };
+  const b = builtinHolidays(cc, year);
+  return b ? { list: b, source: "builtin" } : null;
+}
+const builtinNote = (cc: string) => ` That's from my own list for ${countryName(cc)}, since my holiday service doesn't cover it. ${BUILTIN[cc].note}.`;
+
 /** A holiday's stretch of days off, and where a day or two of leave would join it to the next weekend. */
 export interface Break { holiday: Holiday; start: DateTime; end: DateTime; days: number; take?: DateTime[]; joined?: { start: DateTime; end: DateTime; days: number } }
 export function longBreaks(list: Holiday[], cc: string, from: DateTime): Break[] {
@@ -109,27 +172,31 @@ const ASK = { need: "country", question: "Which country should I use for public 
 const askNeeded = (a: { country?: string }, ctx: { user: User }) => (a.country || countryFor(ctx.user).cc ? null : ASK);
 const fillCountry = (need: string, answer: string) => { if (need !== "country") return null; const cc = resolveCountry(answer); return cc ? { country: cc, remember: true } : null; };
 
-async function prepare(db: Db, user: User, a: { country?: string; remember?: boolean }): Promise<{ cc: string; note: string }> {
+async function prepare(db: Db, user: User, a: { country?: string; remember?: boolean }): Promise<{ cc: string; note: string; cov: boolean | null }> {
   const { cc, guessed } = countryFor(user, a.country);
   if (!cc) throw new Error(a.country ? `I don't know a country called "${a.country}". Try its English name or its two-letter code?` : ASK.question);
   if (a.remember && !user.prefs.country) await setPrefs(db, user, { country: cc });
   const cov = await covered(db, cc);
-  if (cov === false) throw new Error(`Nager.Date, where I get public holidays, doesn't cover ${countryName(cc)} yet, so I can't list them. The government's own site will have them.`);
-  return { cc, note: guessed ? ` (I'm going by your time zone; say "my country is ..." if that's wrong.)` : "" };
+  if (cov === false && !config.calendarificKey && !hasBuiltin(cc)) throw new Error(`Nager.Date, where I get public holidays, doesn't cover ${countryName(cc)} yet, so I can't list them. The government's own site will have them.`);
+  return { cc, cov, note: guessed ? ` (I'm going by your time zone; say "my country is ..." if that's wrong.)` : "" };
 }
 const unreachable = () => new Error("I couldn't reach the public holidays service just now. Try again in a few minutes.");
+const notListed = (cc: string) => new Error(`I couldn't find a list of public holidays for ${countryName(cc)} just now. The government's own site will have them.`);
 
 const next = defineAction({
   name: "holiday.next",
   tier: 1,
-  description: "The next public holiday in the person's country (or a named one), with any long weekend it makes. Data from Nager.Date.",
+  description: "The next public holiday in the person's country (or a named one), with any long weekend it makes. Data from Nager.Date, Calendarific where Nager.Date has none, or a small built-in list (Gabon).",
   schema: z.object({ country: z.string().max(40).optional(), remember: z.boolean().optional() }),
   needs: askNeeded, fill: fillCountry,
   async run(a, ctx) {
-    const { cc, note } = await prepare(ctx.db, ctx.user, a);
+    const { cc, note: guess, cov } = await prepare(ctx.db, ctx.user, a);
     const today = local(ctx.now, ctx.user.tz).startOf("day");
-    const list = [...((await holidays(ctx.db, cc, today.year)) ?? []), ...(today.month >= 10 ? (await holidays(ctx.db, cc, today.year + 1)) ?? [] : [])];
-    if (!list.length && !(await holidays(ctx.db, cc, today.year))) throw unreachable();
+    const now = await holidayList(ctx.db, cc, today.year, cov);
+    if (!now) throw cov === false ? notListed(cc) : unreachable();
+    const later = today.month >= 10 ? await holidayList(ctx.db, cc, today.year + 1, cov) : null;
+    const list = [...now.list, ...(later?.list ?? [])];
+    const note = `${now.source === "builtin" ? builtinNote(cc) : ""}${guess}`;
     const ahead = list.filter((h) => h.date >= today.toISODate()!);
     if (!ahead.length) return { reply: `No more public holidays listed for ${countryName(cc)} this year.${note}` };
     const h = ahead[0], d = DateTime.fromISO(h.date, { zone: ctx.user.tz });
@@ -149,13 +216,15 @@ const long = defineAction({
   schema: z.object({ country: z.string().max(40).optional(), year: z.number().int().min(2000).max(2100).optional(), remember: z.boolean().optional() }),
   needs: askNeeded, fill: fillCountry,
   async run(a, ctx) {
-    const { cc, note } = await prepare(ctx.db, ctx.user, a);
+    const { cc, note: guess, cov } = await prepare(ctx.db, ctx.user, a);
     const today = local(ctx.now, ctx.user.tz).startOf("day");
     const year = a.year ?? today.year;
-    const list = await holidays(ctx.db, cc, year);
-    if (!list) throw unreachable();
+    const got = await holidayList(ctx.db, cc, year, cov);
+    if (!got) throw cov === false ? notListed(cc) : unreachable();
+    const note = `${guess}${got.source === "builtin" ? `\n\n${builtinNote(cc).trim()}` : ""}`;
     const from = year === today.year ? today : DateTime.fromObject({ year, month: 1, day: 1 }, { zone: "UTC" });
-    const brs = longBreaks([...list, ...((await holidays(ctx.db, cc, year + 1)) ?? []).filter((h) => h.date < `${year + 1}-01-08`)], cc, from).filter((b) => b.holiday.date.startsWith(String(year)));
+    const next = (await holidayList(ctx.db, cc, year + 1, cov))?.list ?? [];
+    const brs = longBreaks([...got.list, ...next.filter((h) => h.date < `${year + 1}-01-08`)], cc, from).filter((b) => b.holiday.date.startsWith(String(year)));
     if (!brs.length) return { reply: `No long weekends left in ${countryName(cc)} for ${year}, even with a day or two off.${note}` };
     return { reply: [`Long weekends in ${countryName(cc)}${year === today.year ? " for the rest of the year" : ` in ${year}`}:`, ...brs.slice(0, 8).map((b) => `- ${breakLine(b)}`)].join("\n") + note };
   },
@@ -177,7 +246,7 @@ addCapability({
   what: "Your country's public holidays, and the long weekends in them, including where taking a day or two off makes a long break.",
   say: ["next public holiday", "long weekends this year", "my country is Kenya"],
   then: "A line in your morning note a week before a holiday and the day before. I use your country; say \"my country is ...\" if I have it wrong.",
-  limits: "From Nager.Date, which covers about 120 countries. If yours isn't one of them I'll say so.",
+  limits: "From Nager.Date, which covers about 120 countries, with Calendarific and a small built-in list (Gabon) behind it. If I have nothing for your country I'll say so.",
 }, "Your day");
 
 addBriefSection({
@@ -186,7 +255,9 @@ addBriefSection({
     if (!solid(user)) return [];
     const cc = countryFor(user).cc!;
     const today = local(now, user.tz).startOf("day");
-    const list = [...((await cacheGet<Holiday[]>(db, `nager:${cc}:${today.year}`, 30 * 86_400_000, now)) ?? []), ...((await cacheGet<Holiday[]>(db, `nager:${cc}:${today.year + 1}`, 30 * 86_400_000, now)) ?? [])];
+    // Only what's already cached (or built in), so the brief never waits on the network.
+    const year = async (y: number) => (await cacheGet<Holiday[]>(db, `nager:${cc}:${y}`, 30 * 86_400_000, now)) ?? (await cacheGet<Holiday[]>(db, `cal:${cc}:${y}`, 30 * 86_400_000, now)) ?? builtinHolidays(cc, y) ?? [];
+    const list = [...(await year(today.year)), ...(await year(today.year + 1))];
     for (const n of [1, 7]) {
       const h = list.find((x) => x.global && x.date === today.plus({ days: n }).toISODate());
       if (h) return [n === 1 ? `Tomorrow is ${h.name}, a public holiday.` : `${h.name} is a week today, ${dd(DateTime.fromISO(h.date))}, a public holiday.`];
@@ -202,9 +273,9 @@ onJob("home_holidays", async (_job, deps) => {
   const users = await deps.db.query<User>(`SELECT * FROM users`);
   const ccs = [...new Set(users.filter(solid).map((u) => countryFor(u).cc!))];
   for (const cc of ccs.slice(0, 40)) {
-    if ((await covered(deps.db, cc)) === false) continue;
     const y = local(now, "UTC").year;
-    await holidays(deps.db, cc, y);
-    if (local(now, "UTC").month >= 11) await holidays(deps.db, cc, y + 1);
+    const load = (await covered(deps.db, cc)) === false ? calendarific : holidays;
+    await load(deps.db, cc, y);
+    if (local(now, "UTC").month >= 11) await load(deps.db, cc, y + 1);
   }
 });

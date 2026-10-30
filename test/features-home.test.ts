@@ -11,9 +11,10 @@ import type { User } from "../src/policy/types.js";
 import { cachePut, parseCost } from "../src/modules/features/home/util.js";
 import { forecast, supply } from "../src/modules/features/home/utilities.js";
 import { readPractice } from "../src/modules/features/home/faith.js";
-import { longBreaks } from "../src/modules/features/home/holidays.js";
+import { builtinHolidays, easter, longBreaks } from "../src/modules/features/home/holidays.js";
 import { flightCode } from "../src/modules/features/home/flights.js";
 import { DateTime } from "luxon";
+import { config } from "../src/core/config.js";
 
 let db: Db;
 beforeAll(async () => { db = await openTestDb(); });
@@ -378,14 +379,65 @@ describe("public holidays and long weekends", () => {
   it("says plainly when a country isn't covered, and when the service is down", async () => {
     at("2026-10-29T08:00:00Z");
     mockFetch([[/AvailableCountries/, () => json([{ countryCode: "KE" }])]]);
-    const u = await person("Yannick", "Africa/Libreville", { country: "GA" });
+    const u = await person("Mahamat", "Africa/Ndjamena", { country: "TD" });
     await db.query(`DELETE FROM home_cache WHERE key='nager:countries'`);
-    expect((await say(u, "next public holiday")).text).toBe("Nager.Date, where I get public holidays, doesn't cover Gabon yet, so I can't list them. The government's own site will have them.");
+    expect((await say(u, "next public holiday")).text).toBe("Nager.Date, where I get public holidays, doesn't cover Chad yet, so I can't list them. The government's own site will have them.");
     vi.unstubAllGlobals();
     await db.query(`DELETE FROM home_cache WHERE key LIKE 'nager:%'`);
     mockFetch([[/nager/, () => { throw new Error("ETIMEDOUT"); }]]);
     const k = await person("Zawadi", "Africa/Nairobi", { country: "KE" });
     expect((await say(k, "long weekends")).text).toBe("I couldn't reach the public holidays service just now. Try again in a few minutes.");
+  });
+
+  it("falls back to a built-in list for Gabon, with Easter Monday, Ascension and Whit Monday worked out", async () => {
+    expect(easter(2026).toISODate()).toBe("2026-04-05");
+    expect(easter(2027).toISODate()).toBe("2027-03-28");
+    const ga = builtinHolidays("GA", 2026)!;
+    expect(ga.map((h) => `${h.date} ${h.name}`)).toEqual([
+      "2026-01-01 New Year's Day", "2026-04-06 Easter Monday", "2026-04-17 Women's Day", "2026-05-01 Labour Day", "2026-05-14 Ascension Day", "2026-05-25 Whit Monday",
+      "2026-08-15 Assumption Day", "2026-08-16 Independence Day", "2026-08-17 Independence Day holiday", "2026-11-01 All Saints' Day", "2026-12-25 Christmas Day",
+    ]);
+    expect(builtinHolidays("TD", 2026)).toBeNull();
+
+    at("2026-10-29T08:00:00Z");
+    mockFetch([[/AvailableCountries/, () => json([{ countryCode: "KE" }])]]);
+    await db.query(`DELETE FROM home_cache WHERE key LIKE 'nager:%' OR key LIKE 'cal:%'`);
+    const u = await person("Yannick", "Africa/Libreville", { country: "GA" });
+    const r = await say(u, "next public holiday");
+    expect(r.text).toBe("Next public holiday in Gabon: All Saints' Day, Sun 1 Nov, in 3 days. After that: Christmas Day, Fri 25 Dec. That's from my own list for Gabon, since my holiday service doesn't cover it. Eid al-Fitr and Eid al-Adha move with the moon each year, so they aren't on it.");
+    expect((await say(u, "long weekends in 2027")).text).toMatch(/^Long weekends in Gabon in 2027:\n- Fri 1 Jan \(New Year's Day\): 3 days off, Fri to Sun\.\n- Mon 29 Mar \(Easter Monday\): 3 days off, Sat to Mon\.\n- Thu 6 May \(Ascension Day\): take Fri 7 May off for 4 days in a row\.[\s\S]*Sat to Mon\.\n\nThat's from my own list for Gabon/);
+    // The brief needs nothing from the network for it.
+    at("2026-10-31T06:00:00Z");
+    vi.unstubAllGlobals();
+    mockFetch([]);
+    expect(await brief(u)).toContain("Tomorrow is All Saints' Day, a public holiday.");
+
+    // Nager.Date down altogether: Gabon still gets its built-in list.
+    at("2026-10-29T08:00:00Z");
+    await db.query(`DELETE FROM home_cache WHERE key LIKE 'nager:%'`);
+    mockFetch([[/nager/, () => { throw new Error("ETIMEDOUT"); }]]);
+    expect((await say(u, "next public holiday")).text).toMatch(/^Next public holiday in Gabon: All Saints' Day/);
+  });
+
+  it("uses Calendarific when a key is set and Nager.Date has no list, keeping only national holidays", async () => {
+    at("2026-10-29T08:00:00Z");
+    const saved = config.calendarificKey;
+    config.calendarificKey = "cal_test";
+    try {
+      await db.query(`DELETE FROM home_cache WHERE key LIKE 'nager:%' OR key LIKE 'cal:%'`);
+      const hol = (iso: string, name: string, type: string[]) => ({ name, description: "", country: { id: "ga", name: "Gabon" }, date: { iso, datetime: {} }, type, primary_type: type[0], locations: "All", states: "All" });
+      const calls = mockFetch([
+        [/AvailableCountries/, () => json([{ countryCode: "KE" }])],
+        [/^https:\/\/calendarific\.com\/api\/v2\/holidays\?/, (url) => json({ meta: { code: 200 }, response: { holidays: url.includes("year=2026") ? [
+          hol("2026-11-01", "All Saints' Day", ["National holiday"]), hol("2026-11-20", "Eid test", ["National holiday"]), hol("2026-11-10", "Some observance", ["Observance"]), hol("2026-12-25T00:00:00+01:00", "Christmas Day", ["National holiday", "Christian"]),
+        ] : [] } })],
+      ]);
+      const u = await person("Ondo", "Africa/Libreville", { country: "GA" });
+      const r = await say(u, "next public holiday");
+      expect(r.text).toBe("Next public holiday in Gabon: All Saints' Day, Sun 1 Nov, in 3 days. After that: Eid test, Fri 20 Nov.");
+      const url = calls.find((c) => c.url.includes("calendarific"))!.url;
+      expect(url).toBe("https://calendarific.com/api/v2/holidays?api_key=cal_test&country=GA&year=2026");
+    } finally { config.calendarificKey = saved; }
   });
 
   it("respects weekends that aren't Saturday and Sunday", () => {
