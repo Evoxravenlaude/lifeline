@@ -7,7 +7,7 @@ import { config } from "../src/core/config.js";
 import { ensureUser, handleMessage } from "../src/core/handler.js";
 import { dueBirthdays, groupActive, groupButton, groupCommand, guestAnswer, parseDayMonth, wordsToCommand, type GroupMsg } from "../src/telegram/group.js";
 import { signInitData, verifyInitData } from "../src/core/webapp.js";
-import { streakOf } from "../src/modules/life.js";
+import { repairable, repairUsed, streakOf } from "../src/modules/life.js";
 import { parseMoney } from "../src/core/time.js";
 import { createWeb } from "../src/web/server.js";
 
@@ -143,10 +143,92 @@ describe("Mini App sign-in", () => {
 
 describe("kinder streaks", () => {
   it("lets one rest day a week keep the run going", () => {
-    expect(streakOf(["2026-10-29", "2026-10-28", "2026-10-27"], "2026-10-29")).toEqual({ run: 3, best: 3, restYesterday: false });
+    expect(streakOf(["2026-10-29", "2026-10-28", "2026-10-27"], "2026-10-29")).toMatchObject({ run: 3, best: 3, restYesterday: false, freezes: 0, frozeYesterday: false });
     expect(streakOf(["2026-10-29", "2026-10-27", "2026-10-26"], "2026-10-29")).toMatchObject({ run: 3, restYesterday: true });
     expect(streakOf(["2026-10-29", "2026-10-27", "2026-10-25", "2026-10-24"], "2026-10-29").run).toBe(2);
     expect(streakOf(["2026-10-29", "2026-10-20", "2026-10-19", "2026-10-18", "2026-10-17"], "2026-10-29")).toMatchObject({ run: 1, best: 4 });
+  });
+
+  // Days counted back from a fixed today, so the cases read as "n days ago".
+  const T = "2026-10-29";
+  const ago = (n: number) => new Date(Date.parse(`${T}T00:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
+  const span = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, i) => ago(from - i));
+
+  it("earns a freeze for every 7 days logged in a run, at most 2 banked", () => {
+    expect(streakOf(span(6, 0), T)).toMatchObject({ run: 7, freezes: 1, earnedToday: true });
+    expect(streakOf(span(7, 1), ago(1))).toMatchObject({ run: 7, freezes: 1, earnedToday: true });
+    expect(streakOf(span(7, 0), T)).toMatchObject({ run: 8, freezes: 1, earnedToday: false });
+    expect(streakOf(span(13, 0), T)).toMatchObject({ run: 14, freezes: 2, earnedToday: true });
+    expect(streakOf(span(20, 0), T)).toMatchObject({ run: 21, freezes: 2, earnedToday: false }); // the cap holds
+  });
+
+  it("spends a freeze on a missed day the rest day doesn't cover", () => {
+    // 7 days logged, a rest day, one more, then a miss the rest day can't cover: a freeze takes it.
+    const days = [...span(10, 4), ago(2), T];
+    expect(streakOf(days, T)).toMatchObject({ run: 9, freezes: 0, frozeYesterday: true, restYesterday: false, brokeOn: null });
+    // Two misses in a row after a full week: the rest day, then a freeze.
+    expect(streakOf([...span(9, 3), T], T)).toMatchObject({ run: 8, frozeYesterday: true, freezes: 0 });
+    // The same two misses with nothing banked end the run, and kindly the best stays.
+    expect(streakOf([...span(6, 3), T], T)).toMatchObject({ run: 1, best: 4, brokeOn: ago(1) });
+    // A freeze is never spent on today, which isn't over yet.
+    expect(streakOf(span(7, 1), T)).toMatchObject({ run: 7, freezes: 1, frozeYesterday: false });
+  });
+
+  it("repairs a break within 48 hours, once in 30 days, only when it brings the run back", () => {
+    // Logged, a rest day, then a miss yesterday that broke it: yesterday can be repaired.
+    const a = span(7, 3);
+    expect(streakOf(a, T).brokeOn).toBe(ago(1));
+    expect(repairable(a, [], T)).toBe(ago(1));
+    expect(streakOf([...a, T], T, [ago(1)])).toMatchObject({ run: 7, brokeOn: null });
+    // Broken the day before yesterday, logged since: still in time.
+    const b = [...span(8, 4), ago(1), T];
+    expect(repairable(b, [], T)).toBe(ago(2));
+    expect(streakOf(b, T, [ago(2)]).run).toBe(8);
+    // Three days ago is too late.
+    expect(repairable([...span(9, 5), ago(2), ago(1), T], [], T)).toBeNull();
+    // A two-day gap with no rest day left: filling one day wouldn't bring the run back.
+    expect(repairable([...span(8, 4), T], [], T)).toBeNull();
+    // Nothing broken, nothing to repair.
+    expect(repairable(span(3, 0), [], T)).toBeNull();
+    expect(repairUsed([ago(10)], T)).toBe(ago(10));
+    expect(repairUsed([ago(30)], T)).toBeNull();
+  });
+
+  it("repairs in words, mentions freezes plainly, and never shames", async () => {
+    const u = await ensureUser(db, "telegram", "8102", "Ines");
+    const { localDay } = await import("../src/core/time.js");
+    const today = localDay(new Date(), u.tz);
+    const day = (n: number) => new Date(Date.parse(`${today}T00:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
+    const h = await db.one<{ id: number }>(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,'reading',7) RETURNING id`, [u.id]);
+    // Five days, a rest day, then yesterday missed: today starts again, and a repair is offered.
+    for (const n of [7, 6, 5, 4, 3]) await db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,$2)`, [h!.id, day(n)]);
+    const r = await handleMessage(db, u, "did reading", { channel: "telegram" });
+    expect(r.text).toMatch(/Day one again\. Your best run is 5 days/);
+    expect(r.text).toMatch(/say "repair my streak"/);
+    expect(r.text).not.toMatch(/fail|broke|lost|missed/i);
+    const fix = await handleMessage(db, u, "repair my streak", { channel: "telegram" });
+    expect(fix.text).toMatch(/^Done\. .+ counts for reading now, so the run holds at 7 days\. One repair a month per habit\.$/);
+    expect((await db.one<{ repaired_days: string[] }>(`SELECT repaired_days FROM habits WHERE id=$1`, [h!.id]))!.repaired_days).toEqual([day(1)]);
+    expect((await handleMessage(db, u, "repair my reading streak", { channel: "telegram" })).text).toMatch(/^Nothing to repair\. Your reading run is going: 7 days\./);
+    expect((await handleMessage(db, u, "undo", { channel: "telegram" })).text).toMatch(/Taken back/);
+
+    // "I did it yesterday": a real check-in for yesterday, so the monthly repair stays free.
+    const v = await ensureUser(db, "telegram", "8103", "Tomas");
+    const g = await db.one<{ id: number }>(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,'piano',7) RETURNING id`, [v.id]);
+    for (const n of [4, 3, 2]) await db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,$2)`, [g!.id, day(n)]);
+    expect((await handleMessage(db, v, "I did it yesterday", { channel: "telegram" })).text).toBe("Piano, logged for yesterday. That's 4 days running.");
+    expect((await db.one<{ repaired_days: string[] }>(`SELECT repaired_days FROM habits WHERE id=$1`, [g!.id]))!.repaired_days).toEqual([]);
+
+    // A week in a row earns a freeze, said in one plain clause; a freeze used is said the same way.
+    const w = await ensureUser(db, "telegram", "8104", "Aiko");
+    const k = await db.one<{ id: number }>(`INSERT INTO habits (user_id, name, target_per_week) VALUES ($1,'walk',7) RETURNING id`, [w.id]);
+    for (let n = 6; n >= 1; n--) await db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,$2)`, [k!.id, day(n)]);
+    expect((await handleMessage(db, w, "did walk", { channel: "telegram" })).text).toMatch(/That's 7 days running\. You've earned a streak freeze, so a missed day won't break the run\./);
+    // A week logged (a freeze earned), a rest day, one more, then yesterday missed: the freeze takes it.
+    await db.query(`DELETE FROM habit_checkins WHERE habit_id=$1`, [k!.id]);
+    for (const n of [10, 9, 8, 7, 6, 5, 4, 2]) await db.query(`INSERT INTO habit_checkins (habit_id, day) VALUES ($1,$2)`, [k!.id, day(n)]);
+    const f = await handleMessage(db, w, "did walk", { channel: "telegram" });
+    expect(f.text).toBe("Walk, logged. That's 9 days running. Yesterday used a streak freeze, so the run holds.");
   });
 
   it("says so kindly in the reply", async () => {
