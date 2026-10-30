@@ -49,7 +49,7 @@ const SENTENCES: Record<string, string[]> = {
   "class.list": ["my timetable", "classes"],
   "assignment.add": ["I have an assignment Lab 3 due next monday", "there's an exam on networks due dec 2"],
   "assignment.done": ["I submitted the assignment for Lab 3", "done assignment Lab 3"],
-  "trip.create": ["I'm going to Accra on dec 20 until dec 27 with a budget of 600 usd", "plan a trip to Nairobi"],
+  "trip.create": ["I'm going to Accra on dec 20 until dec 27 with a budget of 600 usd", "plan a trip to Accra from dec 20 to dec 27"],
   "trip.add_item": ["add a flight LOS-ACC to the trip on dec 20 7am", "booked the hotel Labadi Beach for my trip"],
   "trip.tick": ["packed the charger", "packed passport"],
   "trip.show": ["show my trip", "trip"],

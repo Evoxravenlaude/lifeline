@@ -20,8 +20,9 @@ describe("the menu", () => {
     await handleMessage(db, u, "remind me to call mum at 4pm", { channel: "telegram", now: NOW });
     const r = await panel(db, (await getUserById(db, u.id))!, "home", NOW);
     expect(r.panel!.text).toMatch(/^\*\*Good morning, Sage\.\*\*/);
-    expect(r.panel!.text).toMatch(/Next: call mum, at 16:00\./);
-    expect(datas(r.panel!)).toEqual(["p:today", "p:lists", "p:health", "p:money", "p:trips", "p:play", "p:settings", "ev:home", "p:ok"]);
+    expect(r.panel!.text).toMatch(/Still to come today\*\*\n└ 16:00 Call mum/);
+    expect(r.panel!.card).toBe("home");
+    expect(datas(r.panel!)).toEqual(["p:today", "p:lists", "p:health", "p:money", "p:trips", "p:play", "p:settings", "ev:home", "p:home", "p:ok"]);
   });
 
   it("every page except home has Back and OK", async () => {

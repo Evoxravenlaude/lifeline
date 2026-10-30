@@ -375,3 +375,40 @@ describe("after the second review", () => {
     expect(m.at.toISOString()).toBe("2026-11-06T22:00:00.000Z"); // 17:00 EST, after the clocks went back
   });
 });
+
+describe("planning a trip the way a person would", () => {
+  it("asks a couple of anchors, says what it's doing, works in steps, and comes back with a picture and a plan", async () => {
+    Object.assign(config, { geminiKey: "g_test", provider: "gemini", webUrl: "https://lifeline.example.com", cfAccountId: "acc", cfApiToken: "tok" });
+    const img = Buffer.alloc(6000, 9);
+    const plan = { title: "Tunisia in March", clock: "As a Nigerian passport holder you need a Tunisian visa from the embassy in Abuja, so that starts before any flight money moves.", summary: "I'd base you in Sidi Bou Said for the blue-and-white lanes, book one long dinner in the Medina, and do the Sahara edge at Douz while March is still mild.", visa: "A visa is needed.", gettingThere: "Via Istanbul or Casablanca.", budget: "", stay: [{ area: "Sidi Bou Said", why: "Calm and close to Tunis." }], days: [{ title: "Tunis", items: ["Medina walk"] }, { title: "Douz", items: ["Dunes"] }], food: ["Brik"], tips: [], packing: ["Light jacket"], questions: ["When should the next trip follow?", "Who's coming with you?"] };
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      const url = String(input?.url ?? input);
+      if (/api\.cloudflare\.com/.test(url)) return new Response(JSON.stringify({ result: { image: img.toString("base64") } }), { headers: { "content-type": "application/json" } });
+      if (/geocoding-api\.open-meteo\.com/.test(url)) return new Response(JSON.stringify({ results: [{ name: "Lagos", country_code: "NG", country: "Nigeria", timezone: "Africa/Lagos", latitude: 6.5, longitude: 3.4 }] }), { headers: { "content-type": "application/json" } });
+      if (/generativelanguage/.test(url)) {
+        const body = JSON.parse(init?.body ?? "{}");
+        const json = Boolean(body.generationConfig?.responseMimeType);
+        const text = json ? JSON.stringify(plan) : "Research notes: visas, routes, stays and food in Tunisia.";
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } }), { headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`unexpected ${url}`);
+    }));
+    const u = await ensureUser(db, "telegram", "8601", "Rav Ravel");
+    await db.query(`UPDATE users SET prefs = prefs || '{"city":"Lagos","country":"NG"}'::jsonb WHERE id=$1`, [u.id]);
+    const me = (await (await import("../src/core/handler.js")).getUserById(db, u.id))!;
+    const ask = await handleMessage(db, me, "Plan a trip to Tunisia", { channel: "telegram" });
+    expect(ask.text).toMatch(/^Happy to plan it!/);
+    expect(ask.text).toMatch(/I'll plan it from Lagos/);
+    const said: string[] = [], steps: string[] = [];
+    const r = await handleMessage(db, (await (await import("../src/core/handler.js")).getUserById(db, u.id))!, "12 of march, food and slow days", { channel: "telegram", note: (t) => { said.push(t); }, progress: (s) => { steps.push(s); } });
+    expect(said[0]).toMatch(/^On it\. Tunisia from 12 March, from Lagos, food and slow days\./);
+    expect(said[0]).toMatch(/Visa rules for Nigeria passport holders come first/);
+    expect(said.at(-1)).toBe("Your Tunisia plan is built. Publishing the full itinerary now.");
+    expect(steps.length).toBeGreaterThanOrEqual(4);
+    expect(r.text).toMatch(/^Your Tunisia plan is ready: https:\/\/lifeline\.example\.com\/plan\//);
+    expect(r.text).toMatch(/The one thing that sets the clock: as a Nigerian passport holder/);
+    expect(r.text).toMatch(/Two things to shape the next pass: When should the next trip follow\? And who's coming with you\?/);
+    expect(r.image?.mime).toBeTruthy(); // the picture comes into the chat itself
+    expect(r.text).not.toMatch(/railway/);
+  }, 30_000);
+});

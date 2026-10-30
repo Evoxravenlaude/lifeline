@@ -21,7 +21,7 @@ const NOW = new Date("2026-10-27T10:00:00Z");
 describe("follow-ups", () => {
   it("a trip with no dates asks once, then reads the next message as the answer", async () => {
     const u = await fresh("5001");
-    const a = await handleMessage(db, u, "plan a trip to accra", { channel: "telegram", now: NOW });
+    const a = await handleMessage(db, u, "I'm going to accra", { channel: "telegram", now: NOW }); // "plan a trip to accra" now researches a full plan
     expect(a.text).toMatch(/^Accra, nice\. When are you going\?/);
     expect(a.buttons).toBeUndefined();
     const u2 = (await getUserById(db, u.id))!;
@@ -38,7 +38,7 @@ describe("follow-ups", () => {
 
   it("skip carries on without the detail; a second message about the same place updates, not duplicates", async () => {
     const u = await fresh("5002");
-    await handleMessage(db, u, "plan a trip to lisbon", { channel: "web", now: NOW });
+    await handleMessage(db, u, "I'm going to lisbon", { channel: "web", now: NOW });
     const s = await handleMessage(db, (await getUserById(db, u.id))!, "skip", { channel: "web", now: NOW });
     expect(s.text).toMatch(/^Lisbon, dates open\./);
     const again = await handleMessage(db, (await getUserById(db, u.id))!, "I'm going to lisbon from nov 3 to nov 9", { channel: "web", now: NOW });
