@@ -113,6 +113,8 @@ export const config = {
   flutterwaveKey: process.env.FLUTTERWAVE_SECRET_KEY ?? "",
   flutterwaveBase: process.env.FLUTTERWAVE_BASE ?? "https://api.flutterwave.com/v3",
   githubToken: process.env.GITHUB_TOKEN ?? "",
+  /** Optional: Calendarific (calendarific.com) for public holidays in countries Nager.Date doesn't cover. Empty turns it off. */
+  calendarificKey: (process.env.CALENDARIFIC_KEY ?? "").trim(),
   /* ---- more ways to sign in on the website (src/core/auth.ts, docs/SIGNIN.md) ---- */
   /** Google OAuth web client id (…apps.googleusercontent.com). Empty turns Google sign-in off. */
   googleClientId: (process.env.GOOGLE_CLIENT_ID ?? "").trim(),

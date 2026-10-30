@@ -22,6 +22,8 @@ import "./calm.js";
 import "./appinfo.js";
 import "./planner.js";
 import "./research.js";
+import "./chatstyle.js";
+import "./pip.js";
 
 /* Feature folders: every src/modules/features/<area>/index.ts registers itself (see docs/PLUGINS.md). */
 import { readdirSync, existsSync } from "node:fs";

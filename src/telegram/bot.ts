@@ -20,7 +20,10 @@ import { draftReply } from "../intent/model.js";
 import { polish, personaOf } from "../core/voice.js";
 import { pipLine } from "../core/pip.js";
 import { admit, circleSummary, FULL_MESSAGE, isOwner } from "../core/circle.js";
-import { copyButton, toPlain, toTelegramHtml } from "../core/format.js";
+import { copyButton, toPlain, toRichHtml, toTelegramHtml } from "../core/format.js";
+import { throttle } from "../intent/providers.js";
+import { AREA_COLOURS, AREA_NAMES, AREAS, areaOfKind, registerTopicMaker, topicsOf } from "../core/topics.js";
+import { findUserByIdentity } from "../core/handler.js";
 import { ASKS, BACK, OK, panel, shapeAnswer, type Btn, type Style } from "./panels.js";
 import { ensurePip, pipSticker } from "./stickers.js";
 import { dashboardFacts, dashSignature, renderDashboard, renderSection, sectionFacts } from "../core/dashboard.js";
@@ -39,7 +42,7 @@ import { abilityLines, allow, mediaAbilities, probeVoice, speak, wantsVoice } fr
 import { activePlaces, webAddress } from "../core/ways.js";
 import { everythingGroup, everythingIndex, helpGroups } from "../intent/capabilities.js";
 import { answerWebLogin, webLoginExists, webLoginPurpose } from "../core/weblogin.js";
-import { activateGroup, deactivateGroup, dueBirthdays, groupActive, groupButton, groupCommand, guestAnswer, memberOf, wordsToCommand, type GroupOut, type Person } from "./group.js";
+import { activateGroup, cardRich, cardVoice, deactivateGroup, dueBirthdays, dueCards, duePolls, groupActive, groupButton, groupCommand, guestAnswer, memberOf, recordVote, rememberBill, rememberCard, rememberPoll, wordsToCommand, type DueCard, type GroupOut, type Person } from "./group.js";
 
 /** Telegram HTML: escape; bold the head line of a multi-line message so lists read at a glance; keep links clickable. */
 /** Telegram HTML from the reply's markdown. Kept under this name for older callers. */
@@ -65,6 +68,25 @@ const TZ_CHOICES: [string, string][] = [["London", "Europe/London"], ["New York"
 export { getUserById } from "../core/handler.js";
 /** Telegram's party-popper message effect. */
 const CONFETTI = "5046509860389126442";
+
+/**
+ * Quick logs get a reaction on the person's own message instead of a whole reply (Telegram's reaction emoji,
+ * never product text). The reply is still sent when it says more than "logged".
+ */
+export const QUICK: Record<string, string> = {
+  "medication.taken": "💊", "habit.checkin": "👍", "measure.log": "✍", "spend.log": "✍", "list.add": "👌",
+  "note.add": "✍", "good.add": "❤", "cycle.log": "✍",
+};
+/** Long summaries that read better as a rich message (headings, lists), whatever the action set. */
+const RICH_ACTIONS = new Set(["health.summary", "yearwrap.show", "fun.wrapped", "debt.plan", "relocation.show", "trip.show", "spend.summary", "digest.now", "today.show", "research.deep"]);
+export const wantsRich = (r: Reply) => Boolean(r.rich || (r.action && RICH_ACTIONS.has(r.action) && r.text.length > 300));
+/** A reply worth leaving unsaid when there's a reaction: one short line that only confirms. */
+export function onlyConfirms(r: Reply): boolean {
+  const t = toPlain(r.text).trim();
+  if (r.celebrate || r.image || r.file || r.dice || t.includes("\n") || t.length > 90) return false;
+  if ((r.buttons ?? []).some((b) => !/^undo:/.test(b.data))) return false;
+  return /\b(?:logged|added|noted|kept|taken|got it|saved|on the list)\b/i.test(t);
+}
 
 /** The reply's own buttons, plus a Copy button when the reply holds one thing worth copying (a code, an address, a drafted message). */
 /** How a button should look: a yes is green, a no or a delete is red, OK is blue, everything else plain. */
@@ -104,17 +126,89 @@ function kb(r: Reply): InlineKeyboard | undefined {
 export function createBot(db: Db): Bot {
   const bot = new Bot(config.telegramToken);
 
+  /** A rich message (Bot API 10.1): headings, lists and tables drawn properly. False when Telegram won't take it. */
+  const sendRich = async (chatId: number, r: Reply, thread?: number): Promise<boolean> => {
+    if (r.text.length < 40) return false;
+    return bot.api.sendRichMessage(chatId, { html: toRichHtml(r.text), skip_entity_detection: false }, { reply_markup: kb(r), ...(thread ? { message_thread_id: thread } : {}) } as any)
+      .then(() => true, (e: any) => { log.warn({ err: e?.description ?? e?.message }, "rich message refused, sending plain"); return false; });
+  };
+  const sendFile = async (chatId: number, f: NonNullable<Reply["file"]>, thread?: number) => {
+    await bot.api.sendDocument(chatId, new InputFile(Buffer.from(f.data, "base64"), f.name), thread ? { message_thread_id: thread } : {}).catch((e) => log.warn({ err: e?.description ?? e?.message }, "file send failed"));
+  };
+  /** Pings: the kind picks the topic (when the person uses topics); the brief and long summaries go out as rich messages. */
   registerSender("telegram", async (externalId, reply) => {
-    const parts = chunks(reply.text);
-    for (let i = 0; i < parts.length; i++) {
-      const markup = i === parts.length - 1 ? kb(reply) : undefined;
-      await bot.api.sendMessage(Number(externalId), toHtml(parts[i]), { parse_mode: "HTML", reply_markup: markup, link_preview_options: { is_disabled: true } })
-        .catch(() => bot.api.sendMessage(Number(externalId), toPlain(parts[i]), { reply_markup: markup }));
+    const chatId = Number(externalId);
+    const u = await findUserByIdentity(db, "telegram", externalId).catch(() => undefined);
+    const topics = u ? topicsOf(u.prefs) : null;
+    const area = areaOfKind(reply.kind);
+    let thread = area && topics ? topics[area] : undefined;
+    const out = async (th?: number) => {
+      if (reply.image) await bot.api.sendPhoto(chatId, new InputFile(Buffer.from(reply.image.data, "base64"), "lifeline.png"), th ? { message_thread_id: th } : {}).catch(() => {});
+      if (reply.file) await sendFile(chatId, reply.file, th);
+      if ((wantsRich(reply) || reply.kind === "digest") && u?.prefs.rich !== false && (await sendRich(chatId, reply, th))) return;
+      const parts = chunks(reply.text);
+      for (let i = 0; i < parts.length; i++) {
+        const markup = i === parts.length - 1 ? kb(reply) : undefined;
+        const base = { reply_markup: markup, ...(th ? { message_thread_id: th } : {}) };
+        await bot.api.sendMessage(chatId, toHtml(parts[i]), { ...base, parse_mode: "HTML", link_preview_options: { is_disabled: true } })
+          .catch(async (e: any) => {
+            if (th && /thread|topic/i.test(String(e?.description ?? ""))) throw e; // the topic is gone: caught below
+            await bot.api.sendMessage(chatId, toPlain(parts[i]), base);
+          });
+      }
+    };
+    try { await out(thread); }
+    catch (e: any) {
+      // The person deleted that topic: forget it and use the main chat.
+      if (!thread || !u || !area) throw e;
+      await db.query(`UPDATE users SET prefs = jsonb_set(prefs, '{topics}', (prefs->'topics') - $2) WHERE id=$1`, [u.id, area]).catch(() => {});
+      thread = undefined;
+      await out(undefined);
     }
   });
 
+  /* Topics in the private chat: made on request ("use topics"), only when Telegram has topic mode on for the bot. */
+  registerTopicMaker(async (chatId, existing) => {
+    const me: any = await bot.api.getMe().catch(() => null);
+    if (!me?.has_topics_enabled) return { ok: false, why: "off" };
+    const topics = { ...existing };
+    for (const a of AREAS) {
+      if (topics[a]) continue;
+      const t = await bot.api.createForumTopic(chatId, AREA_NAMES[a], { icon_color: AREA_COLOURS[a] }).catch((e) => { log.warn({ err: e?.description ?? e?.message }, "topic create failed"); return null; });
+      if (!t) return Object.keys(topics).length ? { ok: true, topics } : { ok: false, why: "failed" };
+      topics[a] = t.message_thread_id;
+    }
+    return { ok: true, topics };
+  });
+
+  /* Streaming answers: the person pressed Stop on a draft. */
+  const stops = new Map<string, AbortController>();
+  let draftsWork = true;
+  /** A live draft for a model answer that's being written: plain text while it streams, the real reply replaces it. */
+  const draftFor = (c: Context): { draft?: (t: string) => void; stop?: AbortSignal; end: () => void } => {
+    const chat = c.chat;
+    if (!draftsWork || chat?.type !== "private") return { end: () => {} };
+    const id = 1 + Math.floor(Math.random() * 2_000_000_000);
+    const key = `${chat.id}:${id}`;
+    const ac = new AbortController();
+    stops.set(key, ac);
+    const msg: any = c.message;
+    const thread = msg?.is_topic_message ? msg.message_thread_id : undefined;
+    let ended = false;
+    const t = throttle((text: string) => {
+      if (ended || !text.trim()) return;
+      c.api.sendMessageDraft(chat.id, id, toPlain(text).slice(0, 4000), { can_stop: true, ...(thread ? { message_thread_id: thread } : {}) } as any)
+        .catch((e: any) => { if (/method|not found|unknown/i.test(String(e?.description ?? ""))) draftsWork = false; ended = true; });
+    }, 500);
+    return { draft: t.push, stop: ac.signal, end: () => { ended = true; t.cancel(); stops.delete(key); } };
+  };
+
   /* Groups, channels and guest calls never reach anything personal: they're answered here and stop. */
   bot.use(async (ctx, next) => {
+    const stopped = (ctx.update as any).stopped_message_generation as { chat: { id: number }; draft_id: number } | undefined;
+    if (stopped) { stops.get(`${stopped.chat.id}:${stopped.draft_id}`)?.abort(); return; }
+    const vote = (ctx.update as any).poll_answer as { poll_id: string; user?: { id: number; first_name: string; last_name?: string; username?: string }; option_ids: number[] } | undefined;
+    if (vote) { if (vote.user) await recordVote(db, vote.poll_id, person(vote.user), vote.option_ids).catch(() => {}); return; }
     if ((ctx.update as any).guest_message) return onGuest(ctx).catch((e) => log.warn({ err: e?.message }, "guest answer failed"));
     const type = ctx.chat?.type;
     if (type === "group" || type === "supergroup") return onGroup(ctx).catch((e) => log.warn({ err: e?.message }, "group message failed"));
@@ -169,8 +263,20 @@ export function createBot(db: Db): Bot {
     "🎳": (v) => (v === 6 ? "Strike!" : v === 1 ? "Gutter ball." : `${v === 5 ? "Nine" : "A few"} pins down.`),
     "🎰": (v) => ([1, 22, 43].includes(v) ? "Three of a kind!" : v === 64 ? "Jackpot. Seven seven seven." : "No luck this spin."),
   };
-  const send = async (c: Context, r: Reply, spoken = false) => {
+  /** After a quick log: if that day tipped Pip over a milestone, he shows what he picked up (never in calm mode). */
+  const pipCheck = async (c: Context, u: Awaited<ReturnType<typeof userOf>>) => {
+    if (u.prefs.calm === true) return;
+    const { catchUp } = await import("../core/pipthings.js");
+    const { fresh } = await catchUp(db, u);
+    if (!fresh.length) return;
+    const t = fresh[fresh.length - 1];
+    const d = await propose({ db, user: u, now: new Date(), sourceMessage: "[pip milestone]" }, "pip.things", {});
+    const shown = renderDecision(d);
+    await send(c, { ...shown, text: `Pip has picked up ${t.name}, for ${t.why}.\n\n${shown.text}`, celebrate: true, action: "pip.things" });
+  };
+  const send = async (c: Context, r: Reply, spoken = false): Promise<void> => {
     const u = await userOf(c);
+    if (r.action && QUICK[r.action] && r.action !== "pip.things") setTimeout(() => { pipCheck(c, u).catch(() => {}); }, 800);
     void ensurePip(c.api, db, c.me.username);
     const st = u.prefs.calm === true ? null : pipSticker(r.sticker);
     if (st) await c.replyWithSticker(st).catch(() => {});
@@ -181,12 +287,40 @@ export function createBot(db: Db): Bot {
       else await c.reply(toPlain(r.text));
       return;
     }
+    /* A quick log: a reaction on their own message, and words only when there's more to say than "logged". */
+    const quick = r.react ?? QUICK[r.action ?? ""];
+    if (quick && c.chat?.type === "private" && c.message && !spoken && u.prefs.reactions !== false) {
+      const reacted = await c.api.setMessageReaction(c.chat.id, c.message.message_id, [{ type: "emoji", emoji: quick as any }]).then(() => true, () => false);
+      if (reacted && onlyConfirms(r)) {
+        if (!u.prefs.reactHint) {
+          await db.query(`UPDATE users SET prefs = prefs || '{"reactHint":true}'::jsonb WHERE id=$1`, [u.id]);
+          await c.reply(toHtml(`${r.text}\n\nFor quick logs like this I'll just react from now on. Say "undo" if I got one wrong, or "reply to my logs" if you'd rather have words.`), { parse_mode: "HTML", reply_markup: kb(r) }).catch(() => {});
+        }
+        setTimeout(() => { refreshHome(u.id).catch(() => {}); }, 1500);
+        return;
+      }
+    }
     if (r.image) {
       const photo = new InputFile(Buffer.from(r.image.data, "base64"), `lifeline.${r.image.mime.split("/")[1] ?? "jpg"}`);
-      const cap = r.text.length <= 1000 ? r.text : "";
+      const cap = r.text.length <= 1000 && !r.file ? r.text : "";
       await c.replyWithPhoto(photo, { caption: cap ? toHtml(cap) : undefined, parse_mode: "HTML", reply_markup: cap ? kb(r) : undefined })
         .catch(() => c.replyWithPhoto(photo, { caption: cap ? toPlain(cap) : undefined }));
       if (cap) return;
+    }
+    if (r.file) {
+      const doc = new InputFile(Buffer.from(r.file.data, "base64"), r.file.name);
+      const cap = toPlain(r.text).length <= 1000 ? r.text : "";
+      const ok = await c.replyWithDocument(doc, { caption: cap ? toHtml(cap) : undefined, parse_mode: "HTML", reply_markup: cap ? kb(r) : undefined })
+        .then(() => true, () => c.replyWithDocument(doc, { caption: cap ? toPlain(cap) : undefined }).then(() => true, (e) => { log.warn({ err: e?.description ?? e?.message }, "file send failed"); return false; }));
+      if (cap && ok) return;
+    }
+    /* Long, structured answers as a rich message (headings, lists, tables); plain HTML if Telegram won't take it. */
+    if (wantsRich(r) && c.chat?.type === "private" && u.prefs.rich !== false && !r.celebrate) {
+      const msg: any = c.message ?? c.callbackQuery?.message;
+      if (await sendRich(c.chat.id, r, msg?.is_topic_message ? msg.message_thread_id : undefined)) {
+        if (wantsVoice(u.prefs, r, spoken)) await sendVoice(c, u, typeof r.speak === "string" ? r.speak : r.text, Boolean(r.speak) || (u.prefs.voiceReplies as string) === "always");
+        return;
+      }
     }
     const parts = chunks(r.text);
     /* Confetti only for a real milestone, only one-to-one, never in calm mode. */
@@ -335,7 +469,7 @@ export function createBot(db: Db): Bot {
   bot.command(["menu", "home"], async (c) => showPanel(c, await userOf(c), "home"));
   bot.command("settings", async (c) => showPanel(c, await userOf(c), "settings"));
   bot.api.setMyCommands(COMMANDS.map(([command, description]) => ({ command, description }))).catch((e) => log.warn({ err: e?.message }, "setMyCommands failed"));
-  bot.api.setMyCommands([["split", "Split a bill: /split 120 dinner @ana @ben"], ["tab", "Who still owes what"], ["list", "The group's shared list"], ["when", "A poll to find a time"], ["trivia", "A quiz for everyone"], ["birthday", "Your birthday, said here on the day"], ["help", "What I do in a group"]].map(([command, description]) => ({ command, description })), { scope: { type: "all_group_chats" } }).catch((e) => log.warn({ err: e?.message }, "group commands failed"));
+  bot.api.setMyCommands([["split", "Split a bill: /split 120 dinner @ana @ben"], ["tab", "Who still owes what"], ["list", "The group's shared list"], ["when", "A poll to find a time"], ["trivia", "A quiz for everyone"], ["birthday", "Your birthday, said here on the day"], ["card", "A voice birthday card from everyone"], ["help", "What I do in a group"]].map(([command, description]) => ({ command, description })), { scope: { type: "all_group_chats" } }).catch((e) => log.warn({ err: e?.message }, "group commands failed"));
   /* What a stranger sees on the empty chat and when the link is shared. Telegram caps these at 512 and 120 characters. */
   bot.api.setMyDescription(ABOUT_LONG).catch((e) => log.warn({ err: e?.message }, "setMyDescription failed"));
   bot.api.setMyShortDescription(ABOUT_SHORT).catch((e) => log.warn({ err: e?.message }, "setMyShortDescription failed"));
@@ -417,7 +551,10 @@ export function createBot(db: Db): Bot {
     if (!text) return say(c, "I couldn't make out that voice note. Once more, or type it?");
     await c.reply(`<i>“${toHtml(text.length > 900 ? `${text.slice(0, 900)}…` : text)}”</i>`, { parse_mode: "HTML" }).catch(() => c.reply(`“${text.slice(0, 900)}”`).catch(() => {}));
     const steps = stepsFor(c);
-    await send(c, await handleMessage(db, u, text, { channel: "telegram", progress: steps.step, note: async (t: string) => { await c.reply(toHtml(t), { parse_mode: "HTML" }).catch(() => {}); } }), true);
+    const live = draftFor(c);
+    try {
+      await send(c, await handleMessage(db, u, text, { channel: "telegram", progress: steps.step, note: async (t: string) => { await c.reply(toHtml(t), { parse_mode: "HTML" }).catch(() => {}); }, draft: live.draft, stop: live.stop }), true);
+    } finally { live.end(); }
     await steps.done();
   });
 
@@ -500,7 +637,10 @@ export function createBot(db: Db): Bot {
     await c.replyWithChatAction("typing").catch(() => {});
     const steps = stepsFor(c);
     const note = async (t: string) => { await c.reply(toHtml(t), { parse_mode: "HTML", link_preview_options: { is_disabled: true } }).catch(() => {}); await c.replyWithChatAction("typing").catch(() => {}); };
-    await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded, progress: steps.step, note }));
+    const live = draftFor(c);
+    try {
+      await send(c, await handleMessage(db, await userOf(c), text, { channel: "telegram", forwarded, progress: steps.step, note, draft: live.draft, stop: live.stop }));
+    } finally { live.end(); }
     await steps.done();
   });
 
@@ -624,23 +764,44 @@ export function createBot(db: Db): Bot {
   /* ---- groups ---- */
   const person = (u: { id: number; first_name: string; last_name?: string; username?: string }): Person & { id: number } => ({ id: u.id, name: [u.first_name, u.last_name].filter(Boolean).join(" "), username: u.username });
   const groupKb = (rows?: { label: string; data: string }[][]) => (rows?.length ? toKb(rows) : undefined);
-  const postGroup = async (c: Context, out: GroupOut) => {
-    const chat = c.chat!.id;
+  const postGroup = async (c: Context, out: GroupOut) => postTo(c.chat!.id, out, c.from?.id);
+  const postTo = async (chat: number, out: GroupOut, fromId?: number) => {
+    if (out.stopPoll) await bot.api.stopPoll(chat, out.stopPoll).catch(() => {});
     if (out.poll) {
       const p = out.poll;
-      await c.api.sendPoll(chat, p.question.slice(0, 300), p.options.map((text) => ({ text: text.slice(0, 100) })), {
-        is_anonymous: false, ...(p.correct != null ? { type: "quiz" as const, correct_option_id: p.correct, explanation: p.explanation } : { allows_multiple_answers: Boolean(p.multiple) }),
-      }).catch((e) => log.warn({ err: e?.description ?? e?.message }, "group poll failed"));
+      const m = await bot.api.sendPoll(chat, p.question.slice(0, 300), p.options.map((text) => ({ text: text.slice(0, 100) })), {
+        is_anonymous: false, ...(p.correct != null ? { type: "quiz" as const, correct_option_ids: [p.correct], explanation: p.explanation } : { allows_multiple_answers: Boolean(p.multiple) }),
+      } as any).catch((e) => { log.warn({ err: e?.description ?? e?.message }, "group poll failed"); return null; });
+      if (m?.poll && out.remember?.poll) await rememberPoll(db, chat, m.poll.id, m.message_id, fromId ?? 0, out.remember.poll).catch((e) => log.warn({ err: e?.message }, "poll not kept"));
       return;
     }
     if (!out.text) return;
     const opts = { parse_mode: "HTML" as const, reply_markup: groupKb(out.buttons), link_preview_options: { is_disabled: true } };
     /* Help and mistakes go to the one person who asked, so the group's chat stays about the group. */
-    if (out.ephemeral && c.from) {
-      const ok = await c.api.sendMessage(chat, toHtml(out.text), { ...opts, ephemeral_message_parameters: { receiver_user_id: c.from.id } } as any).then(() => true, () => false);
+    if (out.ephemeral && fromId) {
+      const ok = await bot.api.sendMessage(chat, toHtml(out.text), { ...opts, ephemeral_message_parameters: { receiver_user_id: fromId } } as any).then(() => true, () => false);
       if (ok) return;
     }
-    await c.reply(toHtml(out.text), opts).catch(() => c.reply(toPlain(out.text!), { reply_markup: opts.reply_markup }).catch(() => {}));
+    const sent = await bot.api.sendMessage(chat, toHtml(out.text), opts).catch(() => bot.api.sendMessage(chat, toPlain(out.text!), { reply_markup: opts.reply_markup }).catch(() => null));
+    if (sent && out.remember?.bill) await rememberBill(db, out.remember.bill, sent.message_id).catch(() => {});
+    if (sent && out.remember?.card) await rememberCard(db, out.remember.card, sent.message_id).catch(() => {});
+    if (out.file) await bot.api.sendDocument(chat, new InputFile(Buffer.from(out.file.data, "base64"), out.file.name)).catch((e) => log.warn({ err: e?.description ?? e?.message }, "group file failed"));
+    /* Each person's own share, seen only by them. If Telegram can't, the group message already says it. */
+    for (const p of out.privately ?? []) {
+      await bot.api.sendMessage(chat, toHtml(p.text), { parse_mode: "HTML", reply_markup: groupKb(p.buttons), ephemeral_message_parameters: { receiver_user_id: p.tgId } } as any).catch(() => {});
+    }
+  };
+  /** A voice card at midnight: one rich message holding every voice note, and a copy to the birthday person if they use lifeline. */
+  const sendCard = async (d: DueCard) => {
+    const rich = cardRich(d);
+    const toChat = async (chat: number) => {
+      const ok = await bot.api.sendRichMessage(chat, rich as any).then(() => true, (e: any) => { log.warn({ err: e?.description ?? e?.message }, "rich card refused, sending one by one"); return false; });
+      if (ok) return;
+      await bot.api.sendMessage(chat, `Happy birthday, ${d.name}.${d.voices.length ? ` ${d.voices.length === 1 ? "A voice note" : `${d.voices.length} voice notes`} from ${d.title ?? "everyone here"}:` : ""}`).catch(() => {});
+      for (const v of d.voices) await bot.api.sendVoice(chat, v.fileId, { caption: `From ${v.name}` }).catch(() => {});
+    };
+    await toChat(d.chatId);
+    if (d.tgId && d.voices.length && (await memberOf(db, d.tgId))) await toChat(d.tgId);
   };
   const onGroup = async (c: Context) => {
     const chat = c.chat!;
@@ -659,12 +820,31 @@ export function createBot(db: Db): Bot {
     }
     if (c.callbackQuery?.data?.startsWith("gr:")) {
       const r = await groupButton(db, chat.id, person(c.callbackQuery.from), c.callbackQuery.data);
+      if (r.calendar) {
+        // Into the tapper's own calendar, only if they use lifeline. Nothing about it is said in the group.
+        const m = await memberOf(db, c.callbackQuery.from.id);
+        if (!m) return void c.answerCallbackQuery({ text: "That needs lifeline. Message me directly to start, then tap again." }).catch(() => {});
+        const d = await propose({ db, user: m, now: new Date(), sourceMessage: `[group ${chat.id}] add to calendar` }, "calendar.add", { title: r.calendar.title, when: r.calendar.startIso });
+        return void c.answerCallbackQuery({ text: d.kind === "ran" ? "In your calendar, with a reminder before." : "I couldn't add it. Tell me directly and I'll put it in." }).catch(() => {});
+      }
       await c.answerCallbackQuery({ text: r.toast }).catch(() => {});
-      if (r.edit?.text) await c.editMessageText(toHtml(r.edit.text), { parse_mode: "HTML", reply_markup: groupKb(r.edit.buttons) }).catch(() => {});
+      const tapped = c.callbackQuery.message?.message_id;
+      if (r.edit?.text) {
+        if (r.billMsg && r.billMsg !== tapped) await c.api.editMessageText(chat.id, r.billMsg, toHtml(r.edit.text), { parse_mode: "HTML", reply_markup: groupKb(r.edit.buttons) }).catch(() => {});
+        else await c.editMessageText(toHtml(r.edit.text), { parse_mode: "HTML", reply_markup: groupKb(r.edit.buttons) }).catch(() => {});
+      }
       return;
     }
+    if ((c.update as any).poll_answer) return;
     if (c.callbackQuery) return void c.answerCallbackQuery({ text: "That button works in a private chat with me." }).catch(() => {});
     const msg = c.message;
+    /* A voice note replying to a birthday card's prompt goes on the card; a reaction says it's kept. */
+    if (msg?.voice && msg.from && !msg.from.is_bot && msg.reply_to_message?.from?.id === c.me.id) {
+      const r = await cardVoice(db, chat.id, msg.reply_to_message.message_id, person(msg.from), msg.voice.file_id, msg.voice.duration ?? 0);
+      if (r === "too long") await postGroup(c, { text: "That's a bit long for the card. Keep it under a minute and send it again?", ephemeral: true });
+      else if (r) await c.api.setMessageReaction(chat.id, msg.message_id, [{ type: "emoji", emoji: "🎉" }]).catch(() => postGroup(c, { text: r === "replaced" ? "Swapped in your new one." : "On the card.", ephemeral: true }));
+      return;
+    }
     if (!msg?.text || !msg.from || msg.from.is_bot) return;
     const text = msg.text;
     const ents = msg.entities ?? [];
@@ -701,7 +881,10 @@ export function createBot(db: Db): Bot {
   };
   /* Birthdays said in groups, checked every quarter hour. */
   const birthdays = setInterval(() => {
-    dueBirthdays(db, new Date()).then((due) => Promise.all(due.map((d) => bot.api.sendMessage(d.chatId, d.text).catch(() => {})))).catch((e) => log.warn({ err: e?.message }, "group birthdays failed"));
+    const now = new Date();
+    dueBirthdays(db, now).then((due) => Promise.all(due.map((d) => bot.api.sendMessage(d.chatId, d.text).catch(() => {})))).catch((e) => log.warn({ err: e?.message }, "group birthdays failed"));
+    dueCards(db, now).then(async (due) => { for (const d of due) await sendCard(d).catch((e) => log.warn({ err: e?.message }, "voice card failed")); }).catch((e) => log.warn({ err: e?.message }, "voice cards failed"));
+    duePolls(db, now).then(async (due) => { for (const d of due) await postTo(d.chatId, d.out).catch(() => {}); }).catch((e) => log.warn({ err: e?.message }, "closing polls failed"));
   }, 15 * 60_000);
   birthdays.unref?.();
 

@@ -5,6 +5,7 @@
  *           POST /auth/telegram/link  POST /auth/ways/remove   (every POST under /auth: JSON only, Origin checked)
  *  app:     GET /api/ways  POST /api/welcome  POST /api/push/subscribe /api/push/unsubscribe /api/push/test
  *  app:     GET /api/me /api/public /api/messages /api/state /api/digest /api/hackathons /api/scout /api/money /api/trips /api/settings /api/quip
+ *           GET /api/day /api/cycle /api/emergency   (read-only views, src/web/views.ts)
  *           POST /api/chat /api/button /api/scout   PATCH /api/settings
  *  hooks:   POST /webhooks/twilio  POST /webhooks/imessage   GET /health
  */
@@ -35,6 +36,8 @@ import { startWebLogin, pollWebLogin } from "../core/weblogin.js";
 import { admit, FULL_MESSAGE } from "../core/circle.js";
 import { verifyInitData } from "../core/webapp.js";
 import { mountExtras } from "./extras.js";
+import { mountViews } from "./views.js";
+import { pageReply } from "./replies.js";
 import { providerName } from "../intent/providers.js";
 import { draftReply } from "../intent/model.js";
 import { DateTime } from "luxon";
@@ -322,6 +325,8 @@ export function createWeb(db: Db, botUsername: string) {
     await next();
   });
   const user = (c: any): User => c.get("user") as User;
+  /* The day timeline, the cycle calendar and the emergency card (src/web/views.ts). After the check above, so signed in only. */
+  mountViews(app, db);
   /** Add a spoken version of the reply when the action asks for it or the person's setting says so. */
   const withVoice = async (u: User, r: Reply, spoken: boolean): Promise<Reply & { audio?: string }> => {
     if (!wantsVoice(u.prefs, r, spoken) || !mediaAbilities().speak || !allow("speak", u.id)) return r;
@@ -399,7 +404,7 @@ export function createWeb(db: Db, botUsername: string) {
     if (!text || !String(text).trim()) return c.json({ error: "empty", text: "There was nothing in that message." }, 400);
     if (String(text).length > 4000) return c.json({ error: "too long", text: "That's longer than I can take in one message. Try it in two parts." }, 400);
     const u = user(c);
-    return c.json(await withVoice(u, await handleMessage(db, u, String(text), { channel: "web" }), false));
+    return c.json(pageReply(await withVoice(u, await handleMessage(db, u, String(text), { channel: "web" }), false)));
   });
   /** A recording from the page's mic button: hear it, act on it, and talk back if they like that. */
   app.post("/api/voice", async (c) => {
@@ -412,7 +417,7 @@ export function createWeb(db: Db, botUsername: string) {
     const mime = (c.req.header("content-type") ?? "audio/webm").split(";")[0];
     const heard = await transcribe(buf, mime.includes("mp4") ? "voice.mp4" : mime.includes("ogg") ? "voice.ogg" : mime.includes("wav") ? "voice.wav" : "voice.webm", mime);
     if (!heard) return c.json({ error: "unheard", text: "I couldn't make that out. Try again, a little closer to the mic?" }, 422);
-    return c.json({ heard, ...(await withVoice(u, await handleMessage(db, u, heard, { channel: "web" }), true)) });
+    return c.json({ heard, ...pageReply(await withVoice(u, await handleMessage(db, u, heard, { channel: "web" }), true)) });
   });
   /** A photo from the page, with an optional caption in the x-caption header. */
   app.post("/api/photo", async (c) => {
@@ -422,7 +427,7 @@ export function createWeb(db: Db, botUsername: string) {
     if (!/^image\/(jpeg|png|webp|heic|heif|gif)$/.test(mime)) return c.json({ error: "type", text: "That doesn't look like a photo. JPEG, PNG or WebP work." }, 400);
     if (buf.length > 15_000_000) return c.json({ error: "too big", text: "That picture's too big for me. Something under 15 MB?" }, 400);
     const caption = decodeURIComponent(c.req.header("x-caption") ?? "");
-    return c.json(await handlePhoto(db, u, buf, mime, caption.slice(0, 1000), "web"));
+    return c.json(pageReply(await handlePhoto(db, u, buf, mime, caption.slice(0, 1000), "web")));
   });
   /** Read something aloud on the page. */
   app.post("/api/speak", async (c) => {
@@ -440,9 +445,9 @@ export function createWeb(db: Db, botUsername: string) {
     if (typeof action !== "string" || !/^[a-z]+\.[a-z_]+$/.test(action)) return c.json({ error: "bad action", text: "That button didn't work. Reload the page and try again." }, 400);
     const d = await propose(ctxOf(u, `${action} ${JSON.stringify(args ?? {}).slice(0, 200)}`), action, args ?? {});
     const r = d.kind === "pending" ? { text: `${d.echo}\n\nGo ahead? This waits ten minutes for a yes.`, buttons: [{ label: "Yes, go ahead", data: `confirm:${d.pendingId}` }, { label: "No", data: `cancel:${d.pendingId}` }] } : d.kind === "ran" && d.undoId ? { text: d.reply, buttons: [{ label: "Undo", data: `undo:${d.undoId}` }] } : { text: "reply" in d ? d.reply : "" };
-    return c.json({ ...r, text: polish(r.text, { persona: personaOf(u.prefs) }) });
+    return c.json(pageReply({ ...r, ...(d.kind === "ran" && d.extra?.file ? { file: d.extra.file } : {}), text: polish(r.text, { persona: personaOf(u.prefs) }) }));
   });
-  app.post("/api/button", async (c) => { const u = user(c); return c.json(await withVoice(u, await handleCallback(db, u, String((await c.req.json()).data)), false)); });
+  app.post("/api/button", async (c) => { const u = user(c); return c.json(pageReply(await withVoice(u, await handleCallback(db, u, String((await c.req.json()).data)), false))); });
   app.get("/api/state", async (c) => {
     const u = user(c);
     const now = new Date();

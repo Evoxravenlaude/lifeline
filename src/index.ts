@@ -56,7 +56,7 @@ async function main() {
   // During a redeploy the old container still polls for a few seconds and Telegram answers 409. Wait it out instead of crashing.
   for (let attempt = 1; bot; attempt++) {
     try {
-      await bot.start({ allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "business_connection", "business_message", "guest_message"] as any, onStart: (me) => log.info({ username: me.username }, "telegram polling") });
+      await bot.start({ allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "business_connection", "business_message", "guest_message", "stopped_message_generation", "poll_answer"] as any, onStart: (me) => log.info({ username: me.username }, "telegram polling") });
       break;
     } catch (e: any) {
       if (e?.error_code !== 409 || attempt > 12) throw e;

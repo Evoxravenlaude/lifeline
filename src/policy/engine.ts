@@ -81,7 +81,8 @@ async function runNow(ctx: Ctx, actionName: string, tier: Tier, args: unknown): 
     );
     undoId = row!.id;
   }
-  const extra: Attachment | undefined = result.image || result.speak || result.dice || result.buttons || result.sticker || result.celebrate ? { image: result.image, speak: result.speak, dice: result.dice, buttons: result.buttons, sticker: result.sticker, celebrate: result.celebrate } : undefined;
+  const { reply: _r, undo: _u, ...att } = result;
+  const extra: Attachment = Object.fromEntries(Object.entries({ ...att, action: actionName }).filter(([, v]) => v !== undefined)) as Attachment;
   return { kind: "ran", reply: result.reply, undoId, extra };
 }
 

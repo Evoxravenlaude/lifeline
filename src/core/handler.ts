@@ -122,7 +122,7 @@ const YES = /^(?:yes|y|yes please|yep|yeah|yup|confirm|go ahead|go|do it|sure|ok
 const NO = /^(?:no|n|nope|nah|cancel|never ?mind|don'?t|stop|forget it|leave it)[.!]*$/i;
 
 /** Every message gets an answer in words, even when something underneath breaks. */
-export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"] }): Promise<Reply> {
+export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"]; draft?: Ctx["draft"]; stop?: Ctx["stop"] }): Promise<Reply> {
   try {
     return await answerMessage(db, user, text, opts);
   } catch (e: any) {
@@ -131,9 +131,9 @@ export async function handleMessage(db: Db, user: User, text: string, opts: { fo
   }
 }
 
-async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"] }): Promise<Reply> {
+async function answerMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"]; draft?: Ctx["draft"]; stop?: Ctx["stop"] }): Promise<Reply> {
   const now = opts.now ?? new Date();
-  const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}`, progress: opts.progress, note: opts.note };
+  const ctx: Ctx = { db, user, now, sourceMessage: `[${opts.channel}] ${text}`, progress: opts.progress, note: opts.note, draft: opts.draft, stop: opts.stop };
   const t = text.trim();
   await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,'user',$2)`, [user.id, redact(text)]);
 
@@ -268,7 +268,7 @@ async function answerButton(db: Db, user: User, data: string, now: Date): Promis
   // Outside Telegram an "open the app" button is just its address.
   if (kind === "webapp") return say(`Open ${data.slice(7)} to use lifeline on the web, or install it from there as an app.`);
   switch (kind) {
-    case "confirm": { const r = renderDecision(await confirmPending(ctx, Number(a))); return say(r.text, r.buttons); }
+    case "confirm": { const r = renderDecision(await confirmPending(ctx, Number(a))); return { ...r, ...say(r.text, r.buttons) }; }
     case "cancel": return say(await cancelPending(ctx, Number(a)));
     case "undo": return say(await undo(ctx, Number(a)));
     case "rem":

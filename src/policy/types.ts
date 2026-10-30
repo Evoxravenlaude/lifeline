@@ -28,6 +28,10 @@ export interface Ctx {
   progress?: (step: string) => Promise<void> | void;
   /** For long work: a line said along the way, as its own message ("On it.", "Your plan is built."). Optional. */
   note?: (text: string) => Promise<void> | void;
+  /** Words as they're written (a model answer streaming in). Telegram shows them as a live draft. Optional. */
+  draft?: (soFar: string) => void;
+  /** Set when the person pressed Stop on a streaming answer. */
+  stop?: AbortSignal;
 }
 
 /** A follow-up the bot asked and is waiting on. Lives in users.prefs.thread for ten minutes. */
@@ -62,6 +66,17 @@ export interface Attachment {
   celebrate?: boolean;
   /** Buttons of the action's own (a game's answers, a "log it" offer). callback data stays under 64 bytes. */
   buttons?: { label: string; data: string }[];
+  /** A file to hand over with the reply (a PDF export, a calendar invite, a lock-screen picture at full size). base64 bytes. */
+  file?: { data: string; name: string; mime: string };
+  /**
+   * A quick log ("took my meds", "slept 7 hours"): on Telegram the person's own message gets this reaction, and a
+   * reply that only says "logged" is left unsaid. Must be one of Telegram's reaction emoji. Never in product text.
+   */
+  react?: string;
+  /** Long, structured replies (the brief, a summary, a researched answer) go out as a Telegram rich message where possible. */
+  rich?: boolean;
+  /** The action that produced this reply (set by the engine), so channels can file it (Telegram topics). */
+  action?: string;
 }
 
 export interface ActionResult extends Attachment {

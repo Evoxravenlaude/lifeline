@@ -14,8 +14,19 @@ export interface Completion {
   toolCall?: { name: string; args: Record<string, unknown> };
   usage: { input: number; output: number };
   grounding?: { uri: string; title?: string }[];
+  /** The person stopped it part way; `text` is what was written by then. */
+  stopped?: boolean;
 }
-export interface CompleteOpts { system: string; messages: Msg[]; tools?: Tool[]; maxTokens?: number; grounded?: boolean; json?: boolean }
+export interface CompleteOpts {
+  system: string; messages: Msg[]; tools?: Tool[]; maxTokens?: number; grounded?: boolean; json?: boolean;
+  /**
+   * Stream the answer: called with the text so far as it's written (never with JSON, never with a tool call's
+   * arguments). Telegram shows it as a live draft. The finished Completion is the same as without it.
+   */
+  onText?: (soFar: string) => void;
+  /** Stop early (the person pressed Stop): the text written so far is returned, marked `stopped`. */
+  signal?: AbortSignal;
+}
 
 export type Provider = "anthropic" | "gemini" | "openai";
 
@@ -23,6 +34,44 @@ export type Provider = "anthropic" | "gemini" | "openai";
 export const diagnostics: { lastError: string | null; lastOkAt: number | null; lastErrorAt: number | null; lastProvider: string | null; errors: Record<string, string> } = { lastError: null, lastOkAt: null, lastErrorAt: null, lastProvider: null, errors: {} };
 
 const CALL_TIMEOUT_MS = 15_000;
+/** A streamed answer keeps arriving, so it gets longer overall (the first words still have to come quickly). */
+const STREAM_TIMEOUT_MS = 60_000;
+const streams = (o: CompleteOpts) => Boolean(o.onText) && !o.json;
+const signalFor = (o: CompleteOpts, ms: number) => (o.signal ? AbortSignal.any([AbortSignal.timeout(ms), o.signal]) : AbortSignal.timeout(ms));
+const stoppedBy = (o: CompleteOpts) => Boolean(o.signal?.aborted);
+
+/** Server-sent events from a fetch response: each `data:` line, parsed as JSON. */
+export async function* sseEvents(r: Response): AsyncGenerator<any> {
+  if (!r.body) return;
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith("data:")) continue;
+      const d = line.slice(5).trim();
+      if (d === "[DONE]") return;
+      try { yield JSON.parse(d); } catch { /* a keep-alive or a broken line */ }
+    }
+  }
+}
+
+/** Calls onText at most every `ms`, always with the latest text, and once more at the end. */
+export function throttle(fn: (t: string) => void, ms = 450): { push: (t: string) => void; flush: () => void; cancel: () => void } {
+  let last = 0, pending: string | null = null, timer: NodeJS.Timeout | null = null;
+  const fire = () => { if (pending !== null) { const t = pending; pending = null; last = Date.now(); try { fn(t); } catch { /* the draft is a nicety */ } } };
+  return {
+    push(t) { pending = t; const wait = ms - (Date.now() - last); if (wait <= 0) { if (timer) { clearTimeout(timer); timer = null; } fire(); } else if (!timer) timer = setTimeout(() => { timer = null; fire(); }, wait); },
+    flush() { if (timer) { clearTimeout(timer); timer = null; } fire(); },
+    cancel() { if (timer) { clearTimeout(timer); timer = null; } pending = null; },
+  };
+}
 
 /** Every provider that has a key, the chosen one first. */
 export function providerChain(): Provider[] {
@@ -56,6 +105,7 @@ export async function complete(opts: CompleteOpts, forceProvider?: Provider): Pr
         diagnostics.lastOkAt = Date.now(); diagnostics.lastProvider = p; delete diagnostics.errors[p];
         return r;
       } catch (e: any) {
+        if (opts.signal?.aborted) return { text: "", usage: { input: 0, output: 0 }, stopped: true }; // stopped before a word came
         last = e;
         const msg = `${p}: ${e?.name === "TimeoutError" || e?.name === "AbortError" ? `no answer within ${CALL_TIMEOUT_MS / 1000}s` : e?.message ?? e}`.slice(0, 300);
         diagnostics.lastError = msg; diagnostics.lastErrorAt = Date.now(); diagnostics.errors[p] = msg;
@@ -126,8 +176,10 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
     body.tools = o.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: geminiSchema(z.toJSONSchema(t.schema, { io: "input" })) } }));
     body.tool_choice = "auto";
   }
+  const live = streams(o);
+  if (live) body.stream = true;
   const post = (model: string) => fetch(`${config.openaiCompatBaseUrl}/chat/completions`, {
-    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiCompatKey}` }, body: JSON.stringify({ ...body, model }), signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.openaiCompatKey}` }, body: JSON.stringify({ ...body, model }), signal: signalFor(o, live ? STREAM_TIMEOUT_MS : CALL_TIMEOUT_MS),
   });
   const main = resolved.openai ?? config.openaiCompatModel;
   let r = await post(main);
@@ -138,6 +190,21 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
     if (found && found !== main) { r = await post(found); if (r.ok) resolved.openai = found; }
   }
   if (!r.ok) throw new Error(`${config.openaiCompatBaseUrl.replace(/^https?:\/\//, "")} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (live) {
+    let text = "", name = "", argText = "", usage = { input: 0, output: 0 }, stopped = false;
+    try {
+      for await (const ev of sseEvents(r)) {
+        const d = ev.choices?.[0]?.delta ?? {};
+        if (typeof d.content === "string" && d.content) { text += d.content; if (!name) o.onText!(text); }
+        for (const t of d.tool_calls ?? []) { if (t.function?.name) name += t.function.name; if (t.function?.arguments) argText += t.function.arguments; }
+        const u = ev.usage ?? ev.x_groq?.usage;
+        if (u) usage = { input: u.prompt_tokens ?? 0, output: u.completion_tokens ?? 0 };
+      }
+    } catch (e) { if (!stoppedBy(o)) throw e; stopped = true; }
+    let args: Record<string, unknown> = {};
+    if (argText) { try { args = JSON.parse(argText); } catch { args = {}; } }
+    return { text: text.trim(), toolCall: name && !stopped ? { name, args } : undefined, usage, ...(stopped ? { stopped } : {}) };
+  }
   const j: any = await r.json();
   const m = j.choices?.[0]?.message ?? {};
   const tc = m.tool_calls?.[0]?.function;
@@ -153,13 +220,34 @@ async function openaiCompat(o: CompleteOpts): Promise<Completion> {
 async function anthropic(o: CompleteOpts): Promise<Completion> {
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
   const client = new Anthropic({ apiKey: config.anthropicKey, timeout: CALL_TIMEOUT_MS, maxRetries: 0 });
-  const res = await client.messages.create({
+  const req = {
     model: config.model,
     max_tokens: o.maxTokens ?? 1500,
     system: o.system,
     tools: o.tools?.map((t) => ({ name: t.name, description: t.description, input_schema: z.toJSONSchema(t.schema, { io: "input" }) as any })),
     messages: o.messages,
-  });
+  };
+  if (streams(o)) {
+    const live = new Anthropic({ apiKey: config.anthropicKey, timeout: STREAM_TIMEOUT_MS, maxRetries: 0 });
+    const st = live.messages.stream(req);
+    let text = "";
+    st.on("text", (delta: string) => { text += delta; o.onText!(text); });
+    const onStop = () => st.abort();
+    o.signal?.addEventListener("abort", onStop, { once: true });
+    try {
+      const res = await st.finalMessage();
+      const tool = res.content.find((c) => c.type === "tool_use");
+      return {
+        text: res.content.filter((c) => c.type === "text").map((c: any) => c.text).join("\n").trim(),
+        toolCall: tool && tool.type === "tool_use" ? { name: tool.name, args: tool.input as any } : undefined,
+        usage: { input: res.usage.input_tokens, output: res.usage.output_tokens },
+      };
+    } catch (e) {
+      if (!stoppedBy(o)) throw e;
+      return { text: text.trim(), usage: { input: 0, output: 0 }, stopped: true };
+    } finally { o.signal?.removeEventListener("abort", onStop); }
+  }
+  const res = await client.messages.create(req);
   const tool = res.content.find((c) => c.type === "tool_use");
   return {
     text: res.content.filter((c) => c.type === "text").map((c: any) => c.text).join("\n").trim(),
@@ -191,8 +279,9 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
   if (o.tools?.length) tools.push({ functionDeclarations: o.tools.map((t) => ({ name: t.name, description: t.description, parameters: geminiSchema(z.toJSONSchema(t.schema, { io: "input" })) })) });
   if (o.grounded) tools.push({ google_search: {} });
   if (tools.length) body.tools = tools;
-  const post = (model: string) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.geminiKey}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(o.grounded ? CALL_TIMEOUT_MS * 3 : CALL_TIMEOUT_MS),
+  const live = streams(o);
+  const post = (model: string) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:${live ? "streamGenerateContent?alt=sse&" : "generateContent?"}key=${config.geminiKey}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: signalFor(o, live ? STREAM_TIMEOUT_MS : o.grounded ? CALL_TIMEOUT_MS * 3 : CALL_TIMEOUT_MS),
   });
   const main = resolved.gemini ?? config.geminiModel;
   let r = await post(main);
@@ -201,6 +290,21 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
     if (found && found !== main) { r = await post(found); if (r.ok) resolved.gemini = found; }
   }
   if (!r.ok) throw new Error(`gemini ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (live) {
+    let text = "", fc: any = null, usage = { input: 0, output: 0 }, grounding: { uri: string; title?: string }[] = [], stopped = false;
+    try {
+      for await (const ev of sseEvents(r)) {
+        const c = ev.candidates?.[0];
+        for (const p of c?.content?.parts ?? []) {
+          if (p.functionCall) fc = p.functionCall;
+          else if (typeof p.text === "string" && !p.thought) { text += p.text; if (!fc) o.onText!(text); }
+        }
+        for (const g of c?.groundingMetadata?.groundingChunks ?? []) if (g.web?.uri) grounding.push({ uri: g.web.uri, title: g.web.title });
+        if (ev.usageMetadata) usage = { input: ev.usageMetadata.promptTokenCount ?? 0, output: ev.usageMetadata.candidatesTokenCount ?? 0 };
+      }
+    } catch (e) { if (!stoppedBy(o)) throw e; stopped = true; }
+    return { text: text.trim(), toolCall: fc && !stopped ? { name: fc.name, args: fc.args ?? {} } : undefined, usage, grounding, ...(stopped ? { stopped } : {}) };
+  }
   const j: any = await r.json();
   const parts: any[] = j.candidates?.[0]?.content?.parts ?? [];
   const fc = parts.find((p) => p.functionCall)?.functionCall;

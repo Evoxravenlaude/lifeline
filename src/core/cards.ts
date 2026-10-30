@@ -35,6 +35,8 @@ function loadFonts(): Promise<string[]> {
   })();
   return fontFiles;
 }
+/** The unpacked TTF files (EB Garamond normal and italic, Libre Caslon Display), for anything else that draws text (a PDF export). */
+export const cardFontFiles = (): Promise<string[]> => loadFonts();
 
 const pipCache = new Map<string, string>();
 function pip(pose: string): string | null {

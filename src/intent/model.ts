@@ -75,11 +75,12 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
   const tools = picked.map((a) => ({ name: a.name.replace(/\./g, "__"), description: a.description, schema: a.schema }));
   try {
     const res = await Promise.race([
-      complete({ system: systemFor(ctx.user, ctx.now, memories, ctx.thread), messages: [...history.slice(-12), { role: "user", content: text }], tools }),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), MODEL_TIMEOUT_MS)),
+      complete({ system: systemFor(ctx.user, ctx.now, memories, ctx.thread), messages: [...history.slice(-12), { role: "user", content: text }], tools, onText: ctx.draft, signal: ctx.stop }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ctx.draft ? MODEL_TIMEOUT_MS * 2 : MODEL_TIMEOUT_MS)),
     ]);
     if (!res) return null;
     await recordUsage(ctx.db, ctx.user.id, res.usage.input, res.usage.output);
+    if (res.stopped) return { kind: "reply", text: res.text ? `${res.text}\n\n(You stopped me there.)` : "Stopped.", source: "model" };
     if (res.toolCall) return { kind: "action", intent: { action: res.toolCall.name.replace(/__/g, "."), args: res.toolCall.args }, source: "model" };
     return { kind: "reply", text: res.text || "Okay.", source: "model" };
   } catch (e: any) {

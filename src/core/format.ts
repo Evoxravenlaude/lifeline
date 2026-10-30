@@ -110,3 +110,65 @@ export function copyButton(md: string): { label: string; text: string } | null {
   const label = /^(?:link )?[A-Z0-9]{6}$/.test(s) ? "Copy code" : address ? "Copy address" : /\s/.test(s) && s.length > 40 ? "Copy message" : "Copy";
   return { label, text: s };
 }
+
+/**
+ * A Telegram rich message (Bot API 10.1) from the reply's markdown, as rich-message HTML: a "**Label**" line or a
+ * header becomes a heading, "- " runs a list, "1." runs a numbered list, a markdown table a real table, a fenced
+ * block a code block, and every other line a paragraph. Inline marks, links and code stay. The last "Sources"
+ * list, if there is one, goes into a details block so a long answer ends tidily.
+ */
+export function toRichHtml(md: string): string {
+  const { text, blocks, spans } = protect(md);
+  const inline = (line: string) => {
+    let e = escHtml(line);
+    e = e.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => `<a href="${escAttr(url.replace(/&amp;/g, "&"))}">${label}</a>`);
+    e = inlineMarks(e, (s) => `<b>${s}</b>`, (s) => `<i>${s}</i>`);
+    return e.replace(/\u0000S(\d+)\u0000/g, (_, k) => `<code>${escHtml(spans[Number(k)])}</code>`);
+  };
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  let sourcesAt = -1;
+  while (i < lines.length) {
+    const l = lines[i];
+    const t = l.trim();
+    if (!t) { i++; continue; }
+    const block = /^\u0000B(\d+)\u0000$/.exec(t);
+    if (block) {
+      const { lang, body } = blocks[Number(block[1])];
+      out.push(lang ? `<pre><code class="language-${escAttr(lang)}">${escHtml(body)}</code></pre>` : `<pre>${escHtml(body)}</pre>`);
+      i++; continue;
+    }
+    const head = /^#{1,6}\s+(.+?)\s*#*$/.exec(t) ?? /^\*\*([^*\n]{1,80})\*\*:?$/.exec(t);
+    if (head) {
+      if (/^sources$/i.test(head[1].trim())) sourcesAt = out.length;
+      out.push(`<h3>${inline(head[1])}</h3>`); i++; continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(l)) {
+      const rows: string[][] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+        if (!/^\s*\|[\s:|-]+\|\s*$/.test(lines[i])) rows.push(lines[i].trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()));
+        i++;
+      }
+      out.push(`<table>${rows.map((r, n) => `<tr>${r.map((c) => (n === 0 ? `<th>${inline(c)}</th>` : `<td>${inline(c)}</td>`)).join("")}</tr>`).join("")}</table>`);
+      continue;
+    }
+    const bullet = /^\s*[-*+•]\s+/, num = /^\s*\d{1,3}[.)]\s+/;
+    if (bullet.test(l) || num.test(l)) {
+      const re = bullet.test(l) ? bullet : num;
+      const items: string[] = [];
+      while (i < lines.length && re.test(lines[i])) { items.push(`<li>${inline(lines[i].replace(re, ""))}</li>`); i++; }
+      out.push(re === bullet ? `<ul>${items.join("")}</ul>` : `<ol>${items.join("")}</ol>`);
+      continue;
+    }
+    out.push(`<p>${inline(t)}</p>`);
+    i++;
+  }
+  // A long answer's sources fold away under their heading.
+  if (sourcesAt >= 0 && sourcesAt === out.length - 2) {
+    const list = out.pop()!;
+    out.pop();
+    out.push(`<details><summary>Sources</summary>${list}</details>`);
+  }
+  return out.join("");
+}

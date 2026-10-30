@@ -8,6 +8,7 @@ import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
 import { parseClock } from "../core/time.js";
 import { cancelJob, onJob, push, schedule } from "../core/scheduler.js";
+import { addExamples, addRules } from "../core/plugins.js";
 
 onJob("med_slot", async (job, deps) => {
   const user = await deps.getUser(job.user_id!);
@@ -123,6 +124,46 @@ const remove = defineAction({
   },
 });
 
+/**
+ * "Took my meds": the dose that's waiting (rung in the last twelve hours) is marked taken. With a name, that
+ * medication's waiting dose, or a dose logged now if none is waiting. On Telegram this gets a reaction, not a reply.
+ */
+const taken = defineAction({
+  name: "medication.taken",
+  tier: 1,
+  description: "The person says they took their medication ('took my meds', 'took my metformin', 'meds taken'). Marks the waiting dose as taken. `match` is the medication's name if they said one. Never advice, never doses.",
+  schema: z.object({ match: z.string().max(60).optional() }),
+  async run(args, ctx) {
+    const meds = await ctx.db.query<{ id: number; name: string }>(`SELECT id, name FROM medications WHERE user_id=$1 AND active ORDER BY id`, [ctx.user.id]);
+    if (!meds.length) return { reply: "Noted. I don't have any medication set to remind you about. Say \"I take vitamin D at 8am\" and I'll ring you and keep the log." };
+    const m = args.match?.trim().toLowerCase().replace(/\s+(?:dose|tablets?|pills?)$/, "");
+    const pick = m ? meds.filter((x) => x.name.toLowerCase().includes(m) || m.includes(x.name.toLowerCase())) : meds;
+    if (m && !pick.length) return { reply: `I don't have ${args.match} on your list. Your list: ${meds.map((x) => x.name).join(", ")}. Say "I take ${args.match} at 8am" to add it.` };
+    const waiting = await ctx.db.query<{ id: number; name: string }>(
+      `SELECT l.id, m.name FROM medication_logs l JOIN medications m ON m.id=l.medication_id
+       WHERE m.user_id=$1 AND m.id = ANY($2::int[]) AND l.status='pending' AND l.scheduled_for > $3 ORDER BY l.scheduled_for DESC`,
+      [ctx.user.id, pick.map((x) => x.id), new Date(ctx.now.getTime() - 12 * 3_600_000)],
+    );
+    if (waiting.length) {
+      for (const w of waiting) await resolveLog(ctx.db, ctx.user.id, w.id, "taken");
+      const names = [...new Set(waiting.map((w) => w.name))];
+      return { reply: `${names.join(" and ")}, taken. Logged.`, undo: { payload: { logs: waiting.map((w) => w.id) } } };
+    }
+    if (!m && pick.length > 1) return { reply: `Nothing's waiting on a dose right now. Which one did you take: ${pick.map((x) => x.name).join(", ")}?` };
+    const row = await ctx.db.one<{ id: number }>(`INSERT INTO medication_logs (medication_id, scheduled_for, status, taken_at) VALUES ($1, $2, 'taken', $2) RETURNING id`, [pick[0].id, ctx.now]);
+    await ctx.db.query(`UPDATE medications SET days_left = CASE WHEN days_left IS NULL THEN NULL ELSE GREATEST(days_left-1,0) END WHERE id=$1`, [pick[0].id]);
+    return { reply: `${pick[0].name}, taken. Logged.`, undo: { payload: { inserted: row!.id, medId: pick[0].id } } };
+  },
+  async undo(p, ctx) {
+    if (p.inserted) {
+      await ctx.db.query(`DELETE FROM medication_logs WHERE id=$1 AND medication_id IN (SELECT id FROM medications WHERE user_id=$2)`, [p.inserted, ctx.user.id]);
+      await ctx.db.query(`UPDATE medications SET days_left = CASE WHEN days_left IS NULL THEN NULL ELSE days_left+1 END WHERE id=$1 AND user_id=$2`, [p.medId, ctx.user.id]);
+    }
+    for (const id of p.logs ?? []) await ctx.db.query(`UPDATE medication_logs SET status='pending', taken_at=NULL WHERE id=$1 AND medication_id IN (SELECT id FROM medications WHERE user_id=$2)`, [id, ctx.user.id]);
+    return "Taken back. That dose is open again.";
+  },
+});
+
 export async function resolveLog(db: any, userId: number, logId: number, status: "taken" | "skipped") {
   const r = await db.query(
     `UPDATE medication_logs SET status=$3, taken_at=CASE WHEN $3='taken' THEN now() END
@@ -135,4 +176,12 @@ export async function resolveLog(db: any, userId: number, logId: number, status:
   return r.length > 0;
 }
 
-register(add, list, remove);
+register(add, list, remove, taken);
+
+/* Plain med words only: "took my time" or "took my kids to school" never land here, and "took my pill" stays with the cycle log. */
+addRules(
+  [/^(?:i(?:'ve| have)?\s+)?(?:just\s+)?(?:took|taken|had)\s+(?:my|the)\s+(?:(?:morning|evening|night|bedtime|afternoon)\s+)?(?:meds|medication|medicine|tablets)\b[.!]*$/i, () => ({ action: "medication.taken", args: {} })],
+  [/^(?:meds|medication|medicine|tablets)\s+(?:taken|done)[.!]*$/i, () => ({ action: "medication.taken", args: {} })],
+  [/^(?:i(?:'ve| have)?\s+)?(?:just\s+)?(?:took|taken)\s+(?:my\s+)?([a-z][\w -]{1,40}?)\s+(?:dose|tablets?)[.!]*$/i, (m) => ({ action: "medication.taken", args: { match: m[1] } })],
+);
+addExamples("medication.taken", ["took my meds", "took my metformin dose", "meds taken"]);

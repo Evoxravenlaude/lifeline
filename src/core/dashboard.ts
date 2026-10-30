@@ -13,10 +13,11 @@ import type { User } from "../policy/types.js";
 import { money } from "./money.js";
 import { inQuietHours } from "./time.js";
 import { C, PLATES, esc, latin, pipArt, plateCard, renderPng, type Plate } from "./cards.js";
+import { carried, keptDays, nextThing, THINGS, thingsArt } from "./pipthings.js";
 
 export interface Row { time?: string; text: string; plate?: Plate }
 export interface Tile { label: string; value: string; note?: string; plate: Plate }
-export interface Dash { greeting: string; date: string; updated: string; today: Row[]; later: Row[]; tiles: Tile[]; pose: string; quiet: boolean }
+export interface Dash { greeting: string; date: string; updated: string; today: Row[]; later: Row[]; tiles: Tile[]; pose: string; quiet: boolean; /** What Pip carries (src/core/pipthings.ts). */ things?: string[] }
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const first = (u: User) => (u.name ? u.name.split(" ")[0] : null);
@@ -92,6 +93,7 @@ export async function dashboardFacts(db: Db, u: User, now: Date): Promise<Dash> 
     tiles: tiles.slice(0, 3),
     pose: quiet ? "asleep" : p ? "waiting" : local.hour < 12 ? "hello" : local.hour < 18 ? "ontoit" : "later",
     quiet,
+    things: carried(u.prefs).map((t) => t.key),
   };
 }
 
@@ -131,6 +133,7 @@ export function dashboardSvg(d: Dash): string {
     <text x="56" y="160" font-size="${latin(d.greeting, 40).length > 24 ? 54 : 64}" font-family="Libre Caslon Display">${esc(latin(d.greeting, 34))}</text>
     <text x="58" y="206" font-size="32" font-style="italic" fill="${C.ink2}">${esc(latin(d.date, 40))}</text>
     ${pipArt(d.pose, DW - 216, 100, 160)}
+    ${thingsArt(THINGS.filter((t) => d.things?.includes(t.key)), DW - 216, 100, 160)}
     ${plateCard(56, 236, 680, 470, PLATES.event, 18)}
     <text x="96" y="282" font-size="26" font-style="italic" fill="${C.ink2}">Still to come today</text>
     ${rows}
@@ -140,7 +143,7 @@ export function dashboardSvg(d: Dash): string {
 }
 
 /** A section's picture: its title and a few real rows (label and value), with Pip. */
-export interface Section { title: string; subtitle?: string; plate: Plate; pose: string; rows: [string, string][]; updated: string }
+export interface Section { title: string; subtitle?: string; plate: Plate; pose: string; rows: [string, string][]; updated: string; things?: string[] }
 export function sectionSvg(s: Section): string {
   const rows = s.rows.slice(0, 6);
   const body = rows.length
@@ -163,6 +166,7 @@ export function sectionSvg(s: Section): string {
     ${s.subtitle ? `<text x="98" y="246" font-size="28" font-style="italic" fill="${C.ink2}">${esc(latin(s.subtitle, 40))}</text>` : ""}
     ${body}
     ${pipArt(s.pose, 800, 210, 340)}
+    ${thingsArt(THINGS.filter((t) => s.things?.includes(t.key)), 800, 210, 340)}
   </g>
 </svg>`;
 }
@@ -211,6 +215,8 @@ export async function sectionFacts(db: Db, u: User, kind: string, now: Date): Pr
     for (const m of meds) rows.push([cap(m.name), `${m.taken} of ${m.times.length} today`]);
     if (sleep?.a) rows.push(["Sleep, this week", `${Math.round(Number(sleep.a) * 10) / 10} h a night`]);
     for (const h of habits) rows.push([cap(h.name), `${h.n} of ${h.target} this week`]);
+    const kept = await keptDays(db, u.id);
+    if (kept) { const next = nextThing(kept); rows.push(["Days kept, all time", next ? `${kept}, ${next.at - kept} to go` : String(kept)]); }
     subtitle = "Kept between us";
   } else if (kind === "money") {
     const spend = await db.query<{ currency: string; category: string; total: string }>(`SELECT currency, category, sum(amount)::text AS total FROM spend WHERE user_id=$1 AND spent_at >= $2 GROUP BY currency, category ORDER BY sum(amount) DESC LIMIT 4`, [u.id, local.startOf("week").toJSDate()]);
@@ -238,5 +244,5 @@ export async function sectionFacts(db: Db, u: User, kind: string, now: Date): Pr
   } else if (kind === "everything") {
     subtitle = "In drawers, not a wall";
   }
-  return { ...meta, subtitle, rows, updated };
+  return { ...meta, subtitle, rows, updated, things: carried(u.prefs).map((t) => t.key) };
 }
