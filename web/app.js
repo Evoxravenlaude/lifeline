@@ -981,12 +981,29 @@ window.App = (function () {
   async function notificationsOn(key) {
     const perm = await Notification.requestPermission();
     if (perm !== "granted") return { error: "denied", text: perm === "denied" ? "Notifications are blocked for this site. Allow them in your browser's site settings, then try again." : "Notifications stay off. Turn them on whenever you like." };
+    /* Each step can fail for its own reason; say which, in words, rather than one vague line. */
+    let reg;
     try {
-      const reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.register("/sw.js"));
+      reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.register("/sw.js"));
       await navigator.serviceWorker.ready;
-      const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) }));
+    } catch { return { error: "sw", text: "This browser couldn't start lifeline's background helper, which notifications need. Reload the page and try again." }; }
+    let appKey;
+    try { appKey = keyBytes(String(key || "").replace(/\s/g, "")); if (appKey.length !== 65) throw new Error("key"); }
+    catch { return { error: "key", text: "Notifications aren't set up correctly on the server yet (its key looks wrong). Whoever runs lifeline can check /doctor in the bot." }; }
+    try {
+      let sub = await reg.pushManager.getSubscription();
+      // A subscription made with an older server key can't receive anything: replace it.
+      const old = sub && sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
+      if (sub && old && (old.length !== appKey.length || old.some((b, i) => b !== appKey[i]))) { await sub.unsubscribe().catch(() => {}); sub = null; }
+      sub = sub || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey }));
       return api("/api/push/subscribe", { subscription: sub.toJSON(), device: deviceName() });
-    } catch { return { error: "subscribe", text: "This browser wouldn't set up notifications. Try again in a moment, or in another browser." }; }
+    } catch (e) {
+      const brave = navigator.brave && typeof navigator.brave.isBrave === "function";
+      if (brave) return { error: "push-off", text: "Brave keeps notifications from websites off by default. In Brave: Settings, then Privacy and security, turn on \"Use Google services for push messaging\", restart Brave and try again. Or use Chrome." };
+      if (e && e.name === "AbortError") return { error: "push-off", text: "This browser's push service said no. If it's Brave, Samsung Internet or a privacy browser, notifications from websites may be switched off in its settings; Chrome works. Then try again." };
+      if (e && e.name === "NotAllowedError") return { error: "denied", text: "Notifications are blocked for this site. Allow them in your browser's site settings, then try again." };
+      return { error: "subscribe", text: "This browser wouldn't set up notifications. Try again in a moment, or in Chrome." };
+    }
   }
   async function notificationsOff() {
     const sub = await currentSub().catch(() => null);
