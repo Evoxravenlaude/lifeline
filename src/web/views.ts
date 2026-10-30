@@ -247,4 +247,33 @@ export function mountViews(app: Hono<any>, db: Db): void {
     fresh(c);
     return c.json(await emergencyCard(db, user(c), new Date()));
   });
+
+  /** The Safety page: what's set up, and a check-in if one is running. Counts and states only. */
+  app.get("/api/safety", async (c) => {
+    const u = user(c);
+    const n = async (sql: string) => Number((await db.one<{ n: string }>(sql, [u.id]).catch(() => undefined))?.n ?? 0);
+    const checkin = await db.one<{ due_at: string; about: string | null }>(`SELECT due_at, about FROM safety_checkins WHERE user_id=$1 AND status='active' ORDER BY due_at LIMIT 1`, [u.id]).catch(() => undefined);
+    const legacy = await db.one<{ status: string }>(`SELECT status FROM safety_legacy WHERE user_id=$1`, [u.id]).catch(() => undefined);
+    fresh(c);
+    return c.json({
+      checkin: checkin ? { due_at: checkin.due_at, about: checkin.about } : null,
+      contacts: await n(`SELECT count(*)::text AS n FROM safety_contacts WHERE user_id=$1 AND status='confirmed'`),
+      waiting: await n(`SELECT count(*)::text AS n FROM safety_contacts WHERE user_id=$1 AND status IN ('pending','asked')`),
+      card: (await n(`SELECT count(*)::text AS n FROM safety_ice WHERE user_id=$1`)) > 0,
+      incidents: await n(`SELECT count(*)::text AS n FROM safety_incidents WHERE user_id=$1`),
+      legacy: legacy?.status ?? "off",
+    });
+  });
+
+  /** You: what Pip carries, days kept, and what's remembered. */
+  app.get("/api/you", async (c) => {
+    const u = user(c);
+    const { carried, keptDays, THINGS } = await import("../core/pipthings.js");
+    const days = await keptDays(db, u.id);
+    const has = carried(u.prefs);
+    const next = THINGS.find((t) => !has.some((x) => x.key === t.key));
+    const mem = Number((await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM memories WHERE user_id=$1`, [u.id]).catch(() => undefined))?.n ?? 0);
+    fresh(c);
+    return c.json({ days, things: has.map((t) => ({ key: t.key, name: t.name })), next: next ? { name: next.name, at: next.at } : null, memories: mem, keepDays: 180 });
+  });
 }

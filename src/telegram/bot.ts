@@ -53,8 +53,8 @@ export function toHtml(text: string): string { return toTelegramHtml(text); }
  * The old tiles still work if someone taps one before it disappears.
  */
 const OLD_TILES: Record<string, string> = { Today: "today", Hackathons: "any hackathons for me", Lists: "my lists", Money: "how much did I spend this week", Scout: "Scout", Pip: "Pip", "☼ Today": "today", "⚑ Hackathons": "any hackathons for me", "☐ Lists": "my lists", "¤ Money": "how much did I spend this week", "◎ Scout": "Scout", "🐢 Pip": "Pip" };
-export const ABOUT_LONG = "A personal assistant you talk to like a person, wherever you live. I keep your calendar, reminders and lists, your medication and cycle, sleep and mood, what you spend and who owes you, documents that expire, and the people you mean to call. I can check a message that feels off and look out for you on the way home. If you build things or hold crypto, I watch your sites and wallets too. Anything that spends money or reaches someone else waits for your yes. Tap Start.";
-export const ABOUT_SHORT = "Your day, your body, your money and your work, kept by one assistant you just talk to.";
+export const ABOUT_LONG = "A personal assistant you talk to like a person, wherever you live. I keep your calendar, reminders and lists, your medication and cycle, sleep and mood, what you spend and who owes you, and documents that expire. I check messages that feel off and look out for you on the way home. In a group I split bills, find a time and make birthday voice cards. Quick logs get a reaction, not a lecture. Nothing spends money or reaches anyone without your yes, and your data is yours. Tap Start.";
+export const ABOUT_SHORT = "Your day, your body, your money and your safety, kept by one calm assistant you just talk to.";
 
 /** Four ways in, under the welcome only. They scroll away with it. */
 const WAYS_IN = () => new InlineKeyboard().text("Open the menu ›", "p:home").primary().row().text("What can you do?", "say:what can you do").text("Things I can track", "say:what can you track");
@@ -391,8 +391,8 @@ export function createBot(db: Db): Bot {
       TZ_CHOICES.forEach(([l, z], i) => { k.text(l, `ob:tz:${z}`); if (i % 3 === 2) k.row(); });
       k.text("Somewhere else", "ob:tz:other").primary();
       await say(c, [
-        `${first ? `${first}, hello` : "Hello"}. I'm lifeline, a personal assistant for everyday life. I keep your calendar, reminders and lists, your medication, your period and cycle, your sleep and anything else you track, what you spend, your trips and birthdays. If you work on things, I also find jobs, companies and hackathons worth your time.`,
-        `You talk to me the way you'd text a friend. No commands to learn. Anything that moves money, deletes, or reaches someone else waits for your yes.`,
+        `${first ? `${first}, hello` : "Hello"}. I'm lifeline, a personal assistant for everyday life. I keep your calendar, reminders and lists, your medication and cycle, sleep and anything else you track, what you spend and who owes you, your trips, your paperwork and the people you mean to call. I can also look out for you on the way home.`,
+        `You talk to me the way you'd text a friend. No commands to learn. I stay quiet unless something matters, and anything that moves money, deletes, or reaches someone else waits for your yes.`,
         `One thing first: where are you? Tap a city near you, or "Somewhere else" and type yours. That sets your clock and your currency, so "tomorrow at 9" means your 9.`,
       ].join("\n\n"), { reply_markup: k });
       return;
@@ -666,7 +666,8 @@ export function createBot(db: Db): Bot {
         await db.query(`UPDATE users SET prefs = prefs || '{"onboarded":true}'::jsonb WHERE id=$1`, [u.id]);
         return say(c, [
           `${PERSONAS[value]?.label ?? value}. That's the whole setup.`,
-          `Try me with something real: "remind me to call mum on Sunday at 5", "I need to buy rice and eggs", "my period started today", "slept 6 hours".`,
+          `Try me with something real: "remind me to call mum on Sunday at 5", "I need to buy rice and eggs", "took my meds", "spent 4,500 on data".`,
+          `Tap Menu any time for your day as a picture. Your data stays yours: "export my data" gives you a copy, "delete my account" removes it all.`,
           `If you ever wonder whether I can do something, just ask. "Can you track my meds?" gets a straight answer.`,
         ].join("\n\n"), { reply_markup: WAYS_IN() });
       }

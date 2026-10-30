@@ -545,6 +545,7 @@ export function createWeb(db: Db, botUsername: string) {
       tz: u.tz, digest_hour: u.digest_hour, quiet_start: u.quiet_start, quiet_end: u.quiet_end, name: u.name, email: u.email ?? null,
       country: u.prefs.country ?? "", tags: u.prefs.tags ?? [], persona: u.prefs.personaCustom ? "custom" : u.prefs.persona ?? "plain", personaCustom: u.prefs.personaCustom ?? "",
       personas: PERSONAS, identities: await identitiesOf(db, u.id), provider: providerName(), spend: await spentToday(db, u.id), budget: config.dailyModelBudgetUsd,
+      calm: u.prefs.calm === true, reactions: u.prefs.reactions !== false, topics: Boolean(u.prefs.topics && typeof u.prefs.topics === "object" && Object.keys(u.prefs.topics as object).length),
       smsNumber: config.smsNumber || null,
       reach: reachOf(u), push: { ...pushPublic(), devices: await devicesOf(db, u.id) },
     });

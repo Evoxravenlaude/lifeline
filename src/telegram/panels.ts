@@ -91,10 +91,10 @@ async function home(db: Db, u: User, now: Date): Promise<Panel> {
     rows: [
       [{ label: "Today ›", data: "p:today" }, { label: "Lists ›", data: "p:lists" }],
       [{ label: "Health ›", data: "p:health" }, { label: "Money ›", data: "p:money" }],
-      [{ label: "Trips ›", data: "p:trips" }, { label: "Play ›", data: "p:play" }],
+      [{ label: "Trips ›", data: "p:trips" }, { label: "Safety ›", data: "p:safety" }],
+      [{ label: "Play ›", data: "p:play" }, { label: "You ›", data: "p:you" }],
       [{ label: "Settings ›", data: "p:settings" }, { label: "Everything ›", data: "ev:home" }],
-      [...(appButton() ? [appButton()!] : []), { label: "Refresh", data: "p:home" }],
-      [OK],
+      [...(appButton() ? [appButton()!] : []), { label: "Refresh", data: "p:home" }, OK],
     ],
   };
 }
@@ -153,7 +153,14 @@ async function health(db: Db, u: User, now: Date): Promise<Panel> {
   body.push(...habits.map((h) => `${cap(h.name)}: ${h.n} of ${h.target}`));
   if (body.length) lines.push("**This week**", ...body);
   if (lines.length === 2) lines.push("Nothing tracked yet. Try \"slept 7 hours\", \"I take vitamin D at 8\" or \"my period started today\".");
-  return { text: lines.join("\n").trim(), card: "health", rows: [[{ label: "Log something", data: "p:ask:log" }], nav()] };
+  return {
+    text: lines.join("\n").trim(), card: "health",
+    rows: [
+      [{ label: "Log something", data: "p:ask:log" }, ...(meds.length ? [{ label: "Took my meds", data: "say:took my meds" }] : [])],
+      [{ label: "Doctor summary", data: "say:summary for my doctor" }, { label: "Repair a streak", data: "say:repair my streak" }],
+      nav(),
+    ],
+  };
 }
 
 async function viaAction(db: Db, u: User, now: Date, action: string, args: Record<string, unknown>): Promise<string> {
@@ -166,12 +173,93 @@ async function money(db: Db, u: User, now: Date, range: "week" | "month"): Promi
   return {
     text: `**Money**\n\n${await viaAction(db, u, now, "spend.summary", { range })}`,
     card: "money",
-    rows: [[range === "week" ? { label: "This month", data: "p:money:month" } : { label: "This week", data: "p:money" }, { label: "Log a spend", data: "p:ask:spend" }], nav()],
+    rows: [
+      [range === "week" ? { label: "This month", data: "p:money:month" } : { label: "This week", data: "p:money" }, { label: "Log a spend", data: "p:ask:spend" }],
+      [{ label: "Who owes me", data: "say:who owes me" }, { label: "Subscriptions", data: "say:my subscriptions" }],
+      nav(),
+    ],
   };
 }
 
 async function trips(db: Db, u: User, now: Date): Promise<Panel> {
   return { text: `**Trips**\n\n${await viaAction(db, u, now, "trip.show", {})}`, card: "trips", rows: [nav()] };
+}
+
+async function safety(db: Db, u: User, now: Date): Promise<Panel> {
+  const n = async (sql: string, args: unknown[] = [u.id]) => Number((await db.one<{ n: string }>(sql, args).catch(() => undefined))?.n ?? 0);
+  const [contacts, card, checkin, incidents, legacy] = await Promise.all([
+    n(`SELECT count(*)::text AS n FROM safety_contacts WHERE user_id=$1 AND status='confirmed'`),
+    n(`SELECT count(*)::text AS n FROM safety_ice WHERE user_id=$1`),
+    db.one<{ due_at: string; about: string | null }>(`SELECT due_at, about FROM safety_checkins WHERE user_id=$1 AND status='active' ORDER BY due_at LIMIT 1`, [u.id]).catch(() => undefined),
+    n(`SELECT count(*)::text AS n FROM safety_incidents WHERE user_id=$1`),
+    db.one<{ status: string }>(`SELECT status FROM safety_legacy WHERE user_id=$1`, [u.id]).catch(() => undefined),
+  ]);
+  const lines = tree([
+    checkin ? `Check-in due at ${hhmm(checkin.due_at, u.tz)}${checkin.about ? `: ${checkin.about}` : ""}` : "No check-in running",
+    contacts ? `${contacts} safety contact${contacts === 1 ? "" : "s"}` : "No safety contacts yet",
+    card ? "Emergency card ready" : "No emergency card yet",
+    incidents ? `Incident log: ${incidents} entr${incidents === 1 ? "y" : "ies"}, kept private` : "Incident log: empty",
+    `If something happens to me: ${legacy?.status && legacy.status !== "off" ? legacy.status : "off"}`,
+  ]);
+  void now;
+  return {
+    text: ["**Safety**", "", ...lines, "", "_Forward me any message that feels off, and I'll give it a second look._"].join("\n"),
+    card: "safety",
+    rows: [
+      checkin ? [{ label: "I'm safe", data: "say:I'm safe", style: "success" as Style }, { label: "15 more minutes", data: "say:give me 15 more minutes" }] : [{ label: "Check on me", data: "say:check on me" }, { label: "Safety contacts", data: "say:my safety contacts" }],
+      [{ label: card ? "Emergency card" : "Set up my card", data: card ? "say:show my emergency card" : "say:set up my emergency card" }, ...(card ? [{ label: "Lock-screen card", data: "say:emergency card picture" }] : [])],
+      [{ label: "Incident log", data: "say:show my incident log" }, ...(incidents ? [{ label: "Export as PDF", data: "say:export my incident log" }] : [])],
+      nav(),
+    ],
+  };
+}
+
+async function you(db: Db, u: User): Promise<Panel> {
+  const { carried, keptDays, THINGS, thingsLine } = await import("../core/pipthings.js");
+  const days = await keptDays(db, u.id);
+  const things = carried(u.prefs);
+  const next = THINGS.find((t) => !things.some((x) => x.key === t.key));
+  const mem = Number((await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM memories WHERE user_id=$1`, [u.id]).catch(() => undefined))?.n ?? 0);
+  return {
+    text: [
+      "**You**", "",
+      ...tree([
+        things.length ? thingsLine(things) : "Pip isn't carrying anything yet",
+        `${days} day${days === 1 ? "" : "s"} kept${next ? `, ${Math.max(0, next.at - days)} to ${next.name}` : ""}`,
+        `${mem} thing${mem === 1 ? "" : "s"} I remember about you`,
+        "Chat history kept 180 days",
+      ]),
+      "",
+      "_Your data is yours. Take a copy any time, or delete it all._",
+    ].join("\n"),
+    card: "you",
+    rows: [
+      [{ label: "Pip's things", data: "say:pip's things" }, { label: "What you remember", data: "say:what do you know about me" }],
+      [{ label: "Export my data", data: "say:export my data" }, { label: "Delete my account", data: "say:delete my account", style: "danger" as Style }],
+      ...(webAddress() ? [[{ label: "Privacy", data: "p:privacy" }]] : []),
+      nav(),
+    ],
+  };
+}
+
+function privacy(): Panel {
+  const w = webAddress().replace(/\/$/, "");
+  return {
+    text: [
+      "**Privacy, in short**", "",
+      ...tree([
+        "What you keep with me is used to help you, never sold or shown to anyone else",
+        "Passwords, seed phrases, keys and card numbers are never saved",
+        "Groups never see anything personal",
+        "Nothing spends money or reaches someone without your yes",
+        "Chat history goes after 180 days; the rest stays until you delete it",
+      ]),
+      "",
+      w ? `The whole thing: ${w}/privacy` : "",
+    ].join("\n").trim(),
+    card: "you",
+    rows: [nav("you")],
+  };
 }
 
 function play(): Panel {
@@ -182,6 +270,7 @@ function play(): Panel {
       [{ label: "Trivia", data: "g:new:trivia" }, { label: "Would you rather", data: "g:new:wyr" }],
       [{ label: "A riddle", data: "g:new:riddle" }, { label: "Surprise me", data: "g:new:any" }],
       [{ label: "Roll a dice", data: "say:roll a dice" }, { label: "Roast my week", data: "say:roast me" }],
+      [{ label: "Pip's things", data: "say:pip's things" }],
       nav(),
     ],
   };
@@ -195,13 +284,16 @@ function settings(u: User): Panel {
   const voice = (u.prefs.ttsVoice as string) ?? "warm";
   const persona = typeof u.prefs.personaCustom === "string" && u.prefs.personaCustom ? "your own" : PERSONAS[(u.prefs.persona as string) ?? "plain"]?.label ?? "Plain";
   const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
+  const calm = u.prefs.calm === true, reacts = u.prefs.reactions !== false, topics = Boolean(u.prefs.topics && typeof u.prefs.topics === "object" && Object.keys(u.prefs.topics as object).length);
   return {
-    text: ["**Settings**", "", ...tree([`Voice replies: ${VR_LABEL[vr] ?? vr}`, `Voice: ${voice}`, `Personality: ${persona}`, `Morning brief: ${hh(u.digest_hour)}`, `Quiet hours: ${hh(u.quiet_start)} to ${hh(u.quiet_end)}`, `Calm mode: ${u.prefs.calm === true ? "on" : "off"}`]), "", "_Tap to change. Everything else, just say it._"].join("\n"),
+    text: ["**Settings**", "", ...tree([`Voice replies: ${VR_LABEL[vr] ?? vr}`, `Voice: ${voice}`, `Personality: ${persona}`, `Morning brief: ${hh(u.digest_hour)}`, `Quiet hours: ${hh(u.quiet_start)} to ${hh(u.quiet_end)}`, `Calm mode: ${calm ? "on" : "off"}`, `Quick logs: ${reacts ? "a reaction" : "a reply"}`, `Topics: ${topics ? "on" : "off"}`, `Menu picture: ${u.prefs.menuCard === false ? "off" : "on"}`]), "", "_Tap to change. Everything else, just say it._"].join("\n"),
     card: "settings",
     rows: [
       [{ label: `Switch voice replies to ${VR_LABEL[VR_NEXT[vr]] ?? "on"}`, data: "p:set:vr" }],
       [{ label: "Change voice ›", data: "p:set:voice" }, { label: "Personality ›", data: "p:persona" }],
       [{ label: "Brief earlier", data: "p:set:brief:-1" }, { label: "Brief later", data: "p:set:brief:1" }],
+      [{ label: calm ? "Calm mode off" : "Calm mode on", data: `say:calm mode ${calm ? "off" : "on"}` }, { label: "Quiet day", data: "say:quiet day" }],
+      [{ label: reacts ? "Reply to my logs" : "React to my logs", data: `say:${reacts ? "reply to my logs" : "react to my logs"}` }, { label: topics ? "Stop using topics" : "Use topics", data: `say:${topics ? "stop using topics" : "use topics"}` }],
       nav(),
     ],
   };
@@ -237,6 +329,9 @@ export async function panel(db: Db, user: User, key: string, now = new Date()): 
     case "money": return { panel: await money(db, user, now, a === "month" ? "month" : "week") };
     case "trips": return { panel: await trips(db, user, now) };
     case "play": return { panel: play() };
+    case "safety": return { panel: await safety(db, user, now) };
+    case "you": return { panel: await you(db, user) };
+    case "privacy": return { panel: privacy() };
     case "settings": return { panel: settings(user) };
     case "persona": {
       if (a && PERSONAS[a]) {

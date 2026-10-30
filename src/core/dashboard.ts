@@ -184,6 +184,8 @@ const SECTION: Record<string, { title: string; plate: Plate; pose: string }> = {
   trips: { title: "Trips", plate: "trip", pose: "carrying" },
   play: { title: "Play", plate: "hack", pose: "cheers" },
   settings: { title: "Settings", plate: "scout", pose: "thinking" },
+  safety: { title: "Safety", plate: "rem", pose: "noted" },
+  you: { title: "You", plate: "hack", pose: "cheers" },
   everything: { title: "Everything", plate: "class", pose: "hello" },
 };
 export const SECTION_KINDS = Object.keys(SECTION);
@@ -241,6 +243,23 @@ export async function sectionFacts(db: Db, u: User, kind: string, now: Date): Pr
     const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
     rows.push(["Morning brief", hh(u.digest_hour)], ["Quiet hours", `${hh(u.quiet_start)} to ${hh(u.quiet_end)}`], ["Calm mode", u.prefs.calm === true ? "on" : "off"], ["Voice replies", String(u.prefs.voiceReplies ?? "when you speak")]);
     subtitle = "Tap to change";
+  } else if (kind === "safety") {
+    const n = async (sql: string) => Number((await maybe(db.one<{ n: string }>(sql, [u.id]), undefined))?.n ?? 0);
+    const ck = await maybe(db.one<{ due_at: string }>(`SELECT due_at FROM safety_checkins WHERE user_id=$1 AND status='active' ORDER BY due_at LIMIT 1`, [u.id]), undefined);
+    const contacts = await n(`SELECT count(*)::text AS n FROM safety_contacts WHERE user_id=$1 AND status='confirmed'`);
+    const card = await n(`SELECT count(*)::text AS n FROM safety_ice WHERE user_id=$1`);
+    const inc = await n(`SELECT count(*)::text AS n FROM safety_incidents WHERE user_id=$1`);
+    rows.push(["Check-in", ck ? `due ${DateTime.fromJSDate(new Date(ck.due_at)).setZone(u.tz).toFormat("HH:mm")}` : "none running"]);
+    rows.push(["Safety contacts", String(contacts)], ["Emergency card", card ? "ready" : "not set up"], ["Incident log", inc ? `${inc} kept` : "empty"]);
+    subtitle = ck ? "Someone's looking out" : "Here when you need it";
+  } else if (kind === "you") {
+    const days = await keptDays(db, u.id);
+    const mem = Number((await maybe(db.one<{ n: string }>(`SELECT count(*)::text AS n FROM memories WHERE user_id=$1`, [u.id]), undefined))?.n ?? 0);
+    const next = THINGS.find((t) => !carried(u.prefs).some((x) => x.key === t.key));
+    rows.push(["Days kept", String(days)], ["Pip carries", String(carried(u.prefs).length)]);
+    if (next) rows.push(["Next for Pip", `${next.name.replace(/^an? /, "")}, at ${next.at}`]);
+    rows.push(["Things I remember", String(mem)], ["Chat history kept", "180 days"]);
+    subtitle = "Yours to keep or delete";
   } else if (kind === "everything") {
     subtitle = "In drawers, not a wall";
   }
