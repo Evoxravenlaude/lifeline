@@ -3,6 +3,10 @@
  * inline keyboards. Also handles voice notes, .ics uploads, the persona
  * picker, and Telegram Business messages (draft replies, never auto-sent).
  */
+import { rezone } from "../core/scheduler.js";
+import { autoRetry } from "@grammyjs/auto-retry";
+import { sequentialize } from "@grammyjs/runner";
+import { stats, statsText } from "../core/health.js";
 import { Bot, InlineKeyboard, InputFile, InputMediaBuilder, type Context } from "grammy";
 import { config } from "../core/config.js";
 import { log } from "../core/log.js";
@@ -57,8 +61,11 @@ const OLD_TILES: Record<string, string> = { Today: "today", Hackathons: "any hac
 export const ABOUT_LONG = "A personal assistant you talk to like a person, wherever you live. I keep your calendar, reminders and lists, your medication and cycle, sleep and mood, what you spend and who owes you, and documents that expire. I check messages that feel off and look out for you on the way home. In a group I split bills, find a time and make birthday voice cards. Quick logs get a reaction, not a lecture. Nothing spends money or reaches anyone without your yes, and your data is yours. Tap Start.";
 export const ABOUT_SHORT = "Your day, your body, your money and your safety, kept by one calm assistant you just talk to.";
 
-/** Four ways in, under the welcome only. They scroll away with it. */
-const WAYS_IN = () => new InlineKeyboard().text("Open the menu ›", "p:home").primary().row().text("What can you do?", "say:what can you do").text("Things I can track", "say:what can you track");
+/** The end of onboarding: one tap to keep something real, so nobody leaves with only a list of examples. */
+const FIRST_WIN = () => new InlineKeyboard()
+  .text("Set my first reminder", "p:ask:rem").primary().row()
+  .text("Add my medication", "p:ask:med").text("Track my spending", "p:ask:spend").row()
+  .text("Open the menu ›", "p:home");
 /** The command list behind the Menu button: six, short, alike. Everything else is a sentence away (and the old commands still work). */
 const COMMANDS = [
   ["menu", "Your home screen"], ["today", "Your day at a glance"], ["everything", "All I can do, in drawers"],
@@ -128,6 +135,11 @@ function kb(r: Reply): InlineKeyboard | undefined {
 
 export function createBot(db: Db): Bot {
   const bot = new Bot(config.telegramToken);
+  // A 429 or a brief Telegram outage waits and retries instead of losing the message.
+  bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 30 }));
+  // Updates run side by side across chats (the runner), but in order within one chat. A Stop press on a live draft
+  // and a poll vote skip the queue: a Stop has to arrive while that chat's answer is still being written.
+  bot.use(sequentialize((ctx) => ((ctx.update as any).stopped_message_generation || (ctx.update as any).poll_answer ? undefined : ctx.chat?.id.toString())));
 
   /** A rich message (Bot API 10.1): headings, lists and tables drawn properly. False when Telegram won't take it. */
   const sendRich = async (chatId: number, r: Reply, thread?: number): Promise<boolean> => {
@@ -508,6 +520,13 @@ export function createBot(db: Db): Bot {
     if (st) await c.replyWithSticker(st).catch(() => {});
     await say(c, line ?? pipLine("idle", u));
   });
+  bot.command("stats", async (c) => {
+    // The six numbers from the audit: on time, delivered, first wins, notifications on, week 4, cost. Owner only.
+    const su = await userOf(c);
+    const firstId = (await db.one<{ id: number }>(`SELECT min(id) AS id FROM users`))?.id;
+    if (!isOwner(c.from!.id, su.id, firstId)) return say(c, "Those numbers are for whoever runs lifeline. Ask me \"what did you do for me this week\" for yours.");
+    await say(c, statsText(await stats(db)));
+  });
   bot.command("doctor", async (c) => {
     // What runs underneath (models, keys, providers) is for whoever runs lifeline, not for everyone in the circle.
     const du = await userOf(c);
@@ -610,7 +629,7 @@ export function createBot(db: Db): Bot {
     if (!place) return say(c, "I couldn't find that place. Try the city with its country, like \"Porto, Portugal\".");
     const prefs = { ...u.prefs, awaitingCity: false, ...(place.country ? { country: place.country } : {}), city: place.name };
     await db.query(`UPDATE users SET tz=$2, prefs=$3 WHERE id=$1`, [u.id, place.tz, JSON.stringify(prefs)]);
-    await db.query(`UPDATE jobs SET tz=$2 WHERE user_id=$1 AND kind='digest'`, [u.id, place.tz]);
+    await rezone(db, u.id, place.tz);
     const k = new InlineKeyboard();
     Object.entries(PERSONAS).forEach(([key, v], i) => { k.text(v.label, `ob:persona:${key}`); if (i % 2 === 1) k.row(); });
     return say(c, `${place.name} it is, on ${place.tz.split("/").pop()!.replace(/_/g, " ")} time. Now, how should I talk? You can change this any time.`, { reply_markup: k });
@@ -640,8 +659,24 @@ export function createBot(db: Db): Bot {
   bot.on("message:text", async (c, next) => {
     const u = await userOf(c);
     if (!u.prefs.awaitingCity || c.message.text.startsWith("/")) return next();
+    const text = c.message.text.trim();
+    const letGo = async () => db.query(`UPDATE users SET prefs = (prefs - 'cityMisses') || '{"awaitingCity":false}'::jsonb WHERE id=$1`, [u.id]);
+    // "skip" or "later": keep the zone they have, and go on to the voice question.
+    if (/^(?:skip|later|not now|no thanks?|nah|pass|cancel)[.!]*$/i.test(text)) {
+      await letGo();
+      const k = new InlineKeyboard();
+      Object.entries(PERSONAS).forEach(([key, v], i) => { k.text(v.label, `ob:persona:${key}`); if (i % 2 === 1) k.row(); });
+      return say(c, `No problem; I'll keep ${u.tz.split("/").pop()!.replace(/_/g, " ")} time. Say "I live in ..." whenever you like. Now, how should I talk?`, { reply_markup: k });
+    }
+    // Plainly not a place ("remind me to call mum at 5"): stop waiting and treat it as a normal message.
+    if (text.split(/\s+/).length > 5 || /\b(?:remind|add|track|log|what|how|when|why|took|spent|help)\b/i.test(text)) { await letGo(); return next(); }
     const { findCity } = await import("../core/geo.js");
-    return finishPlace(c, u, await findCity(c.message.text));
+    const place = await findCity(text);
+    if (place) return finishPlace(c, u, place);
+    // One miss gets a hint; a second means they've moved on, so lifeline does too.
+    if (Number(u.prefs.cityMisses ?? 0) >= 1) { await letGo(); return next(); }
+    await db.query(`UPDATE users SET prefs = prefs || '{"cityMisses":1}'::jsonb WHERE id=$1`, [u.id]);
+    return say(c, "I couldn't find that place. Try the city with its country, like \"Porto, Portugal\", or say \"skip\".");
   });
   bot.on("message:text", async (c) => {
     const raw = c.message.text.trim();
@@ -689,7 +724,8 @@ export function createBot(db: Db): Bot {
           `Try me with something real: "remind me to call mum on Sunday at 5", "I need to buy rice and eggs", "took my meds", "spent 4,500 on data".`,
           `Tap Menu any time for your day as a picture. Your data stays yours: "export my data" gives you a copy, "delete my account" removes it all.`,
           `If you ever wonder whether I can do something, just ask. "Can you track my meds?" gets a straight answer.`,
-        ].join("\n\n"), { reply_markup: WAYS_IN() });
+          `Start with one real thing now:`,
+        ].join("\n\n"), { reply_markup: FIRST_WIN() });
       }
       return;
     }
@@ -909,7 +945,11 @@ export function createBot(db: Db): Bot {
   }, 15 * 60_000);
   birthdays.unref?.();
 
-  bot.catch((e) => log.error({ err: e.error }, "bot error"));
+  // Never the raw error: grammY's carries the request payload, which holds the message text (health, money).
+  bot.catch((e) => {
+    const err: any = e.error;
+    log.error({ method: err?.method, code: err?.error_code, description: err?.description ?? String(err?.message ?? "").slice(0, 160), update: e.ctx?.update?.update_id }, "bot error");
+  });
   return bot;
 }
 

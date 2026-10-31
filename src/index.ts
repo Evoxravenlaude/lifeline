@@ -1,3 +1,4 @@
+import { run } from "@grammyjs/runner";
 import "./modules/index.js";
 import { registerEmail } from "./channels/email.js";
 import { config } from "./core/config.js";
@@ -53,16 +54,18 @@ async function main() {
     circle: `${(await db.one<{ n: string }>(`SELECT count(*)::text AS n FROM users`))?.n ?? 0} of ${config.maxUsers}`, owners: config.allowedUserIds.length, model: providerName() ?? "rules-only", stt: Boolean(config.openaiKey),
     sms: smsProvider() ?? false, imessage: config.imessageProvider || false, email: Boolean(config.smtpUrl), web: config.port,
   }, "lifeline starting");
-  // During a redeploy the old container still polls for a few seconds and Telegram answers 409. Wait it out instead of crashing.
-  for (let attempt = 1; bot; attempt++) {
-    try {
-      await bot.start({ allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "business_connection", "business_message", "guest_message", "stopped_message_generation", "poll_answer"] as any, onStart: (me) => log.info({ username: me.username }, "telegram polling") });
-      break;
-    } catch (e: any) {
-      if (e?.error_code !== 409 || attempt > 12) throw e;
-      log.warn({ attempt }, "another instance is still polling Telegram; retrying in 5s");
-      await new Promise((r) => setTimeout(r, 5000));
-    }
+  // The runner handles updates from different chats at the same time, so one person's long research never holds up
+  // everyone else (the bot keeps each chat in order itself). During a redeploy the old container still polls for a few
+  // seconds and Telegram answers 409; the runner backs off and retries until it's gone.
+  if (bot) {
+    await bot.api.deleteWebhook().catch(() => {});
+    const runner = run(bot, {
+      runner: { fetch: { allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "business_connection", "business_message", "guest_message", "stopped_message_generation", "poll_answer"] as any }, maxRetryTime: 6 * 3600_000, retryInterval: "exponential", silent: true },
+    });
+    log.info({ username: botUsername }, "telegram polling");
+    const stop = () => { if (runner.isRunning()) void runner.stop(); };
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
   }
 }
 

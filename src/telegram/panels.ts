@@ -32,13 +32,14 @@ const nav = (to = "home"): Btn[] => [BACK(to), OK];
 
 /* ---------------- typing prompts ---------------- */
 
-export type AskKey = "rem" | "list" | "spend" | "log";
+export type AskKey = "rem" | "list" | "spend" | "log" | "med";
 /** Buttons that need words ask with a reply prompt; the answer is read with the right start. */
 export const ASKS: Record<AskKey, { prompt: string; placeholder: string; shape: (t: string) => string }> = {
   rem: { prompt: "What should I remind you about, and when?", placeholder: "call mum on sunday at 5", shape: (t) => (/^remind\b/i.test(t) ? t : `remind me to ${t}`) },
   list: { prompt: "What should I add? Start with the list's name if it isn't your to-do list.", placeholder: "shopping: rice, eggs", shape: (t) => (/^[\w -]{2,24}:/.test(t) ? t : `todo: ${t}`) },
   spend: { prompt: "What did you spend, and on what?", placeholder: "12 on lunch", shape: (t) => (/^(?:i )?(?:spent|paid|bought)\b/i.test(t) ? t : `I spent ${t}`) },
   log: { prompt: "What should I log?", placeholder: "slept 7 hours, weight 72kg, mood 4/5", shape: (t) => t },
+  med: { prompt: "What do you take, and when? I'll ring you at each time with Taken and Skip.", placeholder: "vitamin D at 8am and 8pm", shape: (t) => (/^i take\b/i.test(t) ? t : `I take ${t}`) },
 };
 /** If a message answers one of our prompts, shape it so it reads right. */
 export function shapeAnswer(promptText: string | undefined, text: string): string {
@@ -359,7 +360,7 @@ export async function panel(db: Db, user: User, key: string, now = new Date()): 
       }
       return { panel: settings(user) };
     }
-    case "ask": return { panel: null, ask: (["rem", "list", "spend", "log"] as AskKey[]).includes(a as AskKey) ? (a as AskKey) : "log" };
+    case "ask": return { panel: null, ask: (["rem", "list", "spend", "log", "med"] as AskKey[]).includes(a as AskKey) ? (a as AskKey) : "log" };
     default: return { panel: await home(db, user, now) };
   }
 }
