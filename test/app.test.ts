@@ -3,6 +3,7 @@
  * dropping subscriptions the push service says are gone, "Where should reminders reach you?" including
  * Both, and the files a browser needs to install it.
  */
+import { createECDH } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../src/modules/index.js";
 import { readFileSync } from "node:fs";
@@ -52,8 +53,10 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   // Keys shaped like real ones (a 65-byte public point, a 32-byte private key): pushOn() checks the shape.
-  config.vapidPublicKey = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString("base64url");
-  config.vapidPrivateKey = Buffer.alloc(32, 9).toString("base64url"); config.vapidSubject = "mailto:owner@example.com";
+  // A real key pair, as `npx web-push generate-vapid-keys` makes: the server checks the two belong together.
+  const pair = createECDH("prime256v1"); pair.generateKeys();
+  config.vapidPublicKey = pair.getPublicKey().toString("base64url");
+  config.vapidPrivateKey = pair.getPrivateKey().toString("base64url"); config.vapidSubject = "mailto:owner@example.com";
   usePushClient(client); pushes.length = 0; telegramSent.length = 0; failWith = null; telegramDown = false;
 });
 afterEach(() => { vi.restoreAllMocks(); });

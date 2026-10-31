@@ -552,8 +552,9 @@ describe("search with an OpenAI key", () => {
     const { vapidProblem } = await import("../src/core/webpush.js");
     Object.assign(config, { vapidPublicKey: "BLF7N5o9Yf", vapidPrivateKey: "x", vapidSubject: "me@example.com" });
     expect(vapidProblem()).toMatch(/VAPID_PUBLIC_KEY doesn't look like/);
-    const pub = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 1)]).toString("base64url");
-    Object.assign(config, { vapidPublicKey: pub, vapidPrivateKey: Buffer.alloc(32, 2).toString("base64url"), vapidSubject: "me@example.com" });
+    const { createECDH } = await import("node:crypto");
+    const pair = createECDH("prime256v1"); pair.generateKeys();
+    Object.assign(config, { vapidPublicKey: pair.getPublicKey().toString("base64url"), vapidPrivateKey: pair.getPrivateKey().toString("base64url"), vapidSubject: "me@example.com" });
     expect(vapidProblem()).toMatch(/VAPID_SUBJECT should be mailto:/);
     Object.assign(config, { vapidSubject: "mailto:me@example.com" });
     expect(vapidProblem()).toBeNull();
