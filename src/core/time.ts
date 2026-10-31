@@ -1,17 +1,35 @@
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
 
+const RELATIVE = /\b(?:in\s+(?:a|an|a few|half an?|\d+(?:\.\d+)?)\s*(?:secs?|seconds?|mins?|minutes?|hrs?|hours?)|from now)\b/i;
+
+/**
+ * chrono reads the words against today's UTC offset, so "Tuesday at 9am" across a clock change came out an hour off.
+ * Anything said as a clock time or a date is rebuilt from its wall-clock parts in the person's own zone; only
+ * "in 20 minutes" keeps chrono's instant, since that's a span, not a time on the clock.
+ */
+export function settle(c: chrono.ParsedComponents, tz: string, text: string): Date {
+  if (RELATIVE.test(text)) return c.date();
+  const dt = DateTime.fromObject(
+    { year: c.get("year")!, month: c.get("month")!, day: c.get("day")!, hour: c.get("hour") ?? 0, minute: c.get("minute") ?? 0, second: c.get("second") ?? 0 },
+    { zone: tz },
+  );
+  return dt.isValid ? dt.toJSDate() : c.date();
+}
+
 /** Parse "tomorrow 9am", "next friday 14:00", "in 20 minutes" in the user's timezone. */
 export function parseWhen(text: string, tz: string, now: Date): Date | null {
   const ref = DateTime.fromJSDate(now).setZone(tz);
-  // chrono works in the host tz; we give it a reference instant and the user's offset.
+  // chrono works in the host tz; we give it a reference instant and the user's offset, then settle() fixes the zone.
   const r = chrono.parse(text, { instant: now, timezone: ref.offset }, { forwardDate: true });
   if (!r.length) return null;
-  return r[0].start.date();
+  return settle(r[0].start, tz, r[0].text);
 }
 
 /** Parse an "HH:MM" or "9am" style clock time into [hour, minute]. */
 export function parseClock(text: string): [number, number] | null {
+  if (/^\s*(?:noon|midday|12\s*noon)\s*$/i.test(text)) return [12, 0];
+  if (/^\s*midnight\s*$/i.test(text)) return [0, 0];
   const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/i.exec(text);
   if (!m) return null;
   let h = Number(m[1]);
@@ -40,7 +58,7 @@ export function parseWhenOrMorning(text: string, tz: string, now: Date): Date | 
   const ref = DateTime.fromJSDate(now).setZone(tz);
   const r = chrono.parse(text, { instant: now, timezone: ref.offset }, { forwardDate: true })[0];
   if (!r) return null;
-  const d = r.start.date();
+  const d = settle(r.start, tz, r.text);
   if (r.start.isCertain("hour") || /\b(?:in \d|hours?|minutes?|mins?)\b/i.test(text)) return d;
   return DateTime.fromJSDate(d).setZone(tz).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toJSDate();
 }
@@ -91,8 +109,8 @@ export function parseRange(text: string, tz: string, now: Date): { start: Date; 
   const cleaned = text.replace(/\b(?:from|between)\b/gi, " ").replace(/\bthe\s+(?=\d)/gi, "").replace(/\b(?:until|till|through|thru|to|and|-|–)\b/gi, " to ");
   const r = chrono.parse(cleaned, { instant: now, timezone: ref.offset }, { forwardDate: true });
   if (!r.length) return null;
-  const start = r[0].start.date();
-  let end: Date | null = r[0].end ? r[0].end.date() : r[1] ? r[1].start.date() : null;
+  const start = settle(r[0].start, tz, r[0].text);
+  let end: Date | null = r[0].end ? settle(r[0].end, tz, r[0].text) : r[1] ? settle(r[1].start, tz, r[1].text) : null;
   if (end && end < start) {
     // "20 to 27 dec" where chrono put the first number in the wrong month
     end = DateTime.fromJSDate(end).plus({ months: 1 }).toJSDate();

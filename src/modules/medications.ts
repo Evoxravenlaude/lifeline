@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
-import { parseClock } from "../core/time.js";
+import { fmt, parseClock } from "../core/time.js";
 import { cancelJob, onJob, push, schedule } from "../core/scheduler.js";
 import { addExamples, addRules } from "../core/plugins.js";
 
@@ -18,14 +18,20 @@ onJob("med_slot", async (job, deps) => {
     [job.payload.medId],
   );
   if (!med || !med.active) return;
+  // The dose belongs to the time it was due, even when the server was down and this runs late.
+  const due = job.run_at ? new Date(job.run_at) : new Date();
+  const late = (job.lateMs ?? 0) > 30 * 60_000;
   const logRow = await deps.db.one<{ id: number }>(
-    `INSERT INTO medication_logs (medication_id, scheduled_for) VALUES ($1, now()) RETURNING id`,
-    [med.id],
+    `INSERT INTO medication_logs (medication_id, scheduled_for) VALUES ($1, $2) RETURNING id`,
+    [med.id, due],
   );
   const kb = [{ label: "Taken", data: `med:taken:${logRow!.id}` }, { label: "Skip", data: `med:skip:${logRow!.id}` }];
   const low = med.days_left !== null && med.days_left <= 3 ? ` About ${med.days_left} day${med.days_left === 1 ? "" : "s"} of supply left, time to refill.` : "";
-  await push(deps, user, "medication", `Time for ${med.name}${med.dose ? `, ${med.dose}` : ""}.${low}`, { exempt: true, buttons: kb });
-  await schedule(deps.db, { userId: user.id, kind: "med_nudge", payload: { logId: logRow!.id }, runAt: new Date(Date.now() + 90 * 60_000) });
+  const what = `${med.name}${med.dose ? `, ${med.dose}` : ""}`;
+  const text = late ? `${what} was due at ${fmt(due, user.tz, false)}. I'm late with this one; tap Taken if you've had it.${low}` : `Time for ${what}.${low}`;
+  const ok = await push(deps, user, "medication", text, { exempt: true, buttons: kb });
+  // Not delivered: the follow-up comes in ten minutes instead of ninety, and doubles as the retry.
+  await schedule(deps.db, { userId: user.id, kind: "med_nudge", payload: { logId: logRow!.id }, runAt: new Date(Date.now() + (ok ? 90 : 10) * 60_000) });
 });
 
 onJob("med_nudge", async (job, deps) => {
@@ -164,16 +170,19 @@ const taken = defineAction({
   },
 });
 
+/** Taken or Skip from a button. Tapping Taken on both the app notification and Telegram counts the dose once. */
 export async function resolveLog(db: any, userId: number, logId: number, status: "taken" | "skipped") {
   const r = await db.query(
     `UPDATE medication_logs SET status=$3, taken_at=CASE WHEN $3='taken' THEN now() END
-     WHERE id=$1 AND medication_id IN (SELECT id FROM medications WHERE user_id=$2) RETURNING medication_id`,
+     WHERE id=$1 AND status <> $3 AND medication_id IN (SELECT id FROM medications WHERE user_id=$2) RETURNING medication_id`,
     [logId, userId, status],
   );
   if (r.length && status === "taken") {
     await db.query(`UPDATE medications SET days_left = CASE WHEN days_left IS NULL THEN NULL ELSE GREATEST(days_left-1,0) END WHERE id=$1`, [r[0].medication_id]);
   }
-  return r.length > 0;
+  if (r.length) return true;
+  // Already marked that way: still a yes, just nothing more to count.
+  return Boolean(await db.one(`SELECT 1 FROM medication_logs WHERE id=$1 AND medication_id IN (SELECT id FROM medications WHERE user_id=$2)`, [logId, userId]));
 }
 
 register(add, list, remove, taken);
@@ -185,3 +194,10 @@ addRules(
   [/^(?:i(?:'ve| have)?\s+)?(?:just\s+)?(?:took|taken)\s+(?:my\s+)?([a-z][\w -]{1,40}?)\s+(?:dose|tablets?)[.!]*$/i, (m) => ({ action: "medication.taken", args: { match: m[1] } })],
 );
 addExamples("medication.taken", ["took my meds", "took my metformin dose", "meds taken"]);
+/* "I take vitamin D at 8am and 8pm" (also what the onboarding button sends): the name, then the times. */
+addRules([/^i (?:take|need to take|have to take)\s+(?:my\s+)?([a-z][\w' .-]{1,40}?)(?:,?\s+(\d+\s*(?:mg|ml|tablets?|pills?|caps?(?:ules)?|drops?|iu|mcg)))?\s+(?:at|every day at|daily at)\s+(.{2,60})$/i,
+  (m) => {
+    const times = m[3].split(/\s*(?:,|and|&)\s*/).map((t) => t.trim()).filter((t) => /^\d{1,2}(?::\d{2})?\s*(?:am|pm)?$|^(?:noon|midnight)$/i.test(t));
+    return times.length ? { action: "medication.add", args: { name: m[1].trim(), times, ...(m[2] ? { dose: m[2].trim() } : {}) } } : null;
+  }]);
+addExamples("medication.add", ["I take vitamin D at 8am and 8pm"]);

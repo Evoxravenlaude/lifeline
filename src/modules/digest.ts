@@ -9,7 +9,7 @@ import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
 import { fmt, humanDelta } from "../core/time.js";
-import { onJob, push } from "../core/scheduler.js";
+import { onJob, push, rezone } from "../core/scheduler.js";
 import { rangeBounds } from "./calendar.js";
 import { hackLine, rankedForUser, wantsHackathonNews } from "./hackathons.js";
 import type { Db } from "../core/db.js";
@@ -21,7 +21,7 @@ const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 /** The day in one message. `peek` reads it without marking new jobs and hackathons as seen (the Today panel). */
 export async function buildDigest(db: Db, user: User, now: Date, opts: { peek?: boolean } = {}): Promise<string> {
   const { from, to } = rangeBounds("today", user.tz, now);
-  const wd = new Date(from.getTime() + 12 * 3_600_000).getUTCDay(); // approx local weekday
+  const wd = DateTime.fromJSDate(now).setZone(user.tz).weekday % 7; // the person's own weekday, 0 = Sunday
   const [events, classes, meds, reminders, hacks, trips, assignments] = await Promise.all([
     db.query<any>(`SELECT title, starts_at, location FROM events WHERE user_id=$1 AND NOT deleted AND starts_at >= $2 AND starts_at < $3 ORDER BY starts_at`, [user.id, from, to]),
     db.query<any>(`SELECT name, start_time, location FROM classes WHERE user_id=$1 AND active AND weekday=$2 AND (term_end IS NULL OR term_end >= current_date) ORDER BY start_time`, [user.id, wd]),
@@ -91,6 +91,8 @@ export async function buildDigest(db: Db, user: User, now: Date, opts: { peek?: 
 onJob("digest", async (job, deps) => {
   const user = await deps.getUser(job.user_id!);
   if (!user) return;
+  // After an outage, a morning brief three hours late is worse than none: skip it, tomorrow's comes on time.
+  if ((job.lateMs ?? 0) > 3 * 3_600_000) return;
   const text = await buildDigest(deps.db, user, new Date());
   await push(deps, user, "digest", text, { exempt: true });
 });
@@ -152,7 +154,7 @@ const settings = defineAction({
     if (args.tz || args.digest_hour !== undefined) {
       const tz = args.tz ?? ctx.user.tz;
       const hour = args.digest_hour ?? ctx.user.digest_hour;
-      await ctx.db.query(`UPDATE jobs SET cron=$2, tz=$3 WHERE user_id=$1 AND kind='digest'`, [ctx.user.id, `0 ${hour} * * *`, tz]);
+      await rezone(ctx.db, ctx.user.id, tz, { digestHour: hour, now: ctx.now });
     }
     const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
     const bits: string[] = [];
@@ -199,7 +201,7 @@ const setCity = defineAction({
     if (!p) throw new Error(`I couldn't find a place called "${args.city}". Try the city with its country?`);
     const prefs = { ...ctx.user.prefs, ...(p.country ? { country: p.country } : {}), city: p.name };
     await ctx.db.query(`UPDATE users SET tz=$2, prefs=$3 WHERE id=$1`, [ctx.user.id, p.tz, JSON.stringify(prefs)]);
-    await ctx.db.query(`UPDATE jobs SET tz=$2 WHERE user_id=$1 AND kind='digest'`, [ctx.user.id, p.tz]);
+    await rezone(ctx.db, ctx.user.id, p.tz, { now: ctx.now });
     const cur = userCurrency({ tz: p.tz, prefs });
     return { reply: `${p.name}${p.countryName ? `, ${p.countryName}` : ""}. Your clock is on ${p.tz.split("/").pop()!.replace(/_/g, " ")} time now, and amounts without a currency are in ${cur}. Say "my currency is …" to change that.` };
   },

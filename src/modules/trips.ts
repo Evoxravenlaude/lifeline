@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
-import { fmt, fmtDate, parseWhen, parseRange, parseMoney } from "../core/time.js";
+import { fmt, fmtDate, parseWhen, parseRange, parseMoney, settle } from "../core/time.js";
 import { onJob, push, schedule } from "../core/scheduler.js";
 import { DateTime } from "luxon";
 import * as chrono from "chrono-node";
@@ -136,7 +136,7 @@ const addItem = defineAction({
       // "flight LOS to ACC on dec 20 at 7am": the time is in the title
       const ref = DateTime.fromJSDate(ctx.now).setZone(ctx.user.tz);
       const found = chrono.parse(title, { instant: ctx.now, timezone: ref.offset }, { forwardDate: true })[0];
-      if (found && /\d/.test(found.text)) { at = found.start.date(); title = title.replace(found.text, "").replace(/\s+(?:on|at|for)\s*$/i, "").replace(/\s{2,}/g, " ").trim() || args.title; }
+      if (found && /\d/.test(found.text)) { at = settle(found.start, ctx.user.tz, found.text); title = title.replace(found.text, "").replace(/\s+(?:on|at|for)\s*$/i, "").replace(/\s{2,}/g, " ").trim() || args.title; }
     }
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO trip_items (trip_id, kind, title, at, cost) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [trip.id, args.kind, title, at, args.cost ?? null]);
     const spent = await plannedSpend(ctx, trip.id);

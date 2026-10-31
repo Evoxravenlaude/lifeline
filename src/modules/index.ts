@@ -28,6 +28,7 @@ import "./account.js";
 import "./identity.js";
 import "./emaillink.js";
 import "./limits.js";
+import "./recap.js";
 
 /* Feature folders: every src/modules/features/<area>/index.ts registers itself (see docs/PLUGINS.md). */
 import { readdirSync, existsSync } from "node:fs";

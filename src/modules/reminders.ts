@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
 import { fmt, human, parseWhen, parseWhenOrMorning } from "../core/time.js";
-import { cancelJob, onJob, push, schedule } from "../core/scheduler.js";
+import { cancelJob, nextCron, onJob, push, schedule } from "../core/scheduler.js";
 
 onJob("reminder", async (job, deps) => {
   const user = await deps.getUser(job.user_id!);
@@ -13,7 +13,11 @@ onJob("reminder", async (job, deps) => {
   );
   if (!r || r.deleted || (r.done && !job.cron)) return;
   const cap = r.text.charAt(0).toUpperCase() + r.text.slice(1);
-  await push(deps, user, "reminder", `Reminder: ${cap}.`, { exempt: true, buttons: [{ label: "Done", data: `rem:done:${r.id}` }, { label: "Snooze an hour", data: `rem:snooze:${r.id}` }] });
+  // A repeating reminder's date moves on each time it rings, so it stays in Today, the brief and the list.
+  if (job.cron) await deps.db.query(`UPDATE reminders SET due_at=$2 WHERE id=$1`, [r.id, nextCron(job.cron, job.tz ?? user.tz, new Date(Math.max(Date.now(), new Date(job.run_at).getTime() + 1000)))]).catch(() => {});
+  const ok = await push(deps, user, "reminder", `Reminder: ${cap}.`, { exempt: true, buttons: [{ label: "Done", data: `rem:done:${r.id}` }, { label: "Snooze an hour", data: `rem:snooze:${r.id}` }] });
+  // Nowhere reached them (Telegram down, no other way in): throwing lets the scheduler try a one-off again shortly.
+  if (!ok && !job.cron) throw new Error("reminder not delivered");
 });
 
 const create = defineAction({
@@ -102,8 +106,11 @@ const remove = defineAction({
 });
 
 /** Used by the Done / Snooze buttons. */
-export async function markDone(db: any, userId: number, id: number) {
+export async function markDone(db: any, userId: number, id: number): Promise<{ repeats: boolean; next?: string }> {
+  const r = await db.one(`SELECT cron, due_at FROM reminders WHERE id=$1 AND user_id=$2`, [id, userId]);
+  if (r?.cron) return { repeats: true, next: r.due_at };
   await db.query(`UPDATE reminders SET done=true WHERE id=$1 AND user_id=$2 AND cron IS NULL`, [id, userId]);
+  return { repeats: false };
 }
 export async function snooze(db: any, userId: number, id: number, minutes = 60) {
   const r = await db.one(`SELECT id FROM reminders WHERE id=$1 AND user_id=$2`, [id, userId]);

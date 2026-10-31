@@ -41,9 +41,11 @@ async function userTables(db: Db): Promise<string[]> {
 export async function exportUser(db: Db, userId: number): Promise<Record<string, unknown[]>> {
   const out: Record<string, unknown[]> = {};
   const user = await db.one<any>(`SELECT id, name, tz, digest_hour, quiet_start, quiet_end, prefs, email, preferred_channel, created_at FROM users WHERE id=$1`, [userId]);
-  if (user) { const { homeMsg: _h, thread: _t, photoSuggestions: _p, ...prefs } = user.prefs ?? {}; out.you = [{ ...user, prefs }]; }
+  // Codes still in flight (an email being confirmed) would let someone holding the file finish what the person started.
+  if (user) { const { homeMsg: _h, thread: _t, photoSuggestions: _p, emailPending: _e, ...prefs } = user.prefs ?? {}; out.you = [{ ...user, prefs }]; }
   const fks = await foreignKeys(db);
-  const skip = new Set(["sessions", "pending_actions", "undo_stack"]); // sign-in tokens and in-flight buttons: not yours to keep, and secret
+  // Sign-in tokens, link codes, in-flight buttons and notification keys: live secrets, so they stay out of the file.
+  const skip = new Set(["sessions", "pending_actions", "undo_stack", "link_codes", "push_subscriptions", "job_runs", "push_log", "model_events"]);
   for (const t of await userTables(db)) {
     if (skip.has(t)) continue;
     const rows = await db.query(`SELECT * FROM ${ident(t)} WHERE user_id=$1`, [userId]).catch(() => []);
@@ -125,8 +127,9 @@ register(exporter, deleter);
 onJob("account_erase", async (job, deps) => {
   const id = Number((job.payload as { userId?: number }).userId);
   if (!id) return;
-  const n = await eraseUser(deps.db, id).catch((e) => { log.error({ err: e?.message, user: id }, "account erase failed"); return -1; });
-  if (n >= 0) log.info({ user: id, rows: n }, "account erased");
+  // A failure throws, so the scheduler tries again after one minute and then five; what was left goes on the retry.
+  const n = await eraseUser(deps.db, id).catch((e) => { log.error({ err: e?.message, user: id }, "account erase failed"); throw e; });
+  log.info({ user: id, rows: n }, "account erased");
 });
 
 /* Retention: the conversation log and the audit log don't grow forever. */
@@ -134,6 +137,8 @@ addSystemJob("retention", "23 4 * * *");
 onJob("retention", async (_job, deps) => {
   const m = await deps.db.query(`DELETE FROM messages WHERE created_at < now() - ($1 || ' days')::interval RETURNING 1`, [String(KEEP_MESSAGES_DAYS)]).catch(() => []);
   const a = await deps.db.query(`DELETE FROM audit_log WHERE created_at < now() - ($1 || ' days')::interval RETURNING 1`, [String(KEEP_AUDIT_DAYS)]).catch(() => []);
+  // The delivery and cost records behind /stats are counts with no content; three months is plenty.
+  for (const t of ["job_runs", "push_log", "model_events"]) await deps.db.query(`DELETE FROM ${t} WHERE at < now() - interval '90 days'`).catch(() => {});
   if (m.length || a.length) log.info({ messages: m.length, audit: a.length }, "retention");
 });
 
