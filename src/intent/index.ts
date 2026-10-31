@@ -1,3 +1,4 @@
+import type { ToolRunner } from "./agent.js";
 import { parseByRules } from "./rules.js";
 import { parseLoose } from "./loose.js";
 import { parseWithModel, type ModelResult } from "./model.js";
@@ -16,7 +17,7 @@ export type { ModelResult };
  * untrusted before it reaches the model: the sentence the user typed decides
  * the action.
  */
-export async function resolveIntent(text: string, ctx: Ctx, opts: { forwarded?: boolean } = {}): Promise<ModelResult> {
+export async function resolveIntent(text: string, ctx: Ctx, opts: { forwarded?: boolean; runTool?: ToolRunner } = {}): Promise<ModelResult> {
   if (!opts.forwarded) {
     const r = parseByRules(text);
     if (r) return { kind: "action", intent: r, source: "rules" };
@@ -29,7 +30,7 @@ export async function resolveIntent(text: string, ctx: Ctx, opts: { forwarded?: 
   if (providerName()) {
     // The newest row is this very message (saved on arrival); the model gets it once, as the new turn.
     const past = hist.length && hist[hist.length - 1].role === "user" ? hist.slice(0, -1) : hist;
-    const m = await parseWithModel(input, ctx, memories, past);
+    const m = await parseWithModel(input, ctx, memories, past, opts.runTool);
     if (m) return m;
   }
   if (!opts.forwarded) {

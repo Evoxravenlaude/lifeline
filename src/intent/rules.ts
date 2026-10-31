@@ -87,7 +87,8 @@ const RULES: [RegExp, (m: RegExpMatchArray) => Intent][] = [
   [/^(?:add )?(?:to )?(todo|shopping)(?: list)?:?\s+(.+)$/i, (m) => ({ action: "list.add", args: { list: m[1].toLowerCase(), items: m[2].split(/\s*,\s*/) } })],
   [/^(?:bought|got|ticked)\s+(.+)$/i, (m) => ({ action: "list.done", args: { match: m[1] } })],
   [/^(?:show |my )?(todo|todos|shopping|lists?)$/i, (m) => ({ action: "list.show", args: { list: /^lists?$/i.test(m[1]) ? undefined : m[1].replace(/s$/, "").toLowerCase() } })],
-  [/^(.+?(?:birthday|bday|anniversary))\s+(?:is\s+)?(?:on\s+)?(.+)$/i, (m) => ({ action: "date.add", args: { label: m[1], on: m[2] } })],
+  // Only a name before "birthday": "Delete the bank reminder and add Bunmi's birthday on the 2nd" is two asks, for the model.
+  [/^(?!(?:cancel|delete|remove|drop|move|change|set|add|put|remind|make|create|save)\b)(?!.*\b(?:and|then|also)\s+(?:cancel|delete|remove|drop|move|change|set|add|put|remind|make|create|save)\b.*(?:birthday|bday|anniversary))(.+?(?:birthday|bday|anniversary))\s+(?:is\s+)?(?:on\s+)?(.+)$/i, (m) => ({ action: "date.add", args: { label: m[1], on: m[2] } })],
   [/^countdown\s+(?:to\s+)?(.+?)\s+(?:on\s+)?((?:\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|next|tomorrow).*)$/i, (m) => ({ action: "date.add", args: { label: m[1], on: m[2], kind: "countdown" } })],
   [/^(?:dates|birthdays|countdowns)$/i, () => ({ action: "date.list", args: {} })],
   [/^weather(?:\s+in)?\s+(.+?)(?:\s+(today|tomorrow))?$/i, (m) => ({ action: "weather", args: { city: m[1], day: m[2]?.toLowerCase() } })],

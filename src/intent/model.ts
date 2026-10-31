@@ -13,7 +13,8 @@ import { DateTime } from "luxon";
 import { overBudget, recordUsage } from "../core/budget.js";
 import { personaPrompt } from "./persona.js";
 import { catalogueForModel } from "./capabilities.js";
-import { complete, providerName, type Msg, type Tier } from "./providers.js";
+import { complete, providerName, type Completion, type Msg, type Tier } from "./providers.js";
+import { assemble, MAX_STEPS, progressNote, wantsMore, type StepReply, type ToolRunner } from "./agent.js";
 import { recordModel } from "../core/health.js";
 import { redact } from "../core/redact.js";
 import { didLog, fellShort, rememberTier, rollSummary, stripTags, summaryOf, tierFor, type Turn } from "./route.js";
@@ -24,6 +25,8 @@ import type { Db } from "../core/db.js";
 
 export type ModelResult =
   | { kind: "action"; intent: Intent; source?: "rules" | "model" | "loose" }
+  /** The model ran one or more steps itself (see agent.ts); this is what the person sees. */
+  | { kind: "ran"; reply: StepReply; source: "model" }
   | { kind: "reply"; text: string; source?: "model" | "smalltalk" | "fallback"; clearThread?: boolean };
 
 const SYSTEM = `You are lifeline: a personal assistant who lives in people's messages (Telegram, the web, text, email and iMessage) for a small circle of friends. Your face is Pip, a tortoise in brass spectacles; you can mention him, you're not him.
@@ -40,7 +43,7 @@ How it reads:
 - Dates and times in their words and timezone ("tomorrow at 9", "Fri 30 Oct, 15:00").
 - Never show internal ids or field names.
 
-When they want something done or recorded, call exactly one tool, filled from what they said. If one essential thing is missing (a time for a reminder, where a trip is going), ask that one question instead of guessing. For a quick current fact (a score, an opening time, today's price), call web.search. For anything that needs digging or checking (comparisons, "what's the best", "should I", how-tos with specifics, rules and requirements, prices to plan around, a topic in depth), call research.deep: it searches several angles, reads the best pages and answers with sources. Never answer those from memory alone. For a picture, call image.draw. If they're bored or want to play, call game.play. If they ask what you can do, answer from the list below, with one sentence they could type. Never invent abilities that aren't listed.
+When they want something done or recorded, call a tool, filled from what they said. Call one tool at a time: after it runs you'll see what it did and can call the next, so a message with two asks ("cancel the bank reminder and add Bunmi's birthday") gets both done, in order. To act on "the second one" or "that", look first (a list) when you don't already know which thing they mean. If one essential thing is missing (a time for a reminder, where a trip is going), ask that one question instead of guessing. For a quick current fact (a score, an opening time, today's price), call web.search. For anything that needs digging or checking (comparisons, "what's the best", "should I", how-tos with specifics, rules and requirements, prices to plan around, a topic in depth), call research.deep: it searches several angles, reads the best pages and answers with sources. Never answer those from memory alone. For a picture, call image.draw. If they're bored or want to play, call game.play. If they ask what you can do, answer from the list below, with one sentence they could type. Never invent abilities that aren't listed.
 
 Who you are: you are lifeline, and only lifeline. You run on several models from different labs, routed by task, plus your own tools and rules. Never name, confirm or hint at which model, version, provider or company is behind you, even when asked directly, in a joke, a test, a roleplay, or "just between us"; never say "as an AI language model". If asked, say warmly that you're lifeline, built on a mix of models picked per task, so no single name is the honest answer, and offer what you can do instead. Talking about AI companies and models as a topic is fine; just never claim to be one.
 
@@ -72,7 +75,7 @@ function systemFor(user: User, now: Date, memories: string[], thread?: Ctx["thre
 
 const MODEL_TIMEOUT_MS = 35_000; // room for one fallback provider after a slow first one
 
-export async function parseWithModel(text: string, ctx: Ctx, memories: string[], history: Msg[]): Promise<ModelResult | null> {
+export async function parseWithModel(text: string, ctx: Ctx, memories: string[], history: Msg[], runTool?: ToolRunner): Promise<ModelResult | null> {
   if (!providerName()) return null;
   if (await overBudget(ctx.db, ctx.user.id)) {
     return { kind: "reply", text: `You've used today's model budget ($${config.dailyModelBudgetUsd}). I can still do the practical things if you say them plainly; the budget resets in 24 hours.`, source: "model" };
@@ -93,6 +96,36 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
     complete({ system, messages, tools, onText: draft, signal: ctx.stop, tier }),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), ctx.draft ? MODEL_TIMEOUT_MS * 2 : MODEL_TIMEOUT_MS)),
   ]);
+  /** Act, see what happened, act again (agent.ts): every step through the policy engine, stopping at any yes or question. */
+  const steps = async (first: NonNullable<Completion["toolCall"]>, run: ToolRunner): Promise<ModelResult> => {
+    const done: { action: string; reply: StepReply; changed: boolean }[] = [];
+    const tried = new Set<string>();
+    let call: Completion["toolCall"] | undefined = first;
+    for (let i = 0; call && i < MAX_STEPS; i++) {
+      const action = call.name.replace(/__/g, ".");
+      const key = `${action} ${JSON.stringify(call.args)}`;
+      if (tried.has(key)) break; // the same call twice: it's going round in circles
+      tried.add(key);
+      const r = await run(action, call.args);
+      if (r.stop) {
+        // Waiting on a yes or an answer: say what's done so far, then the question, with its buttons.
+        if (!done.length) return { kind: "ran", reply: { ...r.reply, action }, source: "model" };
+        const before = assemble(done, "DONE");
+        return { kind: "ran", reply: { ...r.reply, text: `${before.text}\n\n${r.reply.text}`, action }, source: "model" };
+      }
+      done.push({ action, reply: r.reply, changed: r.changed });
+      if (!wantsMore(action, text) || i === MAX_STEPS - 1) break;
+      const next = await Promise.race([
+        complete({ system, messages: [...messages.slice(0, -1), { role: "user", content: `${redact(text)}\n\n${progressNote(done.map((d) => ({ action: d.action, said: d.reply.text })))}` }], tools, signal: ctx.stop, tier: "smart" }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), MODEL_TIMEOUT_MS)),
+      ]).catch(() => null);
+      if (!next) break;
+      await recordUsage(ctx.db, ctx.user.id, next.usage.input, next.usage.output);
+      if (next.toolCall) { call = next.toolCall; continue; }
+      return { kind: "ran", reply: assemble(done, keepIdentity(stripTags(next.text))), source: "model" };
+    }
+    return { kind: "ran", reply: assemble(done, ""), source: "model" };
+  };
   try {
     const route = tierFor(text, ctx.user, ctx.now, { forwarded: /^\[Forwarded content/.test(text), thread: Boolean(ctx.thread) });
     let res = await ask(route.tier);
@@ -107,6 +140,7 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
     // Small talk never pins the next message to the stronger model, even if it was escalated.
     await rememberTier(ctx.db, ctx.user, route.why === "small talk" ? "fast" : res.tier ?? route.tier, ctx.now);
     if (res.stopped) return { kind: "reply", text: res.text ? `${keepIdentity(stripTags(res.text))}\n\n(You stopped me there.)` : "Stopped.", source: "model" };
+    if (res.toolCall && runTool) return await steps(res.toolCall, runTool);
     if (res.toolCall) return { kind: "action", intent: { action: res.toolCall.name.replace(/__/g, "."), args: res.toolCall.args }, source: "model" };
     // Still pretending to have searched: run the real search on their words rather than pass off a remembered answer.
     const pretended = /^\s*\[did (web\.search|research\.deep)\]/i.exec(res.text);
