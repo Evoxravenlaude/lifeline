@@ -32,7 +32,7 @@ import { resolveIntent } from "../intent/index.js";
 import { summarizeLater } from "../intent/model.js";
 import { answerCapability, isCapabilityQuestion } from "../intent/capabilities.js";
 import { openThread, setThread, SKIP } from "../intent/thread.js";
-import { parseRange, parseWhen, parseMoney } from "./time.js";
+import { human, parseRange, parseWhen, parseMoney } from "./time.js";
 import { markDone, snooze } from "../modules/reminders.js";
 import { resolveLog } from "../modules/medications.js";
 
@@ -124,6 +124,8 @@ const NO = /^(?:no|n|nope|nah|cancel|never ?mind|don'?t|stop|forget it|leave it)
 
 /** Every message gets an answer in words, even when something underneath breaks. */
 export async function handleMessage(db: Db, user: User, text: string, opts: { forwarded?: boolean; channel: Channel; now?: Date; progress?: Ctx["progress"]; note?: Ctx["note"]; draft?: Ctx["draft"]; stop?: Ctx["stop"]; voice?: boolean }): Promise<Reply> {
+  // Asked to be deleted: nothing new is kept in the moment before the erase runs.
+  if (user.prefs?.deleting === true) return { text: "Your account is being deleted, so I'm not keeping anything new. If you'd like back in afterwards, just say hello." };
   try {
     return await answerMessage(db, user, text, opts);
   } catch (e: any) {
@@ -277,7 +279,10 @@ async function answerButton(db: Db, user: User, data: string, now: Date): Promis
     case "cancel": return say(await cancelPending(ctx, Number(a)));
     case "undo": return say(await undo(ctx, Number(a)));
     case "rem":
-      if (a === "done") { await markDone(db, user.id, Number(b)); return say("Done. Off the list."); }
+      if (a === "done") {
+        const d = await markDone(db, user.id, Number(b));
+        return say(d.repeats ? `Done for this time. It rings again ${d.next && new Date(d.next) > new Date() ? human(d.next, user.tz) : "next time it's due"}.` : "Done. Off the list.");
+      }
       await snooze(db, user.id, Number(b)); return say("Snoozed. I'll bring it back in an hour.");
     case "med": {
       const ok = await resolveLog(db, user.id, Number(b), a === "taken" ? "taken" : "skipped");

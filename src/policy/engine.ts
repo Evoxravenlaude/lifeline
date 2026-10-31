@@ -106,7 +106,9 @@ export async function confirmPending(ctx: Ctx, pendingId: number): Promise<Decis
     await ctx.db.query(`UPDATE pending_actions SET resolved='expired' WHERE id=$1`, [row.id]);
     return { kind: "error", reply: "That waited more than ten minutes, so I let it go. Ask again if you still want it." };
   }
-  await ctx.db.query(`UPDATE pending_actions SET resolved='confirmed' WHERE id=$1`, [row.id]);
+  // Claimed in one statement: a double tap, or a tap on the web plus "1" by text, runs it once, never twice.
+  const won = await ctx.db.query(`UPDATE pending_actions SET resolved='confirmed' WHERE id=$1 AND resolved IS NULL RETURNING id`, [row.id]);
+  if (!won.length) return { kind: "error", reply: "That one's already been handled." };
   const args = typeof row.args === "string" ? JSON.parse(row.args) : row.args;
   return runNow(ctx, row.action, 2, args);
 }
@@ -138,8 +140,13 @@ export async function undo(ctx: Ctx, undoId: number): Promise<string> {
   const action = getAction(row.action);
   if (!action?.undo) return "That one can't be undone, but tell me what you want instead.";
   const payload = typeof row.undo_payload === "string" ? JSON.parse(row.undo_payload) : row.undo_payload;
-  const msg = await action.undo(payload, ctx);
-  await ctx.db.query(`UPDATE undo_stack SET used=true WHERE id=$1`, [row.id]);
+  // Claimed first, in one statement, so two taps on Undo can't undo twice (adding a dose back twice, say).
+  const won = await ctx.db.query(`UPDATE undo_stack SET used=true WHERE id=$1 AND used=false RETURNING id`, [row.id]);
+  if (!won.length) return "That's already been undone.";
+  const msg = await action.undo(payload, ctx).catch(async (e) => {
+    await ctx.db.query(`UPDATE undo_stack SET used=false WHERE id=$1`, [row.id]).catch(() => {});
+    throw e;
+  });
   await audit(ctx, row.action, 1, payload, "undone");
   return msg;
 }

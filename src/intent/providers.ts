@@ -97,9 +97,17 @@ export function providerName(): Provider | null {
  * and on Groq a rate limit drops to the lighter model. Every attempt has a
  * time limit, so one slow provider never stalls the conversation.
  */
+/** A provider that just timed out or failed on its side sits out for a minute, so every message isn't kept waiting on it. */
+const resting = new Map<Provider, number>();
+const REST_MS = 60_000;
+export const _resting = resting; // tests
+
 export async function complete(opts: CompleteOpts, forceProvider?: Provider): Promise<Completion | null> {
-  const chain = forceProvider ? [forceProvider] : providerChain();
-  if (!chain.length) return null;
+  const all = forceProvider ? [forceProvider] : providerChain();
+  if (!all.length) return null;
+  const awake = all.filter((p) => (resting.get(p) ?? 0) <= Date.now());
+  // If every provider is resting, try them anyway rather than give up.
+  const chain = awake.length ? awake : all;
   let last: unknown = null;
   for (const p of chain) {
     const attempts: (() => Promise<Completion>)[] = [() => call(p, opts)];
@@ -107,7 +115,7 @@ export async function complete(opts: CompleteOpts, forceProvider?: Provider): Pr
     for (const attempt of attempts) {
       try {
         const r = await attempt();
-        diagnostics.lastOkAt = Date.now(); diagnostics.lastProvider = p; delete diagnostics.errors[p];
+        diagnostics.lastOkAt = Date.now(); diagnostics.lastProvider = p; delete diagnostics.errors[p]; resting.delete(p);
         return r;
       } catch (e: any) {
         if (opts.signal?.aborted) return { text: "", usage: { input: 0, output: 0 }, stopped: true }; // stopped before a word came
@@ -115,6 +123,8 @@ export async function complete(opts: CompleteOpts, forceProvider?: Provider): Pr
         const msg = `${p}: ${e?.name === "TimeoutError" || e?.name === "AbortError" ? `no answer within ${CALL_TIMEOUT_MS / 1000}s` : e?.message ?? e}`.slice(0, 300);
         diagnostics.lastError = msg; diagnostics.lastErrorAt = Date.now(); diagnostics.errors[p] = msg;
         if (/\b(401|403|404)\b/.test(String(e?.message))) break; // bad key or no such model: go straight to the next provider
+        // A timeout or a 5xx is the provider, not the tool list: retrying without tools would only wait again.
+        if (e?.name === "TimeoutError" || /\b5\d\d\b/.test(String(e?.message))) { if (!forceProvider) resting.set(p, Date.now() + REST_MS); break; }
       }
     }
   }

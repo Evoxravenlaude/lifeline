@@ -51,6 +51,14 @@ export function redact(text: string): string {
     for (const [a, b] of spans.reverse()) parts.splice(a, b - a + 1, "[hidden seed phrase]");
     return parts.join("");
   });
+  // The same phrase written the way wallets show it: numbered ("1. abandon 2. ability"), capitalised, or one word per
+  // line. Numbers and case are set aside before the check, and the whole run goes.
+  t = t.replace(/(?:(?:\b\d{1,2}\s*[.):-]?\s*)?\b[A-Za-z]{3,8}\b[ ,;\t\r\n]*){12,48}/g, (m) => {
+    const words = m.replace(/\b\d{1,2}\s*[.):-]?/g, " ").toLowerCase().match(/[a-z]{3,8}/g) ?? [];
+    if (words.length < 12 || words.some((w) => STOP.has(w))) return m;
+    const trail = /[ ,;\t\r\n]*$/.exec(m)?.[0] ?? "";
+    return `[hidden seed phrase]${trail}`;
+  });
   return t;
 }
 

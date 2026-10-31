@@ -8,6 +8,7 @@
  * (app:<user id>) while they have at least one, which is how dispatch knows to try it. Subscriptions
  * the push service says are gone (404 or 410) are dropped on the spot.
  */
+import { recordPush } from "./health.js";
 import { addSchema } from "./plugins.js";
 import { config } from "./config.js";
 import { log } from "./log.js";
@@ -170,9 +171,13 @@ export async function sendToApp(db: Db, userId: number, reply: Reply): Promise<b
       await c.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, options);
       reached++;
       await db.query(`UPDATE push_subscriptions SET last_ok_at=now() WHERE id=$1`, [s.id]);
+      await recordPush(db, userId, true, 201);
     } catch (e: any) {
       const status = Number(e?.statusCode ?? 0);
-      if (status === 404 || status === 410) {
+      await recordPush(db, userId, false, status || null);
+      // 404 and 410: the browser dropped it. 403 with a VAPID complaint: it was made with an older server key and can
+      // never be reached again. Either way it goes, and the page makes a fresh one on its next visit (resumePush).
+      if (status === 404 || status === 410 || (status === 403 && /vapid|credential/i.test(String(e?.body ?? e?.message ?? "")))) {
         await db.query(`DELETE FROM push_subscriptions WHERE id=$1`, [s.id]);
         log.info({ user: userId, status }, "push subscription gone, dropped");
       } else log.warn({ user: userId, status, err: String(e?.message ?? "").slice(0, 120) }, "push send failed");

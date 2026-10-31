@@ -163,6 +163,21 @@ export function parseGatewayInbound(provider: "httpsms" | "textbee", body: any, 
   return { from, text: body.message, self: Boolean(own && /^\+/.test(own) && from === own) };
 }
 
+/**
+ * Wrong link codes by text, iMessage or email: five per sender an hour, sixty across everyone, like /auth/link on the
+ * web. A sender with their own mail domain could otherwise try codes cheaply until one lands on someone's account.
+ */
+const misses = new Map<string, number[]>();
+const HOUR = 3_600_000;
+function tooManyMisses(from: string, now = Date.now()): boolean {
+  const recent = (k: string) => (misses.get(k) ?? []).filter((t) => now - t < HOUR);
+  return recent(from).length >= 5 || recent("*").length >= 60;
+}
+function missed(from: string, now = Date.now()) {
+  for (const k of [from, "*"]) misses.set(k, [...(misses.get(k) ?? []).filter((t) => now - t < HOUR), now]);
+}
+export const _linkMisses = misses; // tests
+
 /** Shared by SMS and iMessage: text in → reply text out. */
 export async function handleTextChannel(db: Db, channel: "sms" | "imessage" | "email", from: string, text: string, opts: { forwarded?: boolean } = {}): Promise<string> {
   const t = text.trim();
@@ -175,7 +190,9 @@ export async function handleTextChannel(db: Db, channel: "sms" | "imessage" | "e
   const thing = channel === "email" ? "address" : "number";
   const verb = channel === "email" ? "email" : "text";
   if (link) {
+    if (tooManyMisses(from)) return "Too many codes that didn't work. Wait an hour, then get a fresh one: say \"link\" on Telegram or the web app.";
     const u = await redeemLinkCode(db, link[1], channel, from);
+    if (!u) missed(from);
     return u ? `Linked. This is the same me${u.name ? `, ${u.name.split(" ")[0]}` : ""}: ${verb} me here like you would on Telegram, and reply 1 or 2 where I'd show buttons.${channel === "email" ? " You can forward me emails too, and I'll pull out what matters." : ""}` : "That code didn't work; it may have expired, they last fifteen minutes. Say \"link\" on Telegram or the web app for a fresh one.";
   }
   // Strangers get silence unless they're clearly trying to reach lifeline. The relay may sit on someone's own

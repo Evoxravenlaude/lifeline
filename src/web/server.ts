@@ -513,7 +513,8 @@ export function createWeb(db: Db, botUsername: string) {
   app.get("/api/scout", async (c) => {
     const u = user(c);
     const watches = await db.query(`SELECT niche, objective FROM scout_watches WHERE user_id=$1 AND active`, [u.id]);
-    const results = await db.query(`SELECT * FROM scout_results ORDER BY first_seen DESC LIMIT 30`);
+    // Only finds for this person's own niches: what others in the circle are researching is theirs.
+    const results = await db.query(`SELECT * FROM scout_results WHERE lower(niche) IN (SELECT lower(niche) FROM scout_watches WHERE user_id=$1) ORDER BY first_seen DESC LIMIT 30`, [u.id]);
     return c.json({ results, watches });
   });
   app.post("/api/scout", async (c) => {

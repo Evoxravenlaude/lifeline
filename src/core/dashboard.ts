@@ -171,8 +171,19 @@ export function sectionSvg(s: Section): string {
 </svg>`;
 }
 
-export const renderDashboard = (d: Dash) => renderPng(dashboardSvg(d), DW);
-export const renderSection = (s: Section) => renderPng(sectionSvg(s), DW);
+/* Pictures are drawn once per what they say (to the minute): moving back and forth in the menu reuses them. */
+const drawn = new Map<string, Promise<Buffer>>();
+function memo(svg: string): Promise<Buffer> {
+  const key = createHash("sha1").update(svg).digest("hex");
+  const hit = drawn.get(key);
+  if (hit) { drawn.delete(key); drawn.set(key, hit); return hit; }
+  const p = renderPng(svg, DW).catch((e) => { drawn.delete(key); throw e; });
+  drawn.set(key, p);
+  if (drawn.size > 300) drawn.delete(drawn.keys().next().value!);
+  return p;
+}
+export const renderDashboard = (d: Dash) => memo(dashboardSvg(d));
+export const renderSection = (s: Section) => memo(sectionSvg(s));
 
 /* ---------------- each section's picture ---------------- */
 

@@ -14,6 +14,8 @@ import { overBudget, recordUsage } from "../core/budget.js";
 import { personaPrompt } from "./persona.js";
 import { catalogueForModel } from "./capabilities.js";
 import { complete, providerName, type Msg, type Tier } from "./providers.js";
+import { recordModel } from "../core/health.js";
+import { redact } from "../core/redact.js";
 import { fellShort, rememberTier, rollSummary, summaryOf, tierFor } from "./route.js";
 import { allActions } from "../policy/registry.js";
 import type { Ctx, User } from "../policy/types.js";
@@ -82,7 +84,8 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
   const tools = picked.map((a) => ({ name: a.name.replace(/\./g, "__"), description: a.description, schema: a.schema }));
   // One prompt, one history, whichever tier thinks: switching models never changes what they know.
   const system = systemFor(ctx.user, ctx.now, memories, ctx.thread);
-  const messages: Msg[] = [...history.slice(-14), { role: "user", content: text }];
+  // Secrets never leave for a provider either: the message is redacted before it's sent, as it is before it's saved.
+  const messages: Msg[] = [...history.slice(-14), { role: "user", content: redact(text) }];
   const ask = (tier: Tier) => Promise.race([
     complete({ system, messages, tools, onText: ctx.draft, signal: ctx.stop, tier }),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), ctx.draft ? MODEL_TIMEOUT_MS * 2 : MODEL_TIMEOUT_MS)),
@@ -94,9 +97,10 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
     // The quick model fell short: the stronger one answers, with exactly the same context.
     if (route.tier === "fast" && res?.tier === "fast" && fellShort(res, text, tools.map((t) => t.name))) {
       const better = await ask("smart").catch(() => null);
-      if (better) { res = better; await recordUsage(ctx.db, ctx.user.id, better.usage.input, better.usage.output); }
+      if (better) { res = better; await recordUsage(ctx.db, ctx.user.id, better.usage.input, better.usage.output); await recordModel(ctx.db, ctx.user.id, "rescued"); }
     }
     if (!res) return null;
+    await recordModel(ctx.db, ctx.user.id, res.tier === "smart" ? "smart" : "fast");
     // Small talk never pins the next message to the stronger model, even if it was escalated.
     await rememberTier(ctx.db, ctx.user, route.why === "small talk" ? "fast" : res.tier ?? route.tier, ctx.now);
     if (res.stopped) return { kind: "reply", text: res.text ? `${keepIdentity(res.text)}\n\n(You stopped me there.)` : "Stopped.", source: "model" };
