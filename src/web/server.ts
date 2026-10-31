@@ -51,7 +51,7 @@ import { allCapabilities, helpGroups } from "../intent/capabilities.js";
 import { pipLine, PIP_BIO, type PipState } from "../core/pip.js";
 import { polish, personaOf } from "../core/voice.js";
 import { adoptTelegram, allowTokenTry, checkCode, issueAppleNonce, linkTryAllowed, linkTryFailed, removeWay, sayResult, signInMethods, signInOrLink, startCode, verifyApple, verifyGoogle, waysOf, wayName, type CodeVia, type WayResult, issueNonce, takeNonce } from "../core/auth.js";
-import { cleanSubscription, devicesOf, pushOn, pushPublic, registerApp, sendToApp, subscribe, unsubscribe } from "../core/webpush.js";
+import { cleanSubscription, devicesOf, pushOn, pushPublic, recordPushProblem, registerApp, sendToApp, subscribe, unsubscribe } from "../core/webpush.js";
 import { findCity } from "../core/geo.js";
 import { IANAZone } from "luxon";
 
@@ -384,6 +384,12 @@ export function createWeb(db: Db, botUsername: string) {
     if (!tg && u.preferred_channel !== "app") await db.query(`UPDATE users SET preferred_channel='app', prefs = prefs || '{"alsoApp":false}'::jsonb WHERE id=$1`, [u.id]);
     const fresh = (await getUserById(db, u.id))!;
     return c.json({ ok: true, text: "Notifications are on for this device.", reach: reachOf(fresh), devices: await devicesOf(db, u.id), telegram: Boolean(tg) });
+  });
+  /** The browser refused to subscribe: what it said, so whoever runs lifeline can see it in /doctor. */
+  app.post("/api/push/problem", async (c) => {
+    const u = user(c);
+    await recordPushProblem(db, u.id, await bodyOf(c));
+    return c.json({ ok: true });
   });
   app.post("/api/push/unsubscribe", async (c) => {
     const u = user(c);

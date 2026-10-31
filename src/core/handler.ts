@@ -34,6 +34,7 @@ import { answerCapability, isCapabilityQuestion } from "../intent/capabilities.j
 import { openThread, setThread, SKIP } from "../intent/thread.js";
 import { human, parseRange, parseWhen, parseMoney } from "./time.js";
 import { resolveReference, splitAsks } from "../modules/followup.js";
+import { looksOnly, type ToolRunner } from "../intent/agent.js";
 import { markDone, snooze } from "../modules/reminders.js";
 import { resolveLog } from "../modules/medications.js";
 
@@ -226,8 +227,20 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
     if (i && getAction(i.action)?.tier === 1) return finish(db, user, await decide(ctx, i.action, i.args));
   }
 
-  // 4. Intent.
-  const intent = await resolveIntent(text, { ...ctx, thread }, { forwarded: opts.forwarded });
+  // 4. Intent. A model that needs several steps runs them through the same engine as everything else (agent.ts).
+  let threadCleared = false;
+  const runTool: ToolRunner = async (action, args) => {
+    if (thread && !threadCleared) { threadCleared = true; await setThread(db, user, null); }
+    const d = await propose(ctx, action, args);
+    if (d.kind === "ran") return { stop: false, reply: { ...renderDecision(d), action }, changed: !looksOnly(action) };
+    if (d.kind === "ask") { await setThread(db, user, d.thread); return { stop: true, reply: { text: d.reply }, changed: false }; }
+    return { stop: true, reply: renderDecision(d), changed: false };
+  };
+  const intent = await resolveIntent(text, { ...ctx, thread }, { forwarded: opts.forwarded, runTool });
+  if (intent.kind === "ran") {
+    if (thread && !threadCleared) await setThread(db, user, null);
+    return finish(db, user, intent.reply);
+  }
   if (intent.kind === "reply") {
     // Still waiting on the follow-up and the user said something unrelated and unparseable: ask once more, briefly.
     if (thread && intent.source !== "model" && !intent.clearThread) return finish(db, user, { text: `${intent.text}\n\n(Still waiting on: ${thread.question.toLowerCase()} Say skip to carry on without it.)` });

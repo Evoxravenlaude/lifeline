@@ -32,7 +32,7 @@ import { ASKS, BACK, OK, panel, shapeAnswer, type Btn, type Style } from "./pane
 import { ensurePip, pipSticker } from "./stickers.js";
 import { dashboardFacts, dashSignature, renderDashboard, renderSection, sectionFacts } from "../core/dashboard.js";
 import { signInMethods } from "../core/auth.js";
-import { pushOn, vapidProblem } from "../core/webpush.js";
+import { pushOn, pushProblemsLine, vapidProblem } from "../core/webpush.js";
 import { spokenVersion } from "../core/spoken.js";
 
 /** /doctor: which ways into the website are on, and whether app notifications can go out. */
@@ -546,6 +546,7 @@ export function createBot(db: Db): Bot {
       `Places: ${activePlaces()}. Email in: ${config.resendKey && config.resendWebhookSecret ? config.inboundEmail || "on, address not set (INBOUND_EMAIL)" : "off (RESEND_API_KEY and RESEND_WEBHOOK_SECRET)"}. iMessage: ${config.imessageProvider ? `${config.imessageProvider}${config.imessageAddress ? `, ${config.imessageAddress}` : ""}` : "off (see docs/IMESSAGE.md)"}.`,
       `Server address: ${config.publicUrl || "not set (PUBLIC_URL)"}. Website: ${webAddress() || "not set (WEB_URL)"}.`,
       await webWaysLine(),
+      await pushProblemsLine(db),
       `Guest calls from other chats: ${(c.me as any).supports_guest_queries ? "on" : "off (turn on guest mode in @BotFather)"}. App inside Telegram: ${/^https:/.test(webAddress()) ? "on" : "off (WEB_URL must be https)"}.`,
     ];
     await c.reply(lines.join("\n"), { link_preview_options: { is_disabled: true } });
