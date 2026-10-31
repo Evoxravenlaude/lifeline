@@ -382,7 +382,11 @@ describe("one conversation, whichever model answers", () => {
     await handleMessage(db, u, "remind me to call mum on Sunday at 5", { channel: "telegram" });
     await db.query(`INSERT INTO messages (user_id, role, content, meta) VALUES ($1,'user','[picture: a receipt from Shoprite, 12,400 naira] keep this','{"picture":true}')`, [u.id]);
     const h = await historyFor(db, u.id);
-    expect(h.find((m) => m.role === "assistant")!.content).toMatch(/^\[did reminder\.create\] /);
+    const said = h.find((m) => m.role === "assistant")!;
+    expect(said.content).not.toMatch(/^\[did/); // a model would copy the tag into its own replies
+    expect(said.did).toBe("reminder.create");
+    const { didLog } = await import("../src/intent/route.js");
+    expect(didLog(h)).toMatch(/- reminder\.create: "/);
     expect(h.at(-1)!.content).toMatch(/\[picture: a receipt from Shoprite/);
     for (let i = 0; i < 26; i++) await db.query(`INSERT INTO messages (user_id, role, content) VALUES ($1,$2,$3)`, [u.id, i % 2 ? "assistant" : "user", `turn ${i}`]);
     const fresh = (await db.one<any>(`SELECT * FROM users WHERE id=$1`, [u.id]))!;
