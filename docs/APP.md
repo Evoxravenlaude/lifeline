@@ -7,7 +7,8 @@ There's no app store involved: it's a Progressive Web App (PWA). The same websit
 ## What people see
 
 - **Install lifeline.** On Android and desktop Chrome or Edge, an Install button. On iPhone and iPad, a short how-to: open the site in Safari, tap Share, then Add to Home Screen. lifeline offers this once, gently, a little after the day has loaded. After that it lives in **Settings, This app**, and never nags.
-- **Notifications on this device**, On or Off, in the same card. The browser asks for permission once.
+- **Notifications on this device**, On or Off, in the same card. The browser asks for permission once. A line under the switch says what's happening ("Waiting for your answer in the address bar", "On, and this device has been tested", or how to unblock them on this exact device).
+- **Asked at the right moment.** Right after someone sets their first reminder, adds a medication or starts a check-in on the web, the chat offers "Want that to ring on this device too?" with one button. That's when the ask makes sense to them. It shows at most once a fortnight, never inside Telegram, and never once they've blocked notifications.
 - **Where should reminders reach you?** Telegram, This app, or Both. Both sends each reminder to the app and to Telegram, so muting one never means missing it.
 - Notifications sit on lock screens, so anything about health, the cycle, mood, quitting, grief, safety or a remembered fact says only what sort of thing it is ("A medication reminder. Open lifeline for the details."); the details wait inside the app. The morning brief shows its first line. A yes that moves money or reaches someone is never a button on a notification; tapping opens Today.
 - Signing out on a device also turns off that device's notifications, so the next person to use it never sees them.
@@ -21,7 +22,19 @@ There's no app store involved: it's a Progressive Web App (PWA). The same websit
   - shows a calm "You're offline" page (`web/offline.html`) when there's no connection;
   - never caches `/api` or `/auth`, so your day is always fresh;
   - turns each push into a notification, and handles taps on it and its buttons.
-- `src/core/webpush.ts` sends pushes with the `web-push` package and your VAPID keys. Each browser that turns notifications on is one row in `push_subscriptions`, per person and per device. A person with at least one gets an "app" way of being reached, and the dispatcher (`src/core/dispatch.ts`) uses it like Telegram or SMS. If a push service says a subscription is gone (404 or 410), it's dropped on the spot.
+- `src/core/webpush.ts` sends pushes with the `web-push` package and your VAPID keys. Each browser that turns notifications on is one row in `push_subscriptions`, per person and per device. A person with at least one gets an "app" way of being reached, and the dispatcher (`src/core/dispatch.ts`) uses it like Telegram or SMS. If a push service says a subscription is gone (404 or 410), or refuses it because it was made with an older server key (403 mentioning VAPID), it's dropped on the spot, and the page makes a fresh one on its next visit. Every send is logged as delivered or not (no content), for `/stats`.
+
+### Why "the button didn't work" (fixed in v19)
+
+Chrome now often shows a quiet prompt: a small "Get notifications? Allow" bubble in the address bar instead of a pop-up. While that bubble is showing, the permission request answers "default" straight away, as if the person had dismissed it. The old switch read that as a no and said "Notifications stay off", while the bubble was still waiting for an answer. Tapping Allow afterwards did nothing, because the page had already given up.
+
+What it does now (`web/app.js`):
+- Remembers that the person asked (`ll_push_wanted`), then waits up to 90 seconds for the answer, watching the permission status, page focus and `navigator.permissions` changes. The status line says to look for the bubble in the address bar.
+- If the answer comes later, even after the page is closed and reopened, `resumePush` finishes the subscription on load and whenever the page comes back into view.
+- Once a day it re-sends the subscription to the server (`ll_push_synced`), so a database restore or a dropped row heals itself.
+- If the server's key changed, the old subscription is replaced rather than left broken.
+- When notifications are blocked, it shows the steps for that device: iPhone home-screen app, Android installed app, Android Chrome tab, or desktop (the padlock or tune icon beside the address).
+- Inside Telegram's in-app view, where web notifications can't work, the card says so and offers "Open in your browser" instead of a switch that can't succeed.
 - The fallback chain is unchanged: the preferred place first, then Telegram, the app, iMessage, SMS, the web inbox, and email as the last resort. With **Both**, the app is sent to as well as the chain, and if the app reached the person, the email last resort isn't used.
 
 ## Inside the app
@@ -85,7 +98,8 @@ Keep the same keys forever. If you change them, every device has to turn notific
 - **iPhone and iPad:** notifications work from iOS and iPadOS 16.4 onwards, and only once lifeline is added to the Home Screen and opened from there. In Safari itself, the settings card explains this instead of offering a switch. Notification buttons aren't shown on iPhone; tapping opens the app.
 - **Android:** Chrome, Edge, Samsung Internet and Firefox all work. Some phone makers' battery savers delay notifications; setting the browser to "Unrestricted" battery use helps.
 - **Desktop:** Chrome, Edge, Firefox and Safari on the Mac all work. The browser has to have run at least once since the computer started.
-- **Inside Telegram:** the Mini App doesn't install or register for notifications. That's Telegram's frame, not a browser.
+- **Inside Telegram:** the Mini App doesn't install or register for notifications. That's Telegram's frame, not a browser. Telegram's own messages already ring there; for app notifications too, the card's "Open in your browser" button opens lifeline outside Telegram.
+- **Chrome's quiet prompt:** on sites people haven't used much, Chrome may show only a small bubble in the address bar. lifeline waits for it (see above) instead of treating it as a no.
 - Focus modes and Do Not Disturb on the device still apply. That's the person's choice, and lifeline respects it.
 
 ## Optional: putting it in the app stores

@@ -1,6 +1,6 @@
 # lifeline
 
-An assistant for everyday life, for anyone: it remembers what you tell it and brings it back at the right time. Reminders, calendar, lists, medication, periods and the cycle, sleep, weight, water, mood and anything else you track, trips, spending, birthdays; and for people who build or job-hunt, jobs, companies and the people behind them, hackathons and grants, crypto prices. One memory, four channels: **Telegram, web, SMS, iMessage**. Anything irreversible stops at a policy gate until you confirm. Every user gets their own timezone, quiet hours, morning note, memory, voice and model budget.
+An assistant for everyday life, for anyone: it remembers what you tell it and brings it back at the right time. Reminders, calendar, lists, medication, periods and the cycle, sleep, weight, water, mood and anything else you track, trips, spending, birthdays; and for people who build or job-hunt, jobs, companies and the people behind them, hackathons and grants, crypto prices. One memory, five channels: **Telegram, web (installable, with notifications), SMS, iMessage and email**. Anything irreversible stops at a policy gate until you confirm. Every user gets their own timezone, quiet hours, morning note, memory, voice and model budget.
 
 ```
 src/
@@ -13,7 +13,7 @@ src/
   telegram/   grammY: text, voice, .ics, buttons, /persona, Business connection drafts
   channels/   sms (Twilio) · imessage (BlueBubbles / Sendblue)
   web/        Hono server + webhooks (the web app itself lives in web/ at the repo root, also a Vercel project)
-test/         192 tests on a real Postgres engine: gate, modules, channels, web, NL coverage (150 sentences), load
+test/         1,356 tests on a real Postgres engine: gate, modules, channels, web, NL coverage (150 sentences), load
 ```
 
 ## Running it on Railway (with Doppler + Supabase)
@@ -31,7 +31,7 @@ Local:
 
 ```bash
 cp .env.example .env         # DATABASE_URL empty = embedded DB in ./data
-npm install && npm test      # 192 tests
+npm install && npm test      # 1,356 tests
 npm start                    # Telegram polling + web on :3000
 npx tsx src/cli.ts chat      # the brain with no channel
 npx tsx src/cli.ts poll      # hackathon pollers once
@@ -44,13 +44,13 @@ Day one for each friend: `/start` on Telegram → `timezone Europe/London` → `
 
 **Web app** (`web/`, served by Railway at `/` and deployable to Vercel on its own domain; see `web/README.md` and `docs/DESIGN.md`). It opens on **the path**: today as a landscape drawn from your real data. The sky follows the real hour where you are (dawn, day, dusk, stars), every reminder, event, class and dose is a lantern beside the lane, ticked behind Pip and lit ahead of him, and Pip walks at the position of now, stopping with his watch up when something waits on your yes. Everything else is letterpress cards with a flat plate in the colour of their kind. Five palettes (Manor, Claret, Riviera, Tobacco, Ivory), each by day and by night, changed with a circle that opens from the button you pressed. ⌘K or / opens "say anything" from any page. Views: Today, Chat, Lists, Health, Trips, Money, and for people who build or job-hunt, Hackathons and Scout (in the bar if you use them, otherwise under More), plus What I do and Settings. Fonts are self-hosted (Libre Caslon Display and EB Garamond, both OFL). A Health page holds the cycle strip, doses, habits and anything measured. Installs to a phone home screen.
 
-**Themes** — four old-money palettes, switchable at will in Settings and remembered per account and per device: **Manor** (cream · camel · oxblood · forest, light), **Library** (espresso · parchment · brass · moss, dark), **Riviera** (ivory · navy · coral, light), **Tobacco** (leather · cognac · burgundy, dark). Type is Cormorant Garamond for display, Inter for body.
+**Themes**: five palettes, each with a day and a night version, switchable in Settings and remembered per account and per device: **Manor** (linen, bottle green, brass), **Claret** (bone, oxblood, gold), **Riviera** (sand, navy, brass), **Tobacco** (leaf, amber, cream) and **Ivory** (paper, ink, a little brass). Type is Libre Caslon Display for headings and EB Garamond for text.
 
 **How it talks** is a design decision, written down in `docs/VOICE.md` and enforced in code: every reply passes through `src/core/voice.ts` (no emoji, no em dashes, no ids, no robotic residue), every module is written in that voice, and a persona changes register only. The bot can explain itself: ask "can you track my meds?" or "what can you do" and `src/intent/capabilities.ts` answers with what, an example sentence, and what happens next; the same catalogue feeds the model's prompt and the web app's "What I do" page. When something essential is missing, an action asks one question and remembers it (`needs`/`fill` hooks, `src/intent/thread.ts`): "plan a trip to Accra" gets "When are you going?", and the next message is read as the answer, "skip" carries on without it.
 
 **Pip, the mascot** is a tortoise with spectacles and a pocket watch (`src/core/pip.ts`, `web/mascot.js`). Slow on purpose: he reads everything before he moves, never puts down what he carries, and is still there in the morning. Every state he shows is a real state of your day: thinking while a message is with the brain, sitting up with the watch out when something waits on your yes, a nod when you tick something, lids half down in quiet hours, straight at you when nothing is kept yet. His lines come from a book of lines per state, or from the model in your voice. Original SVG, no image assets.
 
-**Telegram** — HTML formatting (bold section labels, clickable links), a persistent quick keyboard (☼ Today · ⚑ Hackathons · ◎ Scout · ☐ Lists · ¤ Money · 🐢 Pip), typing indicator, and the same inline Confirm/Cancel/Undo buttons as before.
+**Telegram** — HTML formatting (bold section labels, clickable links), a menu picture of the day with drawer buttons under it (no keyboard taking over the chat), typing indicator, and the same inline Confirm/Cancel/Undo buttons as before.
 
 **Plain sentences, not command syntax.** Three layers: strict command phrases (fast, exact) → the loose natural-language layer (`src/intent/loose.ts`: politeness stripped, the time expression lifted out with chrono, cue words mapped to the action registry) → the model when a key is set. "can you remind me to call Ada tomorrow at 9am", "I need to buy milk, eggs and bread", "who's building perps on solana", "let me know when sol goes above 250", "I'm going to Accra on dec 20 until dec 27 with a budget of 600 usd", "be more formal" all work with no model. `test/coverage.test.ts` holds 150 such sentences and fails if any registered action becomes unreachable.
 
@@ -143,14 +143,25 @@ The conversation layer is unguarded by design. Three lines stay fixed: forwarded
 
 ## What was tested, and what wasn't
 
-Tested here (192 tests, real Postgres engine, plus a headless-Chromium walkthrough of every web view in light and dark themes): the gate in every tier, undo, expiry, scheduler re-arming, push caps, every module's happy path, ICS parsing, the shared handler across four channels, link codes, SMS numbered replies, iMessage payload parsing for both relays, dispatch fallback, the web app's auth (signed Telegram payload, bad signature, link code, logout), chat and button endpoints, webhook signature refusal, Gemini schema cleaning, load (2,000 due jobs drained in 2.3 s across 40 batches; 200 users messaging concurrently in 245 ms with no cross-talk), and a cold boot of the web server.
+## Delivery and the owner's numbers
+
+- **Each reminder fires once.** The scheduler claims due jobs in one statement (`FOR UPDATE SKIP LOCKED`, with a three-minute lease). Two servers overlapping during a Railway redeploy can't both send the same reminder, and a crash mid-run frees the job after the lease.
+- **A failed one-off is retried, not lost.** It's tried again after one minute, then five, then given up (`jobs.attempts`). Cron jobs carry on at their next time either way.
+- **On time is measured.** Every timed run (reminders, doses, class, event, trip and date alerts, safety check-ins, mint drops) is logged with how late it started (`job_runs`). Every app notification is logged as delivered or not (`push_log`), and every model reply as quick, stronger or rescued (`model_events`). These hold counts and kinds only, never content, and are pruned after 90 days.
+- **`/stats`** (owner only, in Telegram) shows the six numbers against their targets: reminders on time within a minute (99%), app notifications delivered (95%), new people with a first win in 10 minutes (70%), web people with notifications on (70%), week-4 people still keeping things (40%), and thinking cost per active person per day (under $0.05), with the share of replies the stronger model had to rescue (under 10%).
+- **Busy chats don't hold up others.** Telegram updates run through grammY's runner: chats are handled side by side, each chat in order. A Telegram rate limit (429) waits and retries (auto-retry).
+- **Late runs are honest.** After an outage, a morning brief more than three hours late is skipped, and a dose that fires over 30 minutes late says when it was due. A dose that wasn't delivered is followed up in ten minutes, not ninety.
+- **Clock changes.** Times said in words ("Tuesday at 9am") are built on the wall clock in the person's zone, so they stay right across a daylight-saving change. Changing city or brief hour moves every repeating job's next run at once.
+- Anyone can ask "what did you do for me this week?" for their own counts, which also appear in Sunday's morning brief.
+
+Tested here (1,356 tests, real Postgres engine, plus a headless-Chromium walkthrough of every web view in light and dark themes): the gate in every tier, undo, expiry, scheduler re-arming, push caps, every module's happy path, ICS parsing, the shared handler across every channel, link codes, SMS numbered replies, iMessage payload parsing for both relays, dispatch fallback, the web app's auth (signed Telegram payload, bad signature, link code, logout), chat and button endpoints, webhook signature refusal, Gemini schema cleaning, load (2,000 due jobs drained in claims of one, 50 to a tick, with none sent twice; 200 users messaging concurrently in 245 ms with no cross-talk), and a cold boot of the web server.
 
 Not testable from this sandbox (no outbound network, no keys): live Telegram, Twilio, BlueBubbles/Sendblue, the model providers, CoinGecko/Open-Meteo/frankfurter, and every poller against its live site. They're written against current documented shapes; each one fails soft and logs. First thing after deploy: `npx tsx src/cli.ts poll`, `scout "ai agents"`, send one voice note, and text the Twilio number `link <code>`.
 
 ## Next
 
 1. Token balances (Alchemy/Helius free tiers) in `portfolio`.
-2. Streaming replies once grammY exposes `sendMessageDraft`.
+2. Read-only Google Calendar and Gmail in the brief (see the audit doc's plan).
 3. Circle features: shared trips with cost splits, shared hackathon teams, "who's free Friday" across linked calendars, a group digest channel.
 4. Document extraction with echo-back (bills, syllabi, booking confirmations → dates and amounts).
 5. Google Calendar two-way sync (sensitive scope, no CASA).
@@ -159,4 +170,4 @@ Not testable from this sandbox (no outbound network, no keys): live Telegram, Tw
 
 ## Privacy note for the circle
 
-Medication names, class times, spend logs, wallets, scouted contacts and chat history live in your Supabase project and, with a model key, in the vendor's short-term logs. Telegram cloud chats are server-readable; SMS is plaintext in transit; iMessage relays see every message. Tell the 17 before onboarding, keep Doppler as the only place secrets live, and never paste keys or seed phrases into any channel — the bot refuses to store them, but the message still exists.
+Medication names, class times, spend logs, wallets, scouted contacts and chat history live in your Supabase project and, with a model key, in the vendor's short-term logs. Telegram cloud chats are server-readable; SMS is plaintext in transit; iMessage relays see every message. Tell the people in your circle before they join, keep Doppler as the only place secrets live, and never paste keys or seed phrases into any channel — the bot refuses to store them, but the message still exists.

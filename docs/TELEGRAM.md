@@ -77,4 +77,4 @@ A voice note in gets three things back: **You said** (the transcript, folded int
 
 ## Who it is
 
-lifeline never names the models behind it. "What model are you?" gets a warm answer as lifeline (`src/modules/identity.ts`), and a reply where a model names itself is put right (`keepIdentity`). `/doctor` is for the owner only.
+lifeline never names the models behind it. "What model are you?" gets a warm answer as lifeline (`src/modules/identity.ts`), and a reply where a model names itself is put right (`keepIdentity`). `/doctor` is for the owner only, and so is `/stats`, which shows the six delivery and growth numbers (see the README).
