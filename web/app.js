@@ -1317,22 +1317,44 @@ window.App = (function () {
     let appKey;
     try { appKey = keyBytes(String(key || "").replace(/\s/g, "")); if (appKey.length !== 65) throw new Error("key"); }
     catch { return { error: "key", text: "Notifications aren't set up correctly on the server yet (its key looks wrong). Whoever runs lifeline can check /doctor in the bot." }; }
-    try {
+    const attempt = async (fresh) => {
       let sub = await reg.pushManager.getSubscription();
-      // A subscription made with an older server key can't receive anything: replace it.
+      // A subscription made with an older server key can't receive anything, and a half-made one can block a new one: replace it.
       const old = sub && sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
-      if (sub && old && (old.length !== appKey.length || old.some((b, i) => b !== appKey[i]))) { await sub.unsubscribe().catch(() => {}); sub = null; }
-      sub = sub || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey }));
-      const r = await api("/api/push/subscribe", { subscription: sub.toJSON(), device: deviceName() });
-      if (!r.error) { wantPush(false); try { localStorage.setItem("ll_push_synced", String(Date.now())); } catch {} }
-      return r;
-    } catch (e) {
-      const brave = navigator.brave && typeof navigator.brave.isBrave === "function";
-      if (brave) return { error: "push-off", text: "Brave keeps notifications from websites off by default. In Brave: Settings, then Privacy and security, turn on \"Use Google services for push messaging\", restart Brave and try again. Or use Chrome." };
-      if (e && e.name === "AbortError") return { error: "push-off", text: "This browser's push service said no. If it's Brave, Samsung Internet or a privacy browser, notifications from websites may be switched off in its settings; Chrome works. Then try again." };
-      if (e && e.name === "NotAllowedError") return { error: "denied", text: `Notifications are blocked for lifeline on this device. ${unblockHow()}` };
-      return { error: "subscribe", text: "This browser wouldn't set up notifications. Try again in a moment, or in Chrome." };
+      if (sub && (fresh || (old && (old.length !== appKey.length || old.some((b, i) => b !== appKey[i]))))) { await sub.unsubscribe().catch(() => {}); sub = null; }
+      return sub || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey }));
+    };
+    let sub;
+    try { sub = await attempt(false); }
+    catch (first) {
+      if (first && first.name === "NotAllowedError") return { error: "denied", text: `Notifications are blocked for lifeline on this device. ${unblockHow()}` };
+      // Push registration often fails once and then works: a clean second try after a moment.
+      await new Promise((r) => setTimeout(r, 1500));
+      try { sub = await attempt(true); }
+      catch (e) { return pushTrouble(e || first); }
     }
+    const r = await api("/api/push/subscribe", { subscription: sub.toJSON(), device: deviceName() });
+    if (!r.error) { wantPush(false); try { localStorage.setItem("ll_push_synced", String(Date.now())); } catch {} }
+    return r;
+  }
+  /**
+   * The browser wouldn't register for push. Say why in its own words, give the fix for that reason, and tell the server
+   * (only the browser's family and its message), so whoever runs lifeline sees what's failing in /doctor.
+   */
+  function pushTrouble(e) {
+    const name = (e && e.name) || "Error", message = String((e && e.message) || "").slice(0, 160);
+    const u = navigator.userAgent;
+    const family = navigator.brave ? "Brave" : /SamsungBrowser/i.test(u) ? "Samsung Internet" : /EdgA?\//i.test(u) ? "Edge" : /OPR\/|Opera/i.test(u) ? "Opera" : /Firefox|FxiOS/i.test(u) ? "Firefox" : /Chrome|CriOS/i.test(u) ? "Chrome" : /Safari/i.test(u) ? "Safari" : "a browser";
+    api("/api/push/problem", { name, message, browser: `${family} on ${deviceName()}${standalone() ? " (installed)" : ""}` }).catch(() => {});
+    const said = message ? ` (Your browser said: "${message}".)` : "";
+    const meanwhile = " Your reminders still reach you on Telegram or wherever else you've set them.";
+    const brave = navigator.brave && typeof navigator.brave.isBrave === "function";
+    if (brave) return { error: "push-off", text: `Brave keeps notifications from websites off by default. In Brave: Settings, Privacy and security, turn on "Use Google services for push messaging", restart Brave and try again. Or use Chrome.${meanwhile}` };
+    const android = /Android/i.test(navigator.userAgent);
+    if (/not available|unavailable/i.test(message)) return { error: "push-off", text: `This ${android ? "phone" : "browser"} can't reach Google's push service, which Chrome uses for notifications.${android ? " Open the phone's Settings, Apps, Google Play services: make sure it's updated, and set its battery use to Unrestricted (phone cleaners and battery savers often stop it). Turn off any VPN or data saver," : " Check that the browser is up to date and nothing (a VPN or firewall) is blocking it,"} then tap On again.${said}${meanwhile}` };
+    if (/push service error|network|timeout/i.test(message) || name === "AbortError") return { error: "push-off", text: `I couldn't reach the push service just now. That's usually the connection: a VPN, a data saver or a weak signal. Try again on Wi-Fi or another network; if it keeps failing, try Chrome.${said}${meanwhile}` };
+    if (name === "InvalidAccessError" || name === "InvalidStateError") return { error: "key", text: `Notifications aren't set up correctly on the server yet. Whoever runs lifeline can check /doctor in the bot.${said}` };
+    return { error: "subscribe", text: `This browser wouldn't set up notifications. Try again in a moment, or in Chrome.${said}${meanwhile}` };
   }
   /**
    * On every visit and whenever the app comes back to the front: finish a "yes" that came late (the quiet bubble, or the
@@ -1388,7 +1410,9 @@ window.App = (function () {
         ? await notificationsOn(push.key, () => { if (say) say.textContent = "Tap Allow on the prompt at the top of your screen. I'll wait."; })
         : (wantPush(false), await notificationsOff());
       if (say) say.textContent = r.error ? r.text : "";
-      tell(r, b.dataset.push === "on" ? "Notifications are on. Tap Send a test to check." : "Notifications are off.", "dose");
+      // Trouble is explained once, under the switch; a toast on top of it only covered the card.
+      if (!r.error) tell(r, b.dataset.push === "on" ? "Notifications are on. Tap Send a test to check." : "Notifications are off.", "dose");
+      else if (!say) tell(r, "");
       // Any trouble: keep the explanation on screen (a re-render would wipe it) and let them try again.
       if (r.error) { $$("[data-push]", host).forEach((x) => (x.disabled = false)); return; }
       again();
