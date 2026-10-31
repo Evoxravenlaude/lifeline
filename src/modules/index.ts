@@ -1,4 +1,5 @@
-/** Importing registers every action and job handler. Order doesn't matter. */
+/** Importing registers every action and job handler. Order only matters for words: earlier modules' rules are tried first. */
+import "./followup.js"; // first, so "the second one", "6am instead" and the list questions win over looser rules
 import "./reminders.js";
 import "./calendar.js";
 import "./medications.js";

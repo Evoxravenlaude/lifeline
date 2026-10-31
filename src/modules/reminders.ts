@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
-import { fmt, human, parseWhen, parseWhenOrMorning } from "../core/time.js";
+import { fmt, fmtDate, human, parseWhen, parseWhenOrMorning } from "../core/time.js";
 import { cancelJob, nextCron, onJob, push, schedule } from "../core/scheduler.js";
+import { setFocus } from "../core/focus.js";
+import { upcoming } from "./followup.js";
 
 onJob("reminder", async (job, deps) => {
   const user = await deps.getUser(job.user_id!);
@@ -51,6 +53,7 @@ const create = defineAction({
       tz: ctx.user.tz,
     });
     await ctx.db.query(`UPDATE reminders SET job_id=$2 WHERE id=$1`, [row!.id, jobId]);
+    await setFocus(ctx.db, ctx.user, { last: { kind: "reminder", id: row!.id } }, ctx.now);
     const when = args.repeat ? `repeating, next ${human(due, ctx.user.tz, ctx.now)}` : args.when ? human(due, ctx.user.tz, ctx.now) : "in an hour";
     const clean = args.text.replace(/^(?:to|that i (?:need to|should|have to)|about)\s+/i, "");
     const cap = clean.charAt(0).toUpperCase() + clean.slice(1);
@@ -69,15 +72,13 @@ const list = defineAction({
   description: "List upcoming reminders.",
   schema: z.object({}),
   async run(_a, ctx) {
-    const rows = await ctx.db.query<{ id: number; text: string; due_at: string; cron: string | null }>(
-      `SELECT id, text, due_at, cron FROM reminders WHERE user_id=$1 AND NOT deleted AND NOT done ORDER BY due_at LIMIT 20`,
-      [ctx.user.id],
-    );
-    if (!rows.length) return { reply: "Nothing set. Say \"remind me to ... at ...\" and I'll keep it." };
-    const head = rows.length === 1 ? "One reminder coming up." : `${rows.length} reminders coming up.`;
-    return {
-      reply: [head, ...rows.map((r) => `${fmt(r.due_at, ctx.user.tz)}${r.cron ? " (repeats)" : ""}: ${r.text}`)].join("\n"),
-    };
+    // Reminders and saved birthdays together, numbered, so "cancel the second one" means what they see.
+    const items = await upcoming(ctx);
+    if (!items.length) return { reply: "Nothing set. Say \"remind me to ... at ...\" and I'll keep it." };
+    await setFocus(ctx.db, ctx.user, { list: items.map((i) => ({ kind: i.kind, id: i.id })) }, ctx.now);
+    const head = items.length === 1 ? "One thing coming up." : `${items.length} things coming up.`;
+    const lines = items.map((r, i) => `${i + 1}. ${r.kind === "date" ? fmtDate(r.at, ctx.user.tz) : fmt(r.at, ctx.user.tz)}${r.repeats ? (r.kind === "date" ? " (every year)" : " (repeats)") : ""}: ${r.label}`);
+    return { reply: [head, ...lines, "", `Say "cancel the ${items.length > 1 ? "second" : "first"} one" or "move the first one to 7am" to change any of them.`].join("\n") };
   },
 });
 
