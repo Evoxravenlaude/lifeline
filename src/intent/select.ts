@@ -46,6 +46,8 @@ const CUES: Record<string, string[]> = {
   list: ["todo", "to-do", "shopping", "list", "buy", "need to", "have to", "done", "finished", "bought", "task"],
 };
 
+const EDIT = /\b(?:instead|move|change|reschedule|push|shift|make it|update|edit|earlier|later than)\b/;
+
 const ALWAYS = ["reminder.create", "note.add", "memory.remember", "list.add"];
 
 export function selectTools(text: string, max = 12): Action[] {
@@ -60,6 +62,8 @@ export function selectTools(text: string, max = 12): Action[] {
       for (const cue of [...(CUES[mod] ?? []), ...(pluginCues()[mod] ?? [])]) if (t.includes(cue.length > 3 || cue.includes(" ") ? cue : ` ${cue} `)) s += cue.includes(" ") ? 3 : 2;
       for (const w of a.name.replace(/[._]/g, " ").split(" ")) if (words.has(w)) s += 3;
       for (const w of a.description.toLowerCase().split(/[^a-z0-9']+/)) if (w.length > 4 && words.has(w)) s += 1;
+      // Changing something ranks below making it, unless the message talks about changing.
+      if (/\.(?:update|edit|move)$/.test(a.name) && !EDIT.test(t)) s -= 3;
       return { a, s };
     })
     .sort((x, y) => y.s - x.s);

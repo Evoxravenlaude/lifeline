@@ -16,7 +16,7 @@ import { catalogueForModel } from "./capabilities.js";
 import { complete, providerName, type Msg, type Tier } from "./providers.js";
 import { recordModel } from "../core/health.js";
 import { redact } from "../core/redact.js";
-import { fellShort, rememberTier, rollSummary, summaryOf, tierFor } from "./route.js";
+import { didLog, fellShort, rememberTier, rollSummary, stripTags, summaryOf, tierFor, type Turn } from "./route.js";
 import { allActions } from "../policy/registry.js";
 import type { Ctx, User } from "../policy/types.js";
 import type { Intent } from "./rules.js";
@@ -54,7 +54,7 @@ Three things hold in every voice:
 What you can do:
 `;
 
-function systemFor(user: User, now: Date, memories: string[], thread?: Ctx["thread"]) {
+function systemFor(user: User, now: Date, memories: string[], thread?: Ctx["thread"], did = "") {
   const localNow = DateTime.fromJSDate(now).setZone(user.tz).toFormat("cccc d LLLL yyyy, HH:mm ZZZZ");
   const earlier = summaryOf(user);
   const parts = [
@@ -63,7 +63,8 @@ function systemFor(user: User, now: Date, memories: string[], thread?: Ctx["thre
     personaPrompt(user.prefs),
     `Now: ${localNow} (${user.tz}). User: ${user.name ?? "unknown"}.`,
     memories.length ? `Confirmed facts about the user:\n- ${memories.join("\n- ")}` : "",
-    earlier ? `Earlier in this conversation (a summary; the latest turns follow as messages, where [did x] marks what an action did):\n${earlier}` : "Turns marked [did x] show what an action did; carry on from them.",
+    earlier ? `Earlier in this conversation (a summary; the latest turns follow as messages):\n${earlier}` : "",
+    did,
     thread ? `You asked the user: "${thread.question}" to finish ${thread.action} with ${JSON.stringify(thread.args)}. If this message answers it, call ${thread.action.replace(/\./g, "__")} with the merged arguments. If they changed the subject, follow the subject and drop the question.` : "",
   ];
   return parts.filter(Boolean).join("\n\n");
@@ -83,11 +84,13 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
   }
   const tools = picked.map((a) => ({ name: a.name.replace(/\./g, "__"), description: a.description, schema: a.schema }));
   // One prompt, one history, whichever tier thinks: switching models never changes what they know.
-  const system = systemFor(ctx.user, ctx.now, memories, ctx.thread);
+  const system = systemFor(ctx.user, ctx.now, memories, ctx.thread, didLog(history as Turn[]));
   // Secrets never leave for a provider either: the message is redacted before it's sent, as it is before it's saved.
-  const messages: Msg[] = [...history.slice(-14), { role: "user", content: redact(text) }];
+  // Only role and words go to a provider (the `did` note lives in the system prompt).
+  const messages: Msg[] = [...history.slice(-14).map((m) => ({ role: m.role, content: m.content })), { role: "user", content: redact(text) }];
+  const draft = ctx.draft ? (t: string) => ctx.draft!(stripTags(t)) : undefined;
   const ask = (tier: Tier) => Promise.race([
-    complete({ system, messages, tools, onText: ctx.draft, signal: ctx.stop, tier }),
+    complete({ system, messages, tools, onText: draft, signal: ctx.stop, tier }),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), ctx.draft ? MODEL_TIMEOUT_MS * 2 : MODEL_TIMEOUT_MS)),
   ]);
   try {
@@ -103,9 +106,12 @@ export async function parseWithModel(text: string, ctx: Ctx, memories: string[],
     await recordModel(ctx.db, ctx.user.id, res.tier === "smart" ? "smart" : "fast");
     // Small talk never pins the next message to the stronger model, even if it was escalated.
     await rememberTier(ctx.db, ctx.user, route.why === "small talk" ? "fast" : res.tier ?? route.tier, ctx.now);
-    if (res.stopped) return { kind: "reply", text: res.text ? `${keepIdentity(res.text)}\n\n(You stopped me there.)` : "Stopped.", source: "model" };
+    if (res.stopped) return { kind: "reply", text: res.text ? `${keepIdentity(stripTags(res.text))}\n\n(You stopped me there.)` : "Stopped.", source: "model" };
     if (res.toolCall) return { kind: "action", intent: { action: res.toolCall.name.replace(/__/g, "."), args: res.toolCall.args }, source: "model" };
-    return { kind: "reply", text: keepIdentity(res.text) || "Okay.", source: "model" };
+    // Still pretending to have searched: run the real search on their words rather than pass off a remembered answer.
+    const pretended = /^\s*\[did (web\.search|research\.deep)\]/i.exec(res.text);
+    if (pretended) return { kind: "action", intent: { action: pretended[1].toLowerCase() === "research.deep" ? "research.deep" : "web.search", args: pretended[1].toLowerCase() === "research.deep" ? { question: text } : { query: text } }, source: "model" };
+    return { kind: "reply", text: keepIdentity(stripTags(res.text)) || "Okay.", source: "model" };
   } catch (e: any) {
     log.warn({ err: e?.message }, "model call failed; falling back");
     return null;
@@ -119,7 +125,7 @@ export async function draftReply(db: Db, user: User, prompt: string, instruction
     const res = await complete({ system: `${systemFor(user, new Date(), [])}\n\n${instruction}`, messages: [{ role: "user", content: prompt }], maxTokens: 600 });
     if (!res) return null;
     await recordUsage(db, user.id, res.usage.input, res.usage.output);
-    return res.text ? keepIdentity(res.text) : null;
+    return res.text ? keepIdentity(stripTags(res.text)) : null;
   } catch (e: any) {
     log.warn({ err: e?.message }, "draft failed");
     return null;

@@ -52,6 +52,8 @@ export function fellShort(res: Completion | null, text: string, toolNames: strin
   const out = res.text.trim();
   if (!out) return true;
   if (SHORTFALL.test(out)) return true;
+  // Wrote "[did web.search]" instead of calling it: the answer came from memory, dressed up as a search.
+  if (/^\[did /i.test(out)) return true;
   const asked = /\?\s*$/.test(text.trim()) || /^(?:what|why|how|when|where|who|which|can|could|should|is|are|do|does)\b/i.test(text.trim());
   return asked && text.trim().length > 60 && out.length < 40;
 }
@@ -66,17 +68,33 @@ export async function rememberTier(db: Db, user: User, tier: Tier, now: Date): P
 export const HISTORY_TURNS = 14;
 
 /**
- * The last turns as the model sees them. A reply that came from an action says which ("[did reminder.create]"), and
- * a picture says what was in it, so a model picking up mid-thread knows what already happened, not just what was said.
+ * The last turns as the model sees them. Replies go in exactly as they were said: a "[did x]" prefix on them was
+ * copied by models into new replies ("[did web.search] Premier League fixtures..."). What each reply did rides
+ * alongside instead (`did`), and becomes a short log in the system prompt (see didLog). A voice note or a picture
+ * still says so on the person's own turn, which a model never writes.
  */
-export async function historyFor(db: Db, userId: number, limit = HISTORY_TURNS): Promise<Msg[]> {
+export type Turn = Msg & { did?: string };
+export async function historyFor(db: Db, userId: number, limit = HISTORY_TURNS): Promise<Turn[]> {
   const rows = await db.query<{ role: "user" | "assistant"; content: string; meta: Record<string, unknown> | null }>(
     `SELECT role, content, meta FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT $2`, [userId, limit]);
   return rows.reverse().map((r) => {
     const m = r.meta ?? {};
-    const tags = [m.action ? `did ${m.action}` : "", m.voice ? "said in a voice note" : ""].filter(Boolean);
-    return { role: r.role, content: tags.length ? `[${tags.join("; ")}] ${r.content}` : r.content };
+    if (r.role === "assistant") return m.action ? { role: r.role, content: r.content, did: String(m.action) } : { role: r.role, content: r.content };
+    return { role: r.role, content: m.voice ? `[said in a voice note] ${r.content}` : r.content };
   });
+}
+
+/** "Your last replies and what each did", newest last, for the system prompt. Empty when no reply came from an action. */
+export function didLog(turns: Turn[]): string {
+  const did = turns.filter((t) => t.role === "assistant" && t.did);
+  if (!did.length) return "";
+  const lines = did.slice(-6).map((t) => `- ${t.did}: "${t.content.replace(/\s+/g, " ").slice(0, 90)}${t.content.length > 90 ? "..." : ""}"`);
+  return `What your recent replies did, oldest first (for you only; never write these notes or any [bracketed] tag in a reply):\n${lines.join("\n")}`;
+}
+
+/** Any bracketed note a model copied from somewhere ("[did web.search]", "[said in a voice note]") comes off a reply. */
+export function stripTags(text: string): string {
+  return text.replace(/^(?:\s*\[(?:did [^\]]{1,80}|said in a voice note[^\]]{0,40})\]\s*)+/i, "").replace(/\n\s*\[did [^\]]{1,80}\]\s*/gi, "\n");
 }
 
 /** What an assistant turn did, kept with it (the action, and the tier that thought about it). */

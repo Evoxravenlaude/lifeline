@@ -325,7 +325,7 @@ async function gemini(o: CompleteOpts): Promise<Completion> {
   const post = (model: string) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:${live ? "streamGenerateContent?alt=sse&" : "generateContent?"}key=${config.geminiKey}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: signalFor(o, live ? STREAM_TIMEOUT_MS : o.grounded ? CALL_TIMEOUT_MS * 3 : CALL_TIMEOUT_MS),
   });
-  const pick = modelFor("gemini", o.grounded ? "smart" : o.tier);
+  const pick = modelFor("gemini", o.grounded ? (o.tier ?? "smart") : o.tier);
   const main = pick.model;
   let r = await post(main);
   if (pick.tier === "fast" && (r.status === 404 || (r.status === 400 && /model/i.test(await r.clone().text())))) { fastGone.add("gemini"); return gemini({ ...o, tier: "smart" }); }
