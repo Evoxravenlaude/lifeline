@@ -2,6 +2,8 @@
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
+import { addExamples, addRules } from "../core/plugins.js";
+import { onJob, push, schedule } from "../core/scheduler.js";
 import { allow, draw, refuseDrawing, search, VOICES, mediaAbilities } from "../core/media.js";
 import { canEmail, sendEmail } from "../core/email.js";
 import { emailLinkOffer, linkedEmail } from "./emaillink.js";
@@ -30,6 +32,45 @@ const imageDraw = defineAction({
   },
 });
 
+const sourcesLine = (sources: { uri: string; title?: string }[]) =>
+  sources.length ? `\n\nSources: ${sources.map((s) => `[${(s.title ?? new URL(s.uri).hostname).replace(/[[\]]/g, "")}](${s.uri})`).join(", ")}` : "";
+
+/** A search that failed is tried again a minute later, then three minutes after that; the answer is sent when it lands. */
+onJob("search_retry", async (job, deps) => {
+  const user = await deps.getUser(job.user_id!);
+  if (!user) return;
+  const { query, tries } = job.payload as { query: string; tries: number };
+  const f = await search(query, user.tz);
+  if (f) { await push(deps, user, "search", `About "${query}":\n\n${f.answer}${sourcesLine(f.sources)}`, { exempt: true }); return; }
+  if (tries < 2) { await schedule(deps.db, { userId: user.id, kind: "search_retry", payload: { query, tries: tries + 1 }, runAt: new Date(Date.now() + 180_000) }); return; }
+  await push(deps, user, "search", `I still couldn't get an answer for "${query}". Searching is having a bad day; ask me again later and I'll go straight to it.`, { exempt: true });
+});
+
+/**
+ * "Find me pictures of an Oxford shirt and a chore jacket": lifeline can't fetch photos from the web into the chat, so
+ * it hands over the next best thing, a picture search for each item, one tap away, and offers to draw one.
+ */
+export function itemsOf(text: string): string[] {
+  return text
+    .replace(/^(?:help\s+(?:me\s+)?)?(?:generate|make|draw|create|search|find|get|show me|look up|pull up|google)(?:\s+(?:or|and)\s+(?:generate|make|draw|search|find|get))?\s+(?:the\s+)?(?:net|web|internet|online)?\s*(?:for\s+)?(?:some\s+)?(?:images?|pictures?|photos?|pics?)\s+(?:of|for)\s+/i, "")
+    .split(/\s*(?:,|;|\band\b|\n)\s*/i)
+    .map((x) => x.replace(/^(?:an?|the|some)\s+/i, "").trim())
+    .filter((x) => x.length > 1)
+    .slice(0, 6);
+}
+const findImages = defineAction({
+  name: "images.find",
+  tier: 1,
+  description: "The person wants photos or images of real things from the internet ('search the net for images of an Oxford shirt and a chore jacket', 'show me pictures of ...'). Gives a picture search for each item and offers to draw one. 'items' lists the things.",
+  schema: z.object({ items: z.array(z.string().min(1).max(80)).min(1).max(6) }),
+  async run(args) {
+    const items = args.items.map((x) => x.trim()).filter(Boolean).slice(0, 6);
+    const buttons = items.map((x) => ({ label: x.charAt(0).toUpperCase() + x.slice(1), data: `url:https://www.google.com/search?tbm=isch&q=${encodeURIComponent(x)}` }));
+    const draw = mediaAbilities().draw ? ` If you'd rather see an idea of one, say "draw ${items[0]}" and I'll make a picture.` : "";
+    return { reply: `I can't pull photos from the web into this chat, but here's a picture search for ${items.length === 1 ? "it" : `each of the ${items.length}`}, one tap away.${draw}`, buttons };
+  },
+});
+
 const webSearch = defineAction({
   name: "web.search",
   tier: 1,
@@ -39,9 +80,12 @@ const webSearch = defineAction({
     if (!mediaAbilities().search) return { reply: "Looking things up on the web isn't switched on for this circle yet. Whoever runs lifeline can turn it on." };
     if (!allow("search", ctx.user.id)) return { reply: "That's a lot of searching for one day; I'm out of searches until tomorrow." };
     const f = await search(args.query, ctx.user.tz);
-    if (!f) return { reply: "The search didn't come back. Try again in a minute?" };
-    const src = f.sources.length ? `\n\nSources: ${f.sources.map((s) => `[${(s.title ?? new URL(s.uri).hostname).replace(/[[\]]/g, "")}](${s.uri})`).join(", ")}` : "";
-    return { reply: f.answer + src };
+    if (!f) {
+      // Rather than "try again": lifeline tries again itself, and the answer arrives here when it comes.
+      await schedule(ctx.db, { userId: ctx.user.id, kind: "search_retry", payload: { query: args.query, tries: 1 }, runAt: new Date(ctx.now.getTime() + 60_000) });
+      return { reply: "Search is slow right now. I'll look again in a minute and send you the answer here, no need to ask twice." };
+    }
+    return { reply: f.answer + sourcesLine(f.sources) };
   },
 });
 
@@ -153,4 +197,8 @@ const emailSend = defineAction({
   },
 });
 
-register(imageDraw, webSearch, speechSettings, speechSay, emailMe, emailSend);
+register(findImages, imageDraw, webSearch, speechSettings, speechSay, emailMe, emailSend);
+
+addRules([/^(?:help\s+(?:me\s+)?)?(?:generate|make|draw|create|search|find|get|show me|look up|pull up|google)(?:\s+(?:or|and)\s+(?:generate|make|draw|search|find|get))?\s+(?:the\s+)?(?:net|web|internet|online)\s*(?:for\s+)?(?:some\s+)?(?:images?|pictures?|photos?|pics?)\s+(?:of|for)\s+.+|^(?:search|find|get|show me|look up|google)\s+(?:me\s+)?(?:some\s+)?(?:images?|pictures?|photos?|pics?)\s+(?:of|for)\s+.+/i,
+  (m) => { const items = itemsOf(m[0]); return items.length ? { action: "images.find", args: { items } } : null; }]);
+addExamples("images.find", ["search the net for images of an Oxford shirt and a chore jacket", "show me pictures of gingham dresses"]);

@@ -33,6 +33,7 @@ import { summarizeLater } from "../intent/model.js";
 import { answerCapability, isCapabilityQuestion } from "../intent/capabilities.js";
 import { openThread, setThread, SKIP } from "../intent/thread.js";
 import { human, parseRange, parseWhen, parseMoney } from "./time.js";
+import { resolveReference, splitAsks } from "../modules/followup.js";
 import { markDone, snooze } from "../modules/reminders.js";
 import { resolveLog } from "../modules/medications.js";
 
@@ -186,6 +187,29 @@ async function answerMessage(db: Db, user: User, text: string, opts: { forwarded
   // 2b. An answer to a riddle or quiz that's still open.
   const played = opts.forwarded ? null : await gameAnswer(db, user, t);
   if (played) return finish(db, user, played);
+
+  // 2c. Following the conversation: two asks in one sentence, run in order, and words that point back at what was
+  // just listed or set ("cancel the second one", "6am instead"). See src/modules/followup.ts.
+  if (!opts.forwarded) {
+    const asks = splitAsks(t);
+    if (asks) {
+      const intents: { action: string; args: unknown }[] = [];
+      for (const a of asks) {
+        const i = (await resolveReference(ctx, a)) ?? parseByRules(a);
+        if (!i) { intents.length = 0; break; }
+        intents.push(i);
+      }
+      if (intents.length > 1) {
+        if (thread) await setThread(db, user, null);
+        const replies: Reply[] = [];
+        for (const i of intents) replies.push(await decide(ctx, i.action, i.args));
+        const last = replies[replies.length - 1];
+        return finish(db, user, { ...last, text: replies.map((r) => r.text).join("\n\n") });
+      }
+    }
+    const pointed = await resolveReference(ctx, t);
+    if (pointed) { if (thread) await setThread(db, user, null); return finish(db, user, await decide(ctx, pointed.action, pointed.args)); }
+  }
 
   // 3. "Can you track meds?"
   // A question that carries the real thing ("is this legit: …", "can you explain tx 0x…") is a request, not a question about me.

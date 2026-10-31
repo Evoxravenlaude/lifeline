@@ -10,6 +10,7 @@ import { defineAction, type User } from "../../../policy/types.js";
 import { register } from "../../../policy/registry.js";
 import type { Db } from "../../../core/db.js";
 import { addBriefSection, addCapability, addCues, addExamples, addRules, addSchema, addSystemJob } from "../../../core/plugins.js";
+import { DateTime } from "luxon";
 import { onJob } from "../../../core/scheduler.js";
 import { localDay } from "../../../core/time.js";
 import { andList, cacheGet, cachePut, dayWord, getJson, local, pingOnce, usersIn } from "./util.js";
@@ -209,7 +210,14 @@ const next = defineAction({
         teams = [team]; notFollowed = true;
       }
     } else teams = mine;
-    if (!teams.length) return { reply: `You don't follow any teams yet. Say "follow Arsenal" or "follow the Lakers" and I'll keep their games.` };
+    if (!teams.length) {
+      // No teams yet: answer the question anyway ("what matches are on today"), then offer the follow.
+      const { search, mediaAbilities } = await import("../../../core/media.js");
+      const day = DateTime.fromJSDate(ctx.now).setZone(ctx.user.tz).toFormat("cccc d LLLL yyyy");
+      const f = mediaAbilities().search ? await search(`Which major football matches are on ${day}? Kickoff times in ${ctx.user.tz}. Premier League, La Liga, Serie A, Bundesliga, Champions League and the Nigerian league first; then any big NBA or other games.`, ctx.user.tz).catch(() => null) : null;
+      const tip = `Say "follow Arsenal" (any team) and I'll ping you before their games.`;
+      return { reply: f ? `${f.answer}\n\n${tip}` : `I couldn't get today's listings just now. ${tip}` };
+    }
     const lines: string[] = [];
     for (const t of teams.slice(0, 6)) {
       if (!t.refreshed_at || ctx.now.getTime() - new Date(t.refreshed_at).getTime() > 3 * 3_600_000) await refreshTeam(ctx.db, t, ctx.now);
@@ -246,6 +254,7 @@ addRules(
   [new RegExp(`^follow\\s+${NOT_TEAM}(?:the\\s+team\\s+)?${TEAM}(?:\\s+(?:fixtures|games|matches|results))?$`, "iu"), (m) => ({ action: "sports.follow", args: { team: m[1].trim() } })],
   [new RegExp(`^(?:stop following|unfollow the team)\\s+${NOT_TEAM}(?:the\\s+team\\s+)?${TEAM}(?:\\s+(?:fixtures|games|matches|results|pings))?$`, "iu"), (m) => ({ action: "sports.unfollow", args: { team: m[1].trim() } })],
   [new RegExp(`^when\\s+(?:do|does|are|is)\\s+(?:the\\s+)?${TEAM}\\s+(?:play|playing|play next|playing next|next playing)$|^(?:when'?s|when is)\\s+(?:the\\s+)?next\\s+${TEAM}\\s+(?:game|match|fixture)$|^next\\s+${TEAM}\\s+(?:game|match|fixture)$|^(?!my\\s)${TEAM}\\s+(?:fixtures|next game|next match)$`, "iu"), (m) => ({ action: "sports.next", args: { team: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim() } })],
+  [/^(?:what|which) (?:matches|games|fixtures) are (?:on|playing)(?: today| tonight)?\??$|^(?:any|are there(?: any)?) (?:big )?(?:matches|games)(?: on)? (?:today|tonight)\??$/i, () => ({ action: "sports.next", args: {} })],
   [/^(?:my\s+)?(?:teams|fixtures)$|^who do i follow$/i, (m) => (/fixtures/i.test(m[0]) ? { action: "sports.next", args: {} } : { action: "sports.list", args: {} })],
 );
 addExamples("sports.follow", ["follow Arsenal", "follow the Lakers", "follow Super Eagles", "follow Kaizer Chiefs"]);

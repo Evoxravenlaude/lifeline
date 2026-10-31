@@ -1,4 +1,6 @@
 /** Todo + shopping lists, birthdays and countdowns, weather, FX, summarise a link. Free APIs only. */
+import { setFocus } from "../core/focus.js";
+import { cleanLabel } from "./followup.js";
 import { z } from "zod";
 import { defineAction } from "../policy/types.js";
 import { register } from "../policy/registry.js";
@@ -89,12 +91,14 @@ const dateAdd = defineAction({
     return parseWhen(answer, ctx.user.tz, ctx.now) ? { on: answer } : null;
   },
   async run(args, ctx) {
+    args = { ...args, label: cleanLabel(args.label) };
     const on = args.on ? parseWhen(args.on, ctx.user.tz, ctx.now) : null;
     if (!on) throw new Error(`I couldn't read a date in that. When is ${args.label}?`);
     const kind = args.kind ?? (/birthday|bday/i.test(args.label) ? "birthday" : "countdown");
     const yearly = kind !== "countdown";
     const r = await ctx.db.one<{ id: number }>(`INSERT INTO dates (user_id, kind, label, on_date, yearly) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [ctx.user.id, kind, args.label, localDay(on, ctx.user.tz), yearly]);
     await armDate(ctx, r!.id, on, yearly);
+    await setFocus(ctx.db, ctx.user, { last: { kind: "date", id: r!.id } }, ctx.now);
     return { reply: `${args.label}, ${fmtDate(on, ctx.user.tz)}${yearly ? ", every year" : ""}. I'll remind you a week before, the day before and on the day.`, undo: { payload: { id: r!.id } } };
   },
   async undo(p, ctx) {
