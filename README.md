@@ -13,7 +13,7 @@ src/
   telegram/   grammY: text, voice, .ics, buttons, /persona, Business connection drafts
   channels/   sms (Twilio) · imessage (BlueBubbles / Sendblue)
   web/        Hono server + webhooks (the web app itself lives in web/ at the repo root, also a Vercel project)
-test/         1,356 tests on a real Postgres engine: gate, modules, channels, web, NL coverage (150 sentences), load
+test/         1,370 tests on a real Postgres engine: gate, modules, channels, web, NL coverage (150 sentences), load
 ```
 
 ## Running it on Railway (with Doppler + Supabase)
@@ -31,7 +31,7 @@ Local:
 
 ```bash
 cp .env.example .env         # DATABASE_URL empty = embedded DB in ./data
-npm install && npm test      # 1,356 tests
+npm install && npm test      # 1,370 tests
 npm start                    # Telegram polling + web on :3000
 npx tsx src/cli.ts chat      # the brain with no channel
 npx tsx src/cli.ts poll      # hackathon pollers once
@@ -143,6 +143,17 @@ The conversation layer is unguarded by design. Three lines stay fixed: forwarded
 
 ## What was tested, and what wasn't
 
+## Following the conversation
+
+- **It remembers what it just showed and set** (`src/core/focus.ts`, half an hour). "What are my reminders" gives one numbered list of reminders and saved birthdays together, so "cancel the second one", "move the first one to 7am" and "cancel that" mean what the person sees.
+- **Corrections change the thing, not make a new one.** "Remind me at 6am instead" or "make it Friday" moves the reminder just set (`reminder.update`); a repeating one keeps its pattern and only its time changes.
+- **Two asks in one sentence run in order.** "Cancel the second one and remind me of Bunmi's birthday in 2 days" does both. It only splits where the second part is clearly its own ask, so "remind me to buy bread and milk" stays one reminder.
+- **Names come out tidy:** "bunmis birthday" is saved as Bunmi's birthday.
+- **Models get the history clean.** Replies go to the model exactly as they were said; what each reply did goes in a short log in the system prompt. Models used to copy a "[did web.search]" tag into new replies, sometimes without searching at all. Now any such tag is stripped, and a reply that pretends to have searched becomes a real search.
+- **Search doesn't give up.** Gemini's search on the main model, then the lighter one (separate free quotas), then OpenAI or Groq if set, then a public results page read by whichever model is up. If all of that fails, lifeline says so, tries again a minute later and sends the answer itself.
+- **Questions it can't do directly still get an answer.** "What matches are on today" works without following a team; "find me pictures of an Oxford shirt and a chore jacket" gives a picture search for each item, one tap away, and offers to draw one.
+- `test/followup.test.ts` replays the 31 October screenshots word for word.
+
 ## Delivery and the owner's numbers
 
 - **Each reminder fires once.** The scheduler claims due jobs in one statement (`FOR UPDATE SKIP LOCKED`, with a three-minute lease). Two servers overlapping during a Railway redeploy can't both send the same reminder, and a crash mid-run frees the job after the lease.
@@ -154,7 +165,7 @@ The conversation layer is unguarded by design. Three lines stay fixed: forwarded
 - **Clock changes.** Times said in words ("Tuesday at 9am") are built on the wall clock in the person's zone, so they stay right across a daylight-saving change. Changing city or brief hour moves every repeating job's next run at once.
 - Anyone can ask "what did you do for me this week?" for their own counts, which also appear in Sunday's morning brief.
 
-Tested here (1,356 tests, real Postgres engine, plus a headless-Chromium walkthrough of every web view in light and dark themes): the gate in every tier, undo, expiry, scheduler re-arming, push caps, every module's happy path, ICS parsing, the shared handler across every channel, link codes, SMS numbered replies, iMessage payload parsing for both relays, dispatch fallback, the web app's auth (signed Telegram payload, bad signature, link code, logout), chat and button endpoints, webhook signature refusal, Gemini schema cleaning, load (2,000 due jobs drained in claims of one, 50 to a tick, with none sent twice; 200 users messaging concurrently in 245 ms with no cross-talk), and a cold boot of the web server.
+Tested here (1,370 tests, real Postgres engine, plus a headless-Chromium walkthrough of every web view in light and dark themes): the gate in every tier, undo, expiry, scheduler re-arming, push caps, every module's happy path, ICS parsing, the shared handler across every channel, link codes, SMS numbered replies, iMessage payload parsing for both relays, dispatch fallback, the web app's auth (signed Telegram payload, bad signature, link code, logout), chat and button endpoints, webhook signature refusal, Gemini schema cleaning, load (2,000 due jobs drained in claims of one, 50 to a tick, with none sent twice; 200 users messaging concurrently in 245 ms with no cross-talk), and a cold boot of the web server.
 
 Not testable from this sandbox (no outbound network, no keys): live Telegram, Twilio, BlueBubbles/Sendblue, the model providers, CoinGecko/Open-Meteo/frankfurter, and every poller against its live site. They're written against current documented shapes; each one fails soft and logs. First thing after deploy: `npx tsx src/cli.ts poll`, `scout "ai agents"`, send one voice note, and text the Twilio number `link <code>`.
 
