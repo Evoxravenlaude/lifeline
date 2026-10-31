@@ -35,6 +35,14 @@ What it does now (`web/app.js`):
 - If the server's key changed, the old subscription is replaced rather than left broken.
 - When notifications are blocked, it shows the steps for that device: iPhone home-screen app, Android installed app, Android Chrome tab, or desktop (the padlock or tune icon beside the address).
 - Inside Telegram's in-app view, where web notifications can't work, the card says so and offers "Open in your browser" instead of a switch that can't succeed.
+
+### When the browser itself refuses (v21)
+
+Sometimes permission is given but the browser's push registration fails. Chrome says "Registration failed - push service not available" or "push service error". Chrome on Android registers through Google Play services. Phone cleaners, battery savers (common on Tecno, Infinix and Xiaomi phones), VPNs and data savers can stop it. Phones without Google services can't register at all. Now:
+- the page tries once more with a clean subscription after a moment, since this often fails once and then works;
+- the note under the switch gives the fix for that exact reason: Play services on Unrestricted battery, VPN or data saver off, another network, or Brave's "Use Google services for push messaging". It quotes the browser's own words, and it isn't covered by a toast any more;
+- the failure is sent to the server with only the error and the browser family ("Chrome on Android (installed)"), kept 14 days. `/doctor` shows the week's failures grouped, so whoever runs lifeline can see what's actually breaking for people;
+- `/doctor` also checks that `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are a pair. Keys from two different runs of the generator let devices subscribe and then fail every send.
 - The fallback chain is unchanged: the preferred place first, then Telegram, the app, iMessage, SMS, the web inbox, and email as the last resort. With **Both**, the app is sent to as well as the chain, and if the app reached the person, the email last resort isn't used.
 
 ## Inside the app
