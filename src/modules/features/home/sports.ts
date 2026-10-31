@@ -244,21 +244,62 @@ const list = defineAction({
   },
 });
 
-register(follow, unfollow, next, list);
+/**
+ * "What's the score in the Chelsea match", "is Man United playing today": the listings first (live and full-time
+ * scores, refreshed when a game is on), and a web search only when the team isn't in them.
+ */
+const scoreNow = defineAction({
+  name: "sports.score",
+  tier: 1,
+  description: "The score of a team's game today (live or full time), or whether a team plays today ('what's the score in the Chelsea match', 'is Man United playing today', 'how did Arsenal do').",
+  schema: z.object({ team: z.string().min(2).max(60) }),
+  async run(a, ctx) {
+    const mine = await followed(ctx.db, ctx.user.id);
+    let team: Team | null | undefined = pickFollowed(mine, a.team);
+    if (!team) team = (await findTeam(ctx.db, a.team).catch(() => ({ team: null }))).team;
+    if (!team) {
+      const { search, mediaAbilities } = await import("../../../core/media.js");
+      const f = mediaAbilities().search ? await search(`${a.team} score today: is the match live, or the final score? Say the competition and kickoff time.`, ctx.user.tz).catch(() => null) : null;
+      return { reply: f ? f.answer : `I couldn't find "${a.team}" in the listings, and search isn't answering just now. Try the team's full name?` };
+    }
+    // A game on (or just finished) needs fresh numbers; otherwise a few hours old is fine.
+    const stale = !team.refreshed_at || ctx.now.getTime() - new Date(team.refreshed_at).getTime() > 3 * 3_600_000;
+    const onNow = await ctx.db.one<any>(`SELECT * FROM home_matches WHERE team_id=$1 AND starts_at BETWEEN $2 AND $3 ORDER BY starts_at DESC LIMIT 1`, [team.id, new Date(ctx.now.getTime() - 4 * 3_600_000), ctx.now]);
+    if (stale || onNow) await refreshTeam(ctx.db, team, ctx.now).catch(() => false);
+    const dayStart = local(ctx.now, ctx.user.tz).startOf("day").toJSDate(), dayEnd = local(ctx.now, ctx.user.tz).endOf("day").toJSDate();
+    const today = await ctx.db.one<any>(`SELECT * FROM home_matches WHERE team_id=$1 AND starts_at BETWEEN $2 AND $3 ORDER BY (status='live') DESC, starts_at DESC LIMIT 1`, [team.id, dayStart, dayEnd]);
+    const comp = (m: any) => (m.competition ? ` (${m.competition})` : "");
+    if (today?.status === "live") return { reply: `${today.home} ${today.home_score ?? 0}, ${today.away} ${today.away_score ?? 0}: on now${comp(today)}.` };
+    if (today?.status === "finished") return { reply: `Full time: ${score(today)}${comp(today)}.` };
+    if (today?.status === "scheduled") return { reply: `${team.name} play today: ${fixture(today, ctx.user, ctx.now)}. Ask me again once it's started for the score.${mine.some((t) => t.id === team!.id) ? "" : ` Say "follow ${team.name}" for a ping before kickoff.`}` };
+    const { next: n, last } = await matchesOf(ctx.db, team.id);
+    const parts = [`${team.name} aren't playing today.`];
+    if (last) parts.push(`Last time: ${score(last)}${comp(last)}.`);
+    if (n) parts.push(`Next: ${fixture(n, ctx.user, ctx.now)}.`);
+    return { reply: parts.join(" ") };
+  },
+});
+
+register(follow, unfollow, next, list, scoreNow);
 
 /* ---------------- words ---------------- */
 
 const NOT_TEAM = "(?!.*\\b(?:status|statuses|status pages?|uptime|alerts?|feed|repo|releases?|prices?|news|blog|account|wallet)$)(?!(?:me|up|you|him|her|them|us|this|that|it|along|through|suit|instructions?|orders|outages?|the (?:plan|rules|news|money|steps|recipe|instructions|link|thread)|my (?:gut|heart|dreams?)|greenhouse|lever|ashby|remoteok|remotive|jobs?|wallet|trader)\\b)(?![@/])(?!\\S*\\d\\S*$)";
+/** Not a team: "the score for my exam", "your result". */
+const MINE_NOT = "(?!(?:my|your|our|his|her|their|this|that|the exam|exam|test|credit)\\b)";
 const TEAM = "([\\p{L}][\\p{L}\\p{N} .'&-]{1,40}?)";
 addRules(
   [new RegExp(`^follow\\s+${NOT_TEAM}(?:the\\s+team\\s+)?${TEAM}(?:\\s+(?:fixtures|games|matches|results))?$`, "iu"), (m) => ({ action: "sports.follow", args: { team: m[1].trim() } })],
   [new RegExp(`^(?:stop following|unfollow the team)\\s+${NOT_TEAM}(?:the\\s+team\\s+)?${TEAM}(?:\\s+(?:fixtures|games|matches|results|pings))?$`, "iu"), (m) => ({ action: "sports.unfollow", args: { team: m[1].trim() } })],
   [new RegExp(`^when\\s+(?:do|does|are|is)\\s+(?:the\\s+)?${TEAM}\\s+(?:play|playing|play next|playing next|next playing)$|^(?:when'?s|when is)\\s+(?:the\\s+)?next\\s+${TEAM}\\s+(?:game|match|fixture)$|^next\\s+${TEAM}\\s+(?:game|match|fixture)$|^(?!my\\s)${TEAM}\\s+(?:fixtures|next game|next match)$`, "iu"), (m) => ({ action: "sports.next", args: { team: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim() } })],
+  [new RegExp(`^(?:what(?:'s| is| was| the)?|whats|tell me)\\s+(?:the\\s+)?(?:score|scores|result)(?:\\s+count)?\\s+(?:for|of|in|on|from)\\s+(?:the\\s+)?${MINE_NOT}${TEAM}(?:\\s+(?:match|game|fixture))?(?:\\s+today|\\s+tonight)?\\??$|^(?:how(?:'s| is| are| did))\\s+(?:the\\s+)?${MINE_NOT}${TEAM}\\s+(?:match|game)(?:\\s+(?:going|doing|go|end))?\\??$|^how did ${MINE_NOT}${TEAM} do(?:\\s+today)?\\??$|^(?:are|is|do|does)\\s+(?:the\\s+)?${MINE_NOT}${TEAM}\\s+play(?:ing)?\\s+(?:today|tonight)\\??$`, "iu"),
+    (m) => ({ action: "sports.score", args: { team: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim() } })],
   [/^(?:what|which) (?:matches|games|fixtures) are (?:on|playing)(?: today| tonight)?\??$|^(?:any|are there(?: any)?) (?:big )?(?:matches|games)(?: on)? (?:today|tonight)\??$/i, () => ({ action: "sports.next", args: {} })],
   [/^(?:my\s+)?(?:teams|fixtures)$|^who do i follow$/i, (m) => (/fixtures/i.test(m[0]) ? { action: "sports.next", args: {} } : { action: "sports.list", args: {} })],
 );
 addExamples("sports.follow", ["follow Arsenal", "follow the Lakers", "follow Super Eagles", "follow Kaizer Chiefs"]);
 addExamples("sports.unfollow", ["stop following Arsenal", "stop following the Lakers"]);
+addExamples("sports.score", ["what's the score in the Chelsea match", "is Manchester United playing today", "how did Arsenal do"]);
 addExamples("sports.next", ["when do Barcelona play", "when is the next Arsenal game", "my fixtures"]);
 addExamples("sports.list", ["my teams", "who do I follow"]);
 addCues("sports", ["follow", "team", "match", "game", "fixture", "fixtures", "kickoff", "kick off", "score", "result", "football", "soccer", "basketball", "nba", "premier league", "league", "play next", "super eagles"]);

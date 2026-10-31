@@ -8,6 +8,7 @@
  * (app:<user id>) while they have at least one, which is how dispatch knows to try it. Subscriptions
  * the push service says are gone (404 or 410) are dropped on the spot.
  */
+import { createECDH } from "node:crypto";
 import { recordPush } from "./health.js";
 import { addSchema } from "./plugins.js";
 import { config } from "./config.js";
@@ -60,7 +61,31 @@ export function vapidProblem(): string | null {
   if (!pub || pub.length !== 65 || pub[0] !== 4) return "VAPID_PUBLIC_KEY doesn't look like the public key from `npx web-push generate-vapid-keys` (it should be about 87 characters, starting with B)";
   if (!priv || priv.length !== 32) return "VAPID_PRIVATE_KEY doesn't look like the private key from the same command (about 43 characters)";
   if (!/^(mailto:\S+@\S+|https:\/\/\S+)$/.test(config.vapidSubject)) return "VAPID_SUBJECT should be mailto: and your email, like mailto:you@example.com";
+  // Both look right but come from different runs of the generator: devices subscribe fine, and then every send is refused.
+  try {
+    const ecdh = createECDH("prime256v1");
+    ecdh.setPrivateKey(priv);
+    if (!ecdh.getPublicKey().equals(pub)) return "VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY aren't a pair (they came from different runs of `npx web-push generate-vapid-keys`); set both from the same run";
+  } catch { return "VAPID_PRIVATE_KEY isn't a valid key; generate a fresh pair with `npx web-push generate-vapid-keys`"; }
   return null;
+}
+
+/**
+ * Why a device couldn't turn notifications on, as the browser said it ("Registration failed - push service not
+ * available"). Kept for a fortnight with the browser's family only, so /doctor can show what's failing for people.
+ */
+addSchema(`CREATE TABLE IF NOT EXISTS push_problems (id SERIAL PRIMARY KEY, user_id INT, name TEXT, message TEXT, browser TEXT, at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+export async function recordPushProblem(db: Db, userId: number, p: { name?: unknown; message?: unknown; browser?: unknown }): Promise<void> {
+  const clip = (v: unknown, n: number) => String(v ?? "").replace(/[^\w .,:;()'/-]/g, "").slice(0, n);
+  await db.query(`INSERT INTO push_problems (user_id, name, message, browser) VALUES ($1,$2,$3,$4)`, [userId, clip(p.name, 40), clip(p.message, 160), clip(p.browser, 40)]).catch(() => {});
+  await db.query(`DELETE FROM push_problems WHERE at < now() - interval '14 days'`).catch(() => {});
+}
+/** For /doctor: the week's failures, grouped. */
+export async function pushProblemsLine(db: Db): Promise<string> {
+  const rows = await db.query<{ name: string; message: string; browser: string; n: string; people: string }>(
+    `SELECT name, message, browser, count(*)::text AS n, count(DISTINCT user_id)::text AS people FROM push_problems WHERE at > now() - interval '7 days' GROUP BY 1,2,3 ORDER BY count(*) DESC LIMIT 4`).catch(() => []);
+  if (!rows.length) return "Devices that couldn't turn notifications on this week: none.";
+  return `Devices that couldn't turn notifications on this week:\n${rows.map((r) => `  ${r.people} ${Number(r.people) === 1 ? "person" : "people"} on ${r.browser || "a browser"}: ${r.name}${r.message ? ` (${r.message})` : ""}`).join("\n")}`;
 }
 
 const B64URL = /^[A-Za-z0-9_-]+={0,2}$/;
