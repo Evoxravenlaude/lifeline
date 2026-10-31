@@ -470,3 +470,25 @@ describe("knowing its limits", () => {
     expect(r.text).toMatch(/Results about you/);
   });
 });
+
+describe("showing the value, and a first win", () => {
+  it("says what it did this week, in Sunday's brief only, counts and no details", async () => {
+    const { recapLine, weekCounts } = await import("../src/modules/recap.js");
+    expect(recapLine({ reminders: 0, doses: 0, logs: 0, pings: 0 })).toBeNull();
+    expect(recapLine({ reminders: 4, doses: 6, logs: 1, pings: 3 })).toBe("Your week with me: I rang 4 reminders, logged 6 doses and kept 1 thing you tracked, and only tapped you on the shoulder 3 times.");
+    const u = await ensureUser(db, "telegram", "7901", "Funmi");
+    await db.query(`INSERT INTO reminders (user_id, text, due_at) VALUES ($1,'call mum', now() - interval '2 days')`, [u.id]);
+    expect((await weekCounts(db, u, new Date())).reminders).toBe(1);
+  });
+  it("asks for the medication in words from the onboarding button", async () => {
+    const { ASKS, shapeAnswer } = await import("../src/telegram/panels.js");
+    expect(shapeAnswer(ASKS.med.prompt, "vitamin D at 8am")).toBe("I take vitamin D at 8am");
+    expect(parseByRules("I take vitamin D at 8am")?.action).toBe("medication.add");
+  });
+  it("draws a menu picture once and reuses it", async () => {
+    const { renderSection } = await import("../src/core/dashboard.js");
+    const s = { title: "Today", plate: "event" as const, pose: "hello", rows: [["Call mum", "17:00"]] as [string, string][], updated: "09:00" };
+    const [a, b] = [await renderSection(s), await renderSection(s)];
+    expect(a).toBe(b);
+  }, 30_000);
+});
