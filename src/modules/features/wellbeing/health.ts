@@ -116,15 +116,17 @@ addBriefSection({
   async lines(db, user, now) {
     const t = iso(today(user, now));
     const rows = await db.query<Checkup>(`${CHECKUPS} ORDER BY next_due`, [user.id]);
-    const say = rows.flatMap((c) => {
+    // What's due leads, and the "say ... once it's done" hint names that one; an older open one follows quietly.
+    const said = rows.flatMap((c) => {
       const d = daysBetween(t, c.next_due);
-      if (d === 7) return [`${c.name} is due next week.`];
-      if (d === 0) return [`${c.name} is due now.`];
-      if (d < 0 && -d % 30 === 0) return [`${c.name} is still open, no rush.`];
+      if (d === 0) return [{ c, rank: 0, line: `${c.name} is due now.` }];
+      if (d === 7) return [{ c, rank: 1, line: `${c.name} is due next week.` }];
+      if (d < 0 && -d % 30 === 0) return [{ c, rank: 2, line: `${c.name} is still open, no rush.` }];
       return [];
-    });
-    if (!say.length) return [];
-    return [`${say.slice(0, 2).join(" ")} Say "had my ${rows.find((c) => say[0].startsWith(c.name))!.name.toLowerCase()}" once it's done.`];
+    }).sort((a, b) => a.rank - b.rank).slice(0, 2);
+    if (!said.length) return [];
+    const [first, second] = said;
+    return [[first.line, `Say "had my ${first.c.name.toLowerCase()}" once it's done.`, second?.line].filter(Boolean).join(" ")];
   },
 });
 
