@@ -166,6 +166,8 @@ window.App = (function () {
     window.__bootDone && window.__bootDone();
     setInterval(refresh, 30000);
     setTimeout(offerInstallOnce, 6000);
+    setTimeout(resumePush, 1500);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resumePush(); });
   }
   /**
    * Telegram's own script, only inside its app (the Mini App), and first thing, so its secure storage can show the
@@ -545,6 +547,31 @@ window.App = (function () {
     ms.forEach((m, i) => addMsg(m.role, m.content, null, i === ms.length - 1 || (ms[i + 1] && new Date(ms[i + 1].created_at) - new Date(m.created_at) > 30 * 6e4) ? m.created_at : null));
     lastMsgId = ms[ms.length - 1].id;
   }
+  /**
+   * The moment notifications make sense is right after something that will ring later (a reminder, a dose). Asked
+   * there, once a fortnight at most, never inside Telegram, and only when this device isn't already on.
+   */
+  async function offerPushAfter(r) {
+    if (!r || !/^(?:reminder\.create|medication\.add|checkin\.start|drop\.add|calendar\.add)$/.test(r.action || "") || tgLaunch || !pushAble()) return;
+    try { if (Date.now() - Number(localStorage.getItem("ll_push_offered") || 0) < 14 * 86_400_000) return; } catch { return; }
+    if (typeof Notification !== "undefined" && Notification.permission === "denied") return;
+    if (await currentSub().catch(() => null)) return;
+    const s = await api("/api/settings"); if (!s || !s.push || !s.push.on) return;
+    try { localStorage.setItem("ll_push_offered", String(Date.now())); } catch {}
+    const d = document.createElement("div"); d.className = "msg bot push-offer";
+    d.innerHTML = `<div class="av"><svg viewBox="0 0 32 32"><use href="#mark"/></svg></div><div class="tx"><p>Want that to ring on this device too, as a notification? It works even with Telegram muted.</p><div class="row"><button class="btn sm primary" type="button" data-po="on">Turn on notifications</button><button class="btn sm ghost" type="button" data-po="no">Not now</button></div><p class="small muted" data-po-say role="status" aria-live="polite"></p></div>`;
+    $("#log").appendChild(d); d.scrollIntoView({ block: "end", behavior: "smooth" });
+    d.addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-po]"); if (!b) return;
+      if (b.dataset.po === "no") { d.remove(); return; }
+      $$("[data-po]", d).forEach((x) => (x.disabled = true));
+      const say = $("[data-po-say]", d);
+      const rr = await notificationsOn(s.push.key, () => { say.textContent = "Tap Allow on the prompt at the top of your screen. I'll wait."; });
+      say.textContent = rr.error ? rr.text : "Done. Reminders will ring here too.";
+      if (rr.error) $$("[data-po]", d).forEach((x) => (x.disabled = false));
+      else setTimeout(() => d.remove(), 2500);
+    });
+  }
   async function send(text) {
     const t = $("#t"); const msg = (text || t.value).trim(); if (!msg) return;
     if (!text) { t.value = ""; t.style.height = "auto"; }
@@ -556,6 +583,7 @@ window.App = (function () {
     th.remove();
     if (r.error || typeof r.text !== "string") { addMsg("assistant", r.text || "I couldn't reach the server just now, so that wasn't kept. Once more in a moment?"); pip && pip.set("error", "That one slipped."); return; }
     addMsg("assistant", r.text, r.buttons, null, r);
+    offerPushAfter(r);
     const waits = r.buttons && r.buttons.some((b) => /^confirm:/.test(b.data));
     state = await api("/api/state");
     pip && pip.set(waits ? "pending" : "done", waits ? "I won't move on that until you say." : undefined);
@@ -1225,14 +1253,66 @@ window.App = (function () {
     store.set("ll_tg_token", null); store.set("ll_tg_init", null); location.hash = ""; location.reload();
   }
   async function currentSub() { if (!pushAble()) return null; const reg = await navigator.serviceWorker.getRegistration(); return reg ? reg.pushManager.getSubscription() : null; }
-  async function notificationsOn(key) {
-    const perm = await Notification.requestPermission();
-    if (perm !== "granted") return { error: "denied", text: perm === "denied" ? "Notifications are blocked for this site. Allow them in your browser's site settings, then try again." : "Notifications stay off. Turn them on whenever you like." };
+  /*
+   * Asking for notifications, the way browsers really behave:
+   * - Already allowed or blocked: no prompt, go straight on (or say how to unblock, for this device).
+   * - Chrome on Android, and installed apps, often show a quiet "Get notifications? Allow" bubble instead of a dialog,
+   *   and answer "not decided" at once while the bubble is still up. We wait for the person's tap (up to 90 seconds),
+   *   and if they allow later, from the bubble or the phone's settings, we finish by ourselves (see resumePush).
+   */
+  const WANT = "ll_push_wanted";
+  const wantPush = (v) => { try { if (v) localStorage.setItem(WANT, "1"); else localStorage.removeItem(WANT); } catch {} };
+  const wantsPush = () => { try { return localStorage.getItem(WANT) === "1"; } catch { return false; } };
+  function askPermission() {
+    if (Notification.permission !== "default") return Promise.resolve(Notification.permission);
+    return new Promise((res) => {
+      let settled = false;
+      const done = (v) => { if (!settled) { settled = true; res(v); } };
+      try {
+        const r = Notification.requestPermission((v) => done(v)); // older Safari answers by callback
+        if (r && typeof r.then === "function") r.then(done, () => done("default"));
+      } catch { done("default"); }
+      // A browser that leaves the request hanging while its quiet bubble is up: after four seconds, hand over to the
+      // waiting step, which shows the "tap Allow" hint and watches the permission itself.
+      setTimeout(() => done(Notification.permission), 4000);
+    });
+  }
+  function waitForPermission(ms, onWaiting) {
+    return new Promise((res) => {
+      let settled = false, timer = 0, poll = 0;
+      const done = (v) => { if (settled) return; settled = true; clearTimeout(timer); clearInterval(poll); document.removeEventListener("visibilitychange", vis); res(v); };
+      const check = () => { if (Notification.permission !== "default") done(Notification.permission); };
+      const vis = () => { if (document.visibilityState === "visible") check(); };
+      onWaiting && onWaiting();
+      poll = setInterval(check, 600);
+      timer = setTimeout(() => done(Notification.permission), ms);
+      document.addEventListener("visibilitychange", vis);
+      if (navigator.permissions && navigator.permissions.query) navigator.permissions.query({ name: "notifications" }).then((st) => { st.onchange = check; }).catch(() => {});
+    });
+  }
+  /** How to unblock notifications, for the device in hand. */
+  function unblockHow() {
+    const android = /android/i.test(navigator.userAgent);
+    if (isIOS()) return standalone() ? "On your iPhone: Settings, then Notifications, then lifeline, and turn on Allow Notifications. Then tap On here again." : "On iPhone, notifications only come from the Home Screen app: Share, then Add to Home Screen, open it from there and tap On.";
+    if (android && standalone()) return "Press and hold the lifeline icon on your home screen, tap App info, then Notifications, and turn them on. Then tap On here again.";
+    if (android) return "Tap the three-dot menu, then Settings, Site settings, Notifications, find this site and set it to Allow. Then tap On here again.";
+    return "Click the icon at the left of the address bar, open Site settings, set Notifications to Allow, then tap On here again.";
+  }
+  async function notificationsOn(key, onWaiting) {
+    wantPush(true);
+    let perm = await askPermission();
+    if (perm === "default") perm = await waitForPermission(90_000, onWaiting);
+    if (perm === "denied") { wantPush(false); return { error: "denied", text: `Notifications are blocked for lifeline on this device. ${unblockHow()}` }; }
+    if (perm !== "granted") return { error: "pending", text: "The prompt closed without an answer. If you tap Allow later, I'll finish turning them on by myself; or tap On again." };
+    return finishSubscribe(key);
+  }
+  /** Permission is granted: make (or refresh) this device's subscription and give it to the server. */
+  async function finishSubscribe(key) {
     /* Each step can fail for its own reason; say which, in words, rather than one vague line. */
     let reg;
     try {
       reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.register("/sw.js"));
-      await navigator.serviceWorker.ready;
+      reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 15000))]);
     } catch { return { error: "sw", text: "This browser couldn't start lifeline's background helper, which notifications need. Reload the page and try again." }; }
     let appKey;
     try { appKey = keyBytes(String(key || "").replace(/\s/g, "")); if (appKey.length !== 65) throw new Error("key"); }
@@ -1243,14 +1323,35 @@ window.App = (function () {
       const old = sub && sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
       if (sub && old && (old.length !== appKey.length || old.some((b, i) => b !== appKey[i]))) { await sub.unsubscribe().catch(() => {}); sub = null; }
       sub = sub || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey }));
-      return api("/api/push/subscribe", { subscription: sub.toJSON(), device: deviceName() });
+      const r = await api("/api/push/subscribe", { subscription: sub.toJSON(), device: deviceName() });
+      if (!r.error) { wantPush(false); try { localStorage.setItem("ll_push_synced", String(Date.now())); } catch {} }
+      return r;
     } catch (e) {
       const brave = navigator.brave && typeof navigator.brave.isBrave === "function";
       if (brave) return { error: "push-off", text: "Brave keeps notifications from websites off by default. In Brave: Settings, then Privacy and security, turn on \"Use Google services for push messaging\", restart Brave and try again. Or use Chrome." };
       if (e && e.name === "AbortError") return { error: "push-off", text: "This browser's push service said no. If it's Brave, Samsung Internet or a privacy browser, notifications from websites may be switched off in its settings; Chrome works. Then try again." };
-      if (e && e.name === "NotAllowedError") return { error: "denied", text: "Notifications are blocked for this site. Allow them in your browser's site settings, then try again." };
+      if (e && e.name === "NotAllowedError") return { error: "denied", text: `Notifications are blocked for lifeline on this device. ${unblockHow()}` };
       return { error: "subscribe", text: "This browser wouldn't set up notifications. Try again in a moment, or in Chrome." };
     }
+  }
+  /**
+   * On every visit and whenever the app comes back to the front: finish a "yes" that came late (the quiet bubble, or the
+   * phone's settings), and keep the server's copy of this device's subscription fresh (once a day), so a device that shows
+   * On really is on.
+   */
+  async function resumePush() {
+    if (!signedIn || tgLaunch || !pushAble()) return;
+    try {
+      const s = await api("/api/settings");
+      const key = s && s.push && s.push.on ? s.push.key : null;
+      if (!key) return;
+      const sub = await currentSub().catch(() => null);
+      let last = 0; try { last = Number(localStorage.getItem("ll_push_synced") || 0); } catch {}
+      if (Notification.permission === "granted" && ((!sub && wantsPush()) || (sub && Date.now() - last > 86_400_000))) {
+        const r = await finishSubscribe(key);
+        if (!r.error && !sub) toast("Notifications are on for this device.", "dose");
+      }
+    } catch { /* quietly try again next time */ }
   }
   async function notificationsOff() {
     const sub = await currentSub().catch(() => null);
@@ -1270,18 +1371,26 @@ window.App = (function () {
     else if (isIOS()) h += `<details class="small"><summary class="muted" style="cursor:pointer">Install lifeline on iPhone or iPad</summary><p class="muted" style="margin-top:8px">${IOS_HOW}</p></details>`;
     else h += `<p class="small muted">To install it, use your browser's menu: Install app, or Add to Home Screen.</p>`;
     if (!push.on) h += `<p class="small faint">Notifications aren't switched on for this lifeline yet. Whoever runs it can turn them on.</p>`;
+    else if (tgLaunch) h += `<p class="small muted">Inside Telegram, reminders already come to you as Telegram messages. For notifications from the app itself, open lifeline in your phone's browser, install it, and turn them on there.</p><div class="row"><button class="btn sm" type="button" id="openOutside">Open in my browser</button></div>`;
     else if (!pushAble()) h += `<p class="small muted">${isIOS() && !standalone() ? "On iPhone, notifications come from the Home Screen app. Install it first, then turn them on there." : "This browser can't show notifications from lifeline."}</p>`;
-    else h += `<div class="row"><span>Notifications on this device</span><span class="sp"></span>${seg("push", [["on", "On"], ["off", "Off"]], on ? "on" : "off", "Notifications on this device")}</div>${on ? `<div class="row"><button class="btn sm ghost" type="button" id="pushTest">Send a test</button></div>` : ""}`;
+    else h += `<div class="row"><span>Notifications on this device</span><span class="sp"></span>${seg("push", [["on", "On"], ["off", "Off"]], on ? "on" : "off", "Notifications on this device")}</div><p class="small muted" id="pushSay" role="status" aria-live="polite">${!on && typeof Notification !== "undefined" && Notification.permission === "denied" ? esc(`Blocked on this device. ${unblockHow()}`) : ""}</p>${on ? `<div class="row"><button class="btn sm ghost" type="button" id="pushTest">Send a test</button></div>` : ""}`;
     if (push.on) h += `<div class="reach"><span>Where should reminders reach you?</span>${seg("reach", [["telegram", "Telegram"], ["app", "This app"], ["both", "Both"]], s.reach, "Where reminders reach you")}<p class="small faint">Both sends each reminder here and on Telegram, so muting one never means missing it.</p></div>`;
     host.innerHTML = `<div class="card-body app-card">${h}</div>`;
     const again = async () => { const s2 = await api("/api/settings"); appCard(host, s2.error ? s : s2); };
     const ib = $("#installBtn", host); if (ib) ib.addEventListener("click", async () => { await install(); appCard(host, s); });
+    const oo = $("#openOutside", host); if (oo) oo.addEventListener("click", async () => { const w = await tgReady; const url = `${location.origin}/#settings`; if (w && w.openLink) w.openLink(url); else window.open(url, "_blank", "noopener"); });
     const pt = $("#pushTest", host); if (pt) pt.addEventListener("click", async () => { pt.disabled = true; tell(await api("/api/push/test", {}), "Sent."); pt.disabled = false; });
     $$("[data-push]", host).forEach((b) => b.addEventListener("click", async () => {
       if (b.getAttribute("aria-pressed") === "true") return;
       $$("[data-push]", host).forEach((x) => (x.disabled = true));
-      const r = b.dataset.push === "on" ? await notificationsOn(push.key) : await notificationsOff();
-      tell(r, b.dataset.push === "on" ? "Notifications are on." : "Notifications are off.", "dose");
+      const say = $("#pushSay", host);
+      const r = b.dataset.push === "on"
+        ? await notificationsOn(push.key, () => { if (say) say.textContent = "Tap Allow on the prompt at the top of your screen. I'll wait."; })
+        : (wantPush(false), await notificationsOff());
+      if (say) say.textContent = r.error ? r.text : "";
+      tell(r, b.dataset.push === "on" ? "Notifications are on. Tap Send a test to check." : "Notifications are off.", "dose");
+      // Any trouble: keep the explanation on screen (a re-render would wipe it) and let them try again.
+      if (r.error) { $$("[data-push]", host).forEach((x) => (x.disabled = false)); return; }
       again();
     }));
     $$("[data-reach]", host).forEach((b) => b.addEventListener("click", async () => {
